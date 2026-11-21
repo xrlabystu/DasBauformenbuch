@@ -24,6 +24,7 @@ export default function App() {
       volume: BOOK_METADATA.volume,
       year: BOOK_METADATA.year,
       language: BOOK_METADATA.languageCode,
+      source_url: BOOK_METADATA.sourceUrl,
       pages,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -494,6 +495,19 @@ export default function App() {
               <div className="py-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <dt className="text-[#78716C]">Хранилище факсимиле</dt>
                 <dd className="sm:col-span-2 text-[#1C1917]">{BOOK_METADATA.holdingInstitution}</dd>
+              </div>
+              <div className="py-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <dt className="text-[#78716C]">Адрес источника скана</dt>
+                <dd className="sm:col-span-2 font-mono text-xs break-all">
+                  <a
+                    href={BOOK_METADATA.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                  >
+                    {BOOK_METADATA.sourceUrl}
+                  </a>
+                </dd>
               </div>
               <div className="py-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <dt className="text-[#78716C]">Индексированные сканы</dt>

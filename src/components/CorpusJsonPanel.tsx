@@ -17,6 +17,7 @@ export function CorpusJsonPanel({ pages, onDownload }: CorpusJsonPanelProps) {
     volume: BOOK_METADATA.volume,
     year: BOOK_METADATA.year,
     language: BOOK_METADATA.languageCode,
+    source_url: BOOK_METADATA.sourceUrl,
     pages_count: pages.length,
     pages: pages.map((page) => ({
       scan_nr: page.scanNr,

@@ -46,6 +46,7 @@ export interface BookMetadata {
   language: string;
   languageCode: string;
   holdingInstitution: string;
+  sourceUrl: string;
 }
 
 export const BOOK_METADATA: BookMetadata = {
@@ -57,6 +58,7 @@ export const BOOK_METADATA: BookMetadata = {
   language: 'Немецкий',
   languageCode: 'de',
   holdingInstitution: 'Deutsches Museum',
+  sourceUrl: 'https://gateway-bayern.de/BV014442283',
 };
 
 export const BRAUSEWETTER_PAGES: BookPage[] = [
