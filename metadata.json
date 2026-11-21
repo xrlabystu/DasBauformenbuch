@@ -1,0 +1,6 @@
+{
+  "name": "Brausewetter 1895 — Архив «Das Bauformenbuch»",
+  "description": "Цифровое научное издание и по-страничный корпус книги Brausewetter «Das Bauformenbuch», Bd. 1 (1895) с оригинальными сканами, немецкой транскрипцией и русским переводом.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
