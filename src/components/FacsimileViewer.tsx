@@ -13,6 +13,12 @@ export function FacsimileViewer({ page }: FacsimileViewerProps) {
   const [imageError, setImageError] = useState(false);
 
   const scale = ZOOM_STEPS[zoomIndex];
+  const baseUrl = import.meta.env.BASE_URL.endsWith('/')
+    ? import.meta.env.BASE_URL
+    : `${import.meta.env.BASE_URL}/`;
+  const resolvedImageSrc = page.imagePath.startsWith('/')
+    ? `${baseUrl}${page.imagePath.slice(1)}`
+    : page.imagePath;
 
   const handleZoomIn = () => {
     setZoomIndex((prev) => Math.min(prev + 1, ZOOM_STEPS.length - 1));
@@ -78,7 +84,7 @@ export function FacsimileViewer({ page }: FacsimileViewerProps) {
             }}
           >
             <img
-              src={page.imagePath}
+              src={resolvedImageSrc}
               alt={`Brausewetter, Das Bauformenbuch, Bd. 1 (1895) — Скан № ${page.scanNr}, страница ${page.pageNumber}`}
               referrerPolicy="no-referrer"
               onError={() => setImageError(true)}
@@ -88,7 +94,7 @@ export function FacsimileViewer({ page }: FacsimileViewerProps) {
         ) : (
           <div className="aspect-[3/4] flex flex-col items-center justify-center p-8 text-center text-[#57534E]">
             <p className="font-display text-2xl text-[#1C1917]">Факсимиле временно недоступно</p>
-            <p className="mt-2 text-sm font-mono">{page.imagePath}</p>
+            <p className="mt-2 text-sm font-mono">{resolvedImageSrc}</p>
           </div>
         )}
       </div>

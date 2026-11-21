@@ -223,7 +223,7 @@ export default function App() {
             >
               {showFacsimile && (
                 <div className="lg:col-span-5 lg:sticky lg:top-6">
-                  <FacsimileViewer page={page} />
+                  <FacsimileViewer key={page.id} page={page} />
                 </div>
               )}
 
