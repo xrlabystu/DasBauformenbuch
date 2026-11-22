@@ -8,9 +8,10 @@ import {
 } from './data/brausewetter_1895';
 import { FacsimileViewer } from './components/FacsimileViewer';
 import { CorpusJsonPanel } from './components/CorpusJsonPanel';
+import { FacadeCalculatorPage } from './components/FacadeCalculatorPage';
 import { highlightTermsInText } from './utils/termHighlight';
 
-type ActiveSection = 'reader' | 'glossary' | 'corpus' | 'provenance';
+type ActiveSection = 'reader' | 'calculator' | 'glossary' | 'corpus' | 'provenance';
 type TextMode = 'parallel' | 'de' | 'ru';
 
 export default function App() {
@@ -91,8 +92,17 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleOpenBookPageFromCalc = (pageNum: number) => {
+    const idx = pages.findIndex((p) => Number(p.pageNumber) === pageNum);
+    setSelectedTerm(null);
+    setCurrentPageIndex(idx >= 0 ? idx : 0);
+    setActiveSection('reader');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const navItems: { id: ActiveSection; label: string }[] = [
     { id: 'reader', label: 'Читальный зал' },
+    { id: 'calculator', label: 'Калькулятор' },
     { id: 'glossary', label: 'Терминология' },
     { id: 'corpus', label: 'Корпус JSON' },
     { id: 'provenance', label: 'Опись издания' },
@@ -200,40 +210,42 @@ export default function App() {
               </p>
             </div>
 
-            {/* Page Navigation Controls */}
-            <div className="flex items-center gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTerm(null);
-                  setCurrentPageIndex((i) => Math.max(0, i - 1));
-                }}
-                disabled={currentPageIndex === 0}
-                aria-label="Предыдущая страница"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                <span>Пред.</span>
-              </button>
+            {/* Page Navigation Controls (hidden on Calculator page) */}
+            {activeSection !== 'calculator' && (
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTerm(null);
+                    setCurrentPageIndex((i) => Math.max(0, i - 1));
+                  }}
+                  disabled={currentPageIndex === 0}
+                  aria-label="Предыдущая страница"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Пред.</span>
+                </button>
 
-              <div className="px-3 py-2 text-xs font-mono tabular-nums text-[#44403C] border border-[#E5DFD3] bg-[#FBF9F5] whitespace-nowrap shrink-0">
-                Скан {page.scanNr} · Стр. {page.pageNumber} ({currentPageIndex + 1}/{pages.length})
+                <div className="px-3 py-2 text-xs font-mono tabular-nums text-[#44403C] border border-[#E5DFD3] bg-[#FBF9F5] whitespace-nowrap shrink-0">
+                  Скан {page.scanNr} · Стр. {page.pageNumber} ({currentPageIndex + 1}/{pages.length})
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTerm(null);
+                    setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
+                  }}
+                  disabled={currentPageIndex >= pages.length - 1}
+                  aria-label="Следующая страница"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
+                >
+                  <span>След.</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTerm(null);
-                  setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
-                }}
-                disabled={currentPageIndex >= pages.length - 1}
-                aria-label="Следующая страница"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
-              >
-                <span>След.</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            )}
           </div>
         </section>
 
@@ -684,6 +696,10 @@ export default function App() {
 
         {activeSection === 'corpus' && (
           <CorpusJsonPanel pages={pages} onDownload={handleDownloadJson} />
+        )}
+
+        {activeSection === 'calculator' && (
+          <FacadeCalculatorPage onOpenBookPage={handleOpenBookPageFromCalc} />
         )}
 
         {activeSection === 'provenance' && (
