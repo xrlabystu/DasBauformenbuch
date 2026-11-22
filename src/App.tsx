@@ -1,8 +1,14 @@
-import { useState } from 'react';
-import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
-import { BOOK_METADATA, BRAUSEWETTER_PAGES, type BookPage } from './data/brausewetter_1895';
+import { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
+import {
+  BOOK_METADATA,
+  BRAUSEWETTER_PAGES,
+  type ArchitecturalTerm,
+  type BookPage,
+} from './data/brausewetter_1895';
 import { FacsimileViewer } from './components/FacsimileViewer';
 import { CorpusJsonPanel } from './components/CorpusJsonPanel';
+import { highlightTermsInText } from './utils/termHighlight';
 
 type ActiveSection = 'reader' | 'glossary' | 'corpus' | 'provenance';
 type TextMode = 'parallel' | 'de' | 'ru';
@@ -12,9 +18,54 @@ export default function App() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [textMode, setTextMode] = useState<TextMode>('parallel');
   const [showFacsimile, setShowFacsimile] = useState(true);
+  const [selectedTerm, setSelectedTerm] = useState<{
+    pageId: string;
+    term: ArchitecturalTerm;
+  } | null>(null);
+  const [focusedGlossaryTerm, setFocusedGlossaryTerm] = useState<{
+    pageId: string;
+    pageNumber: string;
+    term: ArchitecturalTerm;
+  } | null>(null);
 
   const pages = BRAUSEWETTER_PAGES;
   const page: BookPage = pages[currentPageIndex] ?? pages[0];
+  const activeTerm = selectedTerm?.pageId === page.id ? selectedTerm.term : null;
+
+  useEffect(() => {
+    if (activeSection !== 'reader' || !activeTerm) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-term-highlight="true"]');
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSection, currentPageIndex, activeTerm]);
+
+  useEffect(() => {
+    if (activeSection !== 'glossary' || !focusedGlossaryTerm) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-glossary-term="true"]');
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSection, focusedGlossaryTerm]);
+
+  const handleSelectTerm = (pageIndex: number, pageId: string, term: ArchitecturalTerm) => {
+    setCurrentPageIndex(pageIndex);
+    setTextMode('parallel');
+    setActiveSection('reader');
+    setFocusedGlossaryTerm(null);
+    setSelectedTerm({ pageId, term });
+  };
+
+  const handleJumpToGlossary = (pageId: string, pageNumber: string, term: ArchitecturalTerm) => {
+    setFocusedGlossaryTerm({ pageId, pageNumber, term });
+    setActiveSection('glossary');
+  };
 
   const handleDownloadJson = () => {
     const payload = {
@@ -70,7 +121,10 @@ export default function App() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => {
+                    if (item.id === 'glossary') setFocusedGlossaryTerm(null);
+                    setActiveSection(item.id);
+                  }}
                   className={`py-1.5 text-sm transition-colors whitespace-nowrap shrink-0 border-b ${
                     isActive
                       ? 'text-[#1C1917] border-[#9A3412] font-semibold'
@@ -103,7 +157,10 @@ export default function App() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setActiveSection(item.id)}
+                onClick={() => {
+                  if (item.id === 'glossary') setFocusedGlossaryTerm(null);
+                  setActiveSection(item.id);
+                }}
                 className={`py-1 text-xs whitespace-nowrap shrink-0 border-b ${
                   isActive
                     ? 'text-[#1C1917] border-[#9A3412] font-semibold'
@@ -147,7 +204,10 @@ export default function App() {
             <div className="flex items-center gap-3 shrink-0">
               <button
                 type="button"
-                onClick={() => setCurrentPageIndex((i) => Math.max(0, i - 1))}
+                onClick={() => {
+                  setSelectedTerm(null);
+                  setCurrentPageIndex((i) => Math.max(0, i - 1));
+                }}
                 disabled={currentPageIndex === 0}
                 aria-label="Предыдущая страница"
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
@@ -162,7 +222,10 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1))}
+                onClick={() => {
+                  setSelectedTerm(null);
+                  setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
+                }}
                 disabled={currentPageIndex >= pages.length - 1}
                 aria-label="Следующая страница"
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
@@ -260,6 +323,31 @@ export default function App() {
                   </div>
                 </header>
 
+                {activeTerm && (
+                  <div className="mt-4 py-2.5 px-4 border border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[#44403C]">
+                      <span className="uppercase tracking-wider text-[11px] text-[#78716C]">
+                        Выделен термин:
+                      </span>
+                      <span lang="de" className="font-semibold text-[#1C1917]">
+                        {activeTerm.de}
+                      </span>
+                      <span aria-hidden="true" className="text-[#78716C]">
+                        —
+                      </span>
+                      <span className="font-medium text-[#9A3412]">{activeTerm.ru}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTerm(null)}
+                      className="inline-flex items-center gap-1 text-[#57534E] hover:text-[#1C1917] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Сбросить</span>
+                    </button>
+                  </div>
+                )}
+
                 {/* Paragraphs */}
                 <div className="divide-y divide-[#ECE7DC]">
                   {page.paragraphs.map((para, idx) => {
@@ -274,7 +362,9 @@ export default function App() {
                           <div className="mb-5 pb-3 border-b border-[#D6CEBE]">
                             {textMode !== 'ru' && para.subheadingDe && (
                               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                                {para.subheadingDe}
+                                {highlightTermsInText(para.subheadingDe, page.terms, activeTerm, 'de', (t) =>
+                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                )}
                               </h3>
                             )}
                             {textMode !== 'de' && para.subheadingRu && (
@@ -285,14 +375,22 @@ export default function App() {
                                     : 'mt-0.5 font-display text-lg italic text-[#57534E]'
                                 }
                               >
-                                {para.subheadingRu}
+                                {highlightTermsInText(para.subheadingRu, page.terms, activeTerm, 'ru', (t) =>
+                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                )}
                               </p>
                             )}
                             {(para.subsubheadingDe || para.subsubheadingRu) && (
                               <div className="mt-3">
                                 {textMode !== 'ru' && para.subsubheadingDe && (
                                   <h4 className="font-display text-xl italic font-medium text-[#1C1917]">
-                                    {para.subsubheadingDe}
+                                    {highlightTermsInText(
+                                      para.subsubheadingDe,
+                                      page.terms,
+                                      activeTerm,
+                                      'de',
+                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t)
+                                    )}
                                   </h4>
                                 )}
                                 {textMode !== 'de' && para.subsubheadingRu && (
@@ -303,7 +401,13 @@ export default function App() {
                                         : 'mt-0.5 text-sm italic text-[#57534E]'
                                     }
                                   >
-                                    {para.subsubheadingRu}
+                                    {highlightTermsInText(
+                                      para.subsubheadingRu,
+                                      page.terms,
+                                      activeTerm,
+                                      'ru',
+                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t)
+                                    )}
                                   </p>
                                 )}
                               </div>
@@ -335,13 +439,17 @@ export default function App() {
                               lang="de"
                               className={`whitespace-pre-line text-[15.5px] leading-[1.75] text-[#1C1917] ${dropCapClasses}`}
                             >
-                              {para.de}
+                              {highlightTermsInText(para.de, page.terms, activeTerm, 'de', (t) =>
+                                handleJumpToGlossary(page.id, page.pageNumber, t)
+                              )}
                             </p>
                             <p
                               lang="ru"
                               className={`whitespace-pre-line text-[15.5px] leading-[1.75] text-[#292524] ${dropCapClasses}`}
                             >
-                              {para.ru}
+                              {highlightTermsInText(para.ru, page.terms, activeTerm, 'ru', (t) =>
+                                handleJumpToGlossary(page.id, page.pageNumber, t)
+                              )}
                             </p>
                           </div>
                         ) : textMode === 'de' ? (
@@ -349,14 +457,18 @@ export default function App() {
                             lang="de"
                             className={`whitespace-pre-line max-w-prose text-[16.5px] leading-[1.8] text-[#1C1917] ${dropCapClasses}`}
                           >
-                            {para.de}
+                            {highlightTermsInText(para.de, page.terms, activeTerm, 'de', (t) =>
+                              handleJumpToGlossary(page.id, page.pageNumber, t)
+                            )}
                           </p>
                         ) : (
                           <p
                             lang="ru"
                             className={`whitespace-pre-line max-w-prose text-[16.5px] leading-[1.8] text-[#1C1917] ${dropCapClasses}`}
                           >
-                            {para.ru}
+                            {highlightTermsInText(para.ru, page.terms, activeTerm, 'ru', (t) =>
+                              handleJumpToGlossary(page.id, page.pageNumber, t)
+                            )}
                           </p>
                         )}
                       </div>
@@ -382,11 +494,17 @@ export default function App() {
                           <dd className="sm:col-span-10 text-sm text-[#292524]">
                             {textMode !== 'ru' && (
                               <span lang="de" className="block font-medium text-[#1C1917]">
-                                {fig.captionDe}
+                                {highlightTermsInText(fig.captionDe, page.terms, activeTerm, 'de', (t) =>
+                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                )}
                               </span>
                             )}
                             {textMode !== 'de' && (
-                              <span className="block text-[#57534E]">{fig.captionRu}</span>
+                              <span className="block text-[#57534E]">
+                                {highlightTermsInText(fig.captionRu, page.terms, activeTerm, 'ru', (t) =>
+                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                )}
+                              </span>
                             )}
                           </dd>
                         </div>
@@ -406,6 +524,46 @@ export default function App() {
                     </p>
                   </aside>
                 )}
+
+                {/* Bottom Page Navigation */}
+                <nav
+                  aria-label="Навигация по страницам"
+                  className="mt-8 pt-6 border-t border-[#D6CEBE] flex flex-wrap items-center justify-between gap-3"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTerm(null);
+                      setCurrentPageIndex((i) => Math.max(0, i - 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    disabled={currentPageIndex === 0}
+                    aria-label="Предыдущая страница"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Пред.</span>
+                  </button>
+
+                  <div className="px-3 py-2 text-xs font-mono tabular-nums text-[#44403C] border border-[#E5DFD3] bg-[#FBF9F5] whitespace-nowrap shrink-0">
+                    Скан {page.scanNr} · Стр. {page.pageNumber} ({currentPageIndex + 1}/{pages.length})
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTerm(null);
+                      setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    disabled={currentPageIndex >= pages.length - 1}
+                    aria-label="Следующая страница"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <span>След.</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </nav>
               </article>
             </div>
           </section>
@@ -423,29 +581,102 @@ export default function App() {
               >
                 Ключевая архитектурная терминология
               </h2>
+              <p className="mt-2 text-sm text-[#57534E]">
+                Нажмите на немецкий или русский термин, чтобы перейти в читальный зал (параллельно DE / RU) с мягким выделением в тексте.
+              </p>
             </div>
 
-            <dl className="divide-y divide-[#E5DFD3]">
-              {pages.flatMap((p) =>
-                p.terms.map((term) => (
-                  <div
-                    key={`${p.id}-${term.de}`}
-                    className="py-5 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-6 items-baseline"
+            {focusedGlossaryTerm && (
+              <div className="mt-4 py-2.5 px-4 border border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[#44403C]">
+                  <span className="uppercase tracking-wider text-[11px] text-[#78716C]">
+                    Переход со стр. {focusedGlossaryTerm.pageNumber}:
+                  </span>
+                  <span lang="de" className="font-semibold text-[#1C1917]">
+                    {focusedGlossaryTerm.term.de}
+                  </span>
+                  <span aria-hidden="true" className="text-[#78716C]">
+                    —
+                  </span>
+                  <span className="font-medium text-[#9A3412]">{focusedGlossaryTerm.term.ru}</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetIndex = pages.findIndex((p) => p.id === focusedGlossaryTerm.pageId);
+                      if (targetIndex >= 0) {
+                        handleSelectTerm(
+                          targetIndex,
+                          focusedGlossaryTerm.pageId,
+                          focusedGlossaryTerm.term
+                        );
+                      } else {
+                        setActiveSection('reader');
+                      }
+                    }}
+                    className="text-[#9A3412] hover:text-[#7C2D12] underline underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
                   >
-                    <dt lang="de" className="md:col-span-4 font-display text-xl font-semibold text-[#1C1917]">
-                      {term.de}
-                      <span className="ml-2 text-xs font-mono font-normal text-[#78716C]">
-                        стр. {p.pageNumber}
-                      </span>
-                    </dt>
-                    <dd className="md:col-span-3 text-sm font-semibold text-[#9A3412]">
-                      {term.ru}
-                    </dd>
-                    <dd className="md:col-span-5 text-sm leading-relaxed text-[#57534E]">
-                      {term.context}
-                    </dd>
-                  </div>
-                ))
+                    Вернуться к тексту
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFocusedGlossaryTerm(null)}
+                    className="inline-flex items-center gap-1 text-[#57534E] hover:text-[#1C1917] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Сбросить</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <dl className="divide-y divide-[#E5DFD3]">
+              {pages.flatMap((p, pageIdx) =>
+                p.terms.map((term) => {
+                  const isFocused =
+                    focusedGlossaryTerm?.pageId === p.id &&
+                    focusedGlossaryTerm?.term.de === term.de;
+
+                  return (
+                    <div
+                      key={`${p.id}-${term.de}`}
+                      data-glossary-term={isFocused ? 'true' : undefined}
+                      className={`py-5 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-6 items-baseline transition-colors ${
+                        isFocused
+                          ? 'bg-[#9A3412]/[0.08] border-l-2 border-l-[#9A3412] -mx-4 px-4'
+                          : ''
+                      }`}
+                    >
+                      <dt lang="de" className="md:col-span-4 font-display text-xl font-semibold text-[#1C1917]">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTerm(pageIdx, p.id, term)}
+                          title={`Открыть термин на стр. ${p.pageNumber}`}
+                          className="text-left cursor-pointer hover:text-[#9A3412] underline decoration-transparent hover:decoration-[#9A3412]/50 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                        >
+                          {term.de}
+                        </button>
+                        <span className="ml-2 text-xs font-mono font-normal text-[#78716C]">
+                          стр. {p.pageNumber}
+                        </span>
+                      </dt>
+                      <dd className="md:col-span-3 text-sm font-semibold text-[#9A3412]">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTerm(pageIdx, p.id, term)}
+                          title={`Открыть термин на стр. ${p.pageNumber}`}
+                          className="text-left cursor-pointer hover:text-[#7C2D12] underline decoration-transparent hover:decoration-[#9A3412]/60 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                        >
+                          {term.ru}
+                        </button>
+                      </dd>
+                      <dd className="md:col-span-5 text-sm leading-relaxed text-[#57534E]">
+                        {term.context}
+                      </dd>
+                    </div>
+                  );
+                })
               )}
             </dl>
           </section>

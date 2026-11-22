@@ -14,6 +14,8 @@ export interface ArchitecturalTerm {
   de: string;
   ru: string;
   context: string;
+  highlightDe?: string[];
+  highlightRu?: string[];
 }
 
 export interface BookFigure {
@@ -497,6 +499,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'der Palastbau',
         ru: 'дворцовое строительство',
         context: 'Предельный случай пропорционирования, где шаг осей приближается к высоте помещения (1 : 1).',
+        highlightRu: ['представительной дворцовой архитектуре'],
       },
     ],
   },
@@ -769,6 +772,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'das Deckglied der Konsole',
         ru: 'венчающий облом (плитка) консоли',
         context: 'Верхнее завершение кронштейна/консоли, задающее границу отступа «a» под слёзной плитой.',
+        highlightRu: ['верхней полочки (венчающего члена) консоли'],
       },
       {
         de: 'das Portal',
@@ -1300,16 +1304,24 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'die fünf Fensteraxen',
         ru: 'пятиосевой фасад',
         context: 'Считается классическим идеалом простого жилого дома с центральной входной дверью.',
+        highlightRu: ['с пятью оконными осями'],
       },
       {
         de: 'eingebautes Wohnhaus (Stadthaus)',
         ru: 'встроенный в рядовую застройку городской дом',
         context: 'В отличие от особняка допускает боковое расположение входа, чётное число осей и узкий крайний простенок (≤ ширины окна).',
+        highlightRu: [
+          'встроенного в ряд застройки многоэтажного городского дома',
+          'встроенного жилого дома',
+          'встроенного городского дома',
+          'во встроенном городском доме',
+        ],
       },
       {
         de: 'Abstand Oberkante Fenster bis Oberkante Hauptgesims',
         ru: 'высота надпроёмной зоны от верха окна до верха главного карниза',
         context: 'Чем значительнее эта верхняя зона (в разумных пределах), тем благороднее пропорции фасада.',
+        highlightRu: ['расстояние от верхнего края окна в свету до верхнего обреза главного карниза'],
       },
     ],
   },
@@ -1377,6 +1389,8 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'M und N (Eckabstand vs. obere Wandhöhe)',
         ru: 'M и N (угловой отступ и высота над окнами)',
         context: 'Благоприятные случаи: M = N или M < N; при M > N необходима вертикальная разбивка углового простенка (a ≈ b).',
+        highlightDe: ['M = N', 'M kleiner als N', 'M grösser als N'],
+        highlightRu: ['M = N', 'M меньше N', 'M больше N'],
       },
       {
         de: 'die Eckarmierung',
@@ -1387,6 +1401,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'durchlaufende Strassenflucht',
         ru: 'непрерывная линия уличной застройки (красная линия)',
         context: 'Условия встроенного городского дома, где преобладает стоячий прямоугольник и группировка 4 или 6 осей в 3 группы.',
+        highlightRu: ['непрерывно тянущейся уличной линией'],
       },
     ],
   },
@@ -1455,11 +1470,14 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'die Gesammthöhe (Sockelanteil)',
         ru: 'общая высота здания (доля цоколя)',
         context: 'Идеальная высота цоколя — 1/6 общей высоты, чаще всего применяется 1/7–1/10; при невозможности — весь первый этаж трактуется как цоколь.',
+        highlightRu: ['общей высоты здания'],
       },
       {
         de: 'Hauptgesims-Verhältnisse',
         ru: 'пропорции главного карниза',
         context: 'Полный антаблемент меньше цоколя: 1/8–1/12 (2 этажа) или 1/12–1/15 (многоэтажный); один венчающий карниз: 1/15–1/16 и 1/16–1/20.',
+        highlightDe: ['Das Hauptgesimse', 'des Hauptgesimses'],
+        highlightRu: ['Главный карниз', 'главного карниза'],
       },
       {
         de: 'Gurt- / Sohlbankgesimse',
@@ -1691,6 +1709,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'die Fünfteilung (Fig. 9)',
         ru: 'пятичастная композиция фасада',
         context: 'Схема протяжённого фасада: боковой ризалит < ½ западающего крыла, центральный ризалит > бокового ризалита и с главным акцентом декора.',
+        highlightRu: ['деление на пять групп', 'пятичастного деления'],
       },
     ],
   },
@@ -1744,6 +1763,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'Breitenverhältnis der Seitenrisalite (≤ ⅔)',
         ru: 'допустимая ширина бокового ризалита (не более ⅔)',
         context: 'Отношение ширины бокового ризалита к центральному при пятичастной композиции; при необходимости может снижаться до ½–⅓.',
+        highlightDe: ['Breite der Seitenrisalite darf nicht mehr als ⅔ des Mittelrisalites betragen'],
       },
       {
         de: 'die siebenteilige Front (Fig. 10)',
@@ -1833,6 +1853,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'Vasenprofile',
         ru: 'профили декоративных ваз',
         context: 'Сравнительный обзор профилей архитектурных ваз, выделенный в отдельную таблицу (табл. 16).',
+        highlightRu: ['профилей ваз'],
       },
       {
         de: 'das ebenerdige Wohnhaus',
@@ -1915,6 +1936,7 @@ export const BRAUSEWETTER_PAGES: BookPage[] = [
         de: 'die Brüstung (als Fuss für den Oberbau)',
         ru: 'подоконная стена-парапет (как опора верхнего яруса)',
         context: 'Предпочтительнее сплошного подоконного карниза в 2-м этаже, чтобы не раздувать визуально первый этаж.',
+        highlightRu: ['подоконного пояса-парапета', 'опору для построения верхних этажей'],
       },
     ],
   },
