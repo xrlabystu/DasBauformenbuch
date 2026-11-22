@@ -2,17 +2,20 @@ import { useMemo, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import {
   RULES_DATA,
+  applyBuildingVariantPreset,
   createDefaultParamsForTypology,
   evaluateFacadeSummary,
   formatMeters,
   getTypology,
   type BuildingTypeId,
+  type BuildingVariant,
   type FacadeParameters,
   type FacadeTargetElement,
+  type MultiSub,
   type RuleRecord,
 } from '../calc/rules';
 import { FacadeSvg } from './calculator/FacadeSvg';
-import { AnalyticalPlates } from './calculator/AnalyticalPlates';
+import { AnalyticalPlates, type AnalyticalPlateId } from './calculator/AnalyticalPlates';
 import {
   CalculatorModules,
   StatusBadge,
@@ -35,13 +38,17 @@ const ELEMENT_TO_MODULE: Record<FacadeTargetElement, CalculatorModuleId> = {
   entablature: 'framing',
   pilaster: 'pilaster',
   cornice: 'cornice',
+  socle: 'socle',
+  belt: 'belt',
 };
 
-const ELEMENT_TO_PLATE: Partial<Record<FacadeTargetElement, 'fan' | 'golden' | 'diagonal' | 'cornice'>> = {
+const ELEMENT_TO_PLATE: Partial<Record<FacadeTargetElement, AnalyticalPlateId>> = {
   axenweite: 'fan',
   window: 'golden',
   entablature: 'cornice',
   cornice: 'cornice',
+  socle: 'socle',
+  belt: 'belt',
 };
 
 export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPageProps) {
@@ -50,7 +57,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
     createDefaultParamsForTypology('urban_house')
   );
   const [activeModule, setActiveModule] = useState<CalculatorModuleId>('axes');
-  const [activePlate, setActivePlate] = useState<'fan' | 'golden' | 'diagonal' | 'cornice'>('fan');
+  const [activePlate, setActivePlate] = useState<AnalyticalPlateId>('fan');
   const [highlightedElement, setHighlightedElement] = useState<FacadeTargetElement | null>(null);
 
   const summary = useMemo(() => evaluateFacadeSummary(params), [params]);
@@ -104,7 +111,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
       <div className="pb-6 border-b border-[#E5DFD3] flex flex-col lg:flex-row lg:items-end justify-between gap-5">
         <div>
           <p className="text-xs tracking-widest uppercase text-[#78716C] font-mono">
-            Параметрический модуль · Brausewetter 1895 (S. 1–12)
+            Параметрический модуль · Brausewetter 1895 (S. 1–12, 16–17, 22)
           </p>
           <h2
             id="calculator-heading"
@@ -113,7 +120,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
             Интерактивный пропорциональный калькулятор фасада
           </h2>
           <p className="mt-2 text-sm text-[#57534E] max-w-2xl">
-            Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров и карнизов без округления промежуточных значений; все допущения помечены явно.
+            Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов и цоколя (Sockel) без округления промежуточных значений; все допущения помечены явно.
           </p>
         </div>
 
@@ -171,6 +178,46 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="space-y-1">
+                <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                  Этажность (пресет)
+                </span>
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-[#FBF9F5] border border-[#D6CEBE]">
+                  {(
+                    [
+                      { variant: 'one-story', sub: 'general', label: '1 эт.' },
+                      { variant: 'two-story', sub: 'general', label: '2 эт.' },
+                      { variant: 'multi-story', sub: 'three', label: '3 эт.' },
+                      { variant: 'multi-story', sub: 'four-five', label: '4–5 эт.' },
+                      { variant: 'multi-story', sub: 'general', label: 'Многоэт.' },
+                    ] as { variant: BuildingVariant; sub: MultiSub; label: string }[]
+                  ).map((item) => {
+                    const isActive =
+                      item.variant !== 'multi-story'
+                        ? params.buildingVariant === item.variant
+                        : params.buildingVariant === 'multi-story' && params.multiSub === item.sub;
+                    return (
+                      <button
+                        key={`${item.variant}-${item.sub}`}
+                        type="button"
+                        onClick={() =>
+                          handleUpdateParams(
+                            applyBuildingVariantPreset(params, item.variant, item.sub)
+                          )
+                        }
+                        className={`px-2 py-1 text-xs font-medium transition-colors ${
+                          isActive
+                            ? 'bg-[#9A3412] text-[#FBF9F5]'
+                            : 'text-[#57534E] hover:text-[#1C1917]'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="flex items-center gap-1 p-1 bg-[#FBF9F5] border border-[#D6CEBE]">
@@ -241,8 +288,10 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 onSelectModule={(m) => {
                   setActiveModule(m);
                   if (m === 'window') setActivePlate('diagonal');
-                  else if (m === 'axes') setActivePlate('fan');
+                  else if (m === 'axes' || m === 'variants') setActivePlate('fan');
                   else if (m === 'framing' || m === 'cornice') setActivePlate('cornice');
+                  else if (m === 'socle') setActivePlate('socle');
+                  else if (m === 'belt') setActivePlate('belt');
                 }}
                 params={params}
                 summary={summary}
@@ -261,7 +310,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
               />
 
               {/* Compact Tabular Readout Strip */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono tabular-nums text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono tabular-nums text-xs">
                 <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
                   <span className="block text-[10px] text-[#78716C] uppercase">Шаг осей A</span>
                   <strong className="text-sm text-[#1C1917]">{formatMeters(params.A)} м</strong>
@@ -301,6 +350,15 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                   </strong>
                   <span className="block text-[11px] text-[#57534E]">
                     ближ. {summary.windowCheck.nearestApprox.spec.label}
+                  </span>
+                </div>
+                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Цоколь h_soc</span>
+                  <strong className="text-sm text-[#1C1917]">
+                    {formatMeters(params.useFullFloorAsSocle ? params.H : params.hSocle)} м
+                  </strong>
+                  <span className="block text-[11px] text-[#57534E]">
+                    h_main={formatMeters(params.hMain, 2)} · {summary.rusticationCheck.n} ряд.
                   </span>
                 </div>
               </div>

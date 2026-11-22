@@ -1,4 +1,5 @@
 import {
+  BELT_CLASSES,
   PHI,
   RULES_DATA,
   formatMeters,
@@ -10,9 +11,11 @@ import {
   type FacadeSummary,
 } from '../../calc/rules';
 
+export type AnalyticalPlateId = 'fan' | 'golden' | 'diagonal' | 'cornice' | 'socle' | 'belt';
+
 interface AnalyticalPlatesProps {
-  activePlate: 'fan' | 'golden' | 'diagonal' | 'cornice';
-  onSelectPlate: (plate: 'fan' | 'golden' | 'diagonal' | 'cornice') => void;
+  activePlate: AnalyticalPlateId;
+  onSelectPlate: (plate: AnalyticalPlateId) => void;
   params: FacadeParameters;
   summary: FacadeSummary;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
@@ -25,11 +28,13 @@ export function AnalyticalPlates({
   summary,
   onUpdateParams,
 }: AnalyticalPlatesProps) {
-  const plateTabs: { id: 'fan' | 'golden' | 'diagonal' | 'cornice'; label: string; ref: string }[] = [
+  const plateTabs: { id: AnalyticalPlateId; label: string; ref: string }[] = [
     { id: 'fan', label: 'Веер A : H', ref: 'S. 5–6' },
     { id: 'golden', label: 'Циркуль φ', ref: 'Fig. 2 / 4' },
     { id: 'diagonal', label: 'Диагональ d/2', ref: 'S. 7' },
     { id: 'cornice', label: 'Профиль карниза', ref: 'S. 8, 10–11' },
+    { id: 'socle', label: 'Иерархия и цоколь', ref: 'S. 10, 16–17' },
+    { id: 'belt', label: 'Разрез ленты (Gurt)', ref: 'S. 10–11, 16–17, 22' },
   ];
 
   return (
@@ -72,6 +77,8 @@ export function AnalyticalPlates({
         )}
         {activePlate === 'diagonal' && <DiagonalTestPlate params={params} summary={summary} />}
         {activePlate === 'cornice' && <CorniceProfilePlate params={params} summary={summary} />}
+        {activePlate === 'socle' && <SocleHierarchyPlate params={params} summary={summary} />}
+        {activePlate === 'belt' && <BeltProfilePlate params={params} summary={summary} />}
       </div>
     </section>
   );
@@ -762,3 +769,648 @@ function CorniceProfilePlate({
     </div>
   );
 }
+
+// 5.6 Иерархия цоколя и карнизов (S. 10, 16–17)
+function SocleHierarchyPlate({
+  params,
+  summary,
+}: {
+  params: FacadeParameters;
+  summary: FacadeSummary;
+}) {
+  const effectiveSocleH = params.useFullFloorAsSocle ? params.H : params.hSocle;
+  const { fuss, rumpf, deck } = summary.threePartSocleResult;
+  const totalParts = Math.max(0.01, fuss + rumpf + deck);
+  const { n, rowHeight, oddPreferred } = summary.rusticationCheck;
+
+  const svgW = 540;
+  const svgH = 260;
+
+  // Левая половина: 3-частный цоколь с рядами руста
+  const secX = 48;
+  const secW = 110;
+  const secTopY = 30;
+  const secH = 195;
+  const deckH = Math.max(14, (deck / totalParts) * secH);
+  const fussH = Math.max(14, (fuss / totalParts) * secH);
+  const rumpfH = Math.max(24, secH - deckH - fussH);
+  const nCourses = Math.min(12, Math.max(1, n));
+
+  // Правая половина: сравнение шкал h_socle, h_main, h_gurt + [min, max]
+  const chartX = 240;
+  const chartW = 250;
+  const maxBarM = Math.max(
+    effectiveSocleH,
+    summary.socleHeightCheck.range[1],
+    params.hMain,
+    summary.mainCorniceCheck.range[1],
+    params.hGurt,
+    0.5
+  ) * 1.12;
+  const barX = (valM: number) => (Math.max(0, valM) / maxBarM) * chartW;
+
+  const bars = [
+    {
+      label: `Цоколь h_socle (${formatMeters(effectiveSocleH)} м)`,
+      val: effectiveSocleH,
+      range: summary.socleHeightCheck.range,
+      status: summary.socleHeightCheck.status,
+      y: 52,
+    },
+    {
+      label: `Главный карниз h_main (${formatMeters(params.hMain)} м)`,
+      val: params.hMain,
+      range: summary.mainCorniceCheck.range,
+      status: summary.mainCorniceCheck.status,
+      y: 118,
+    },
+    {
+      label: `Поясной карниз h_gurt (${formatMeters(params.hGurt)} м)`,
+      val: params.hGurt,
+      range: summary.gurtCheck.range,
+      status: summary.gurtCheck.status,
+      y: 184,
+    },
+  ];
+
+  const colorOf = (s: 'ok' | 'approx' | 'violation') =>
+    s === 'ok' ? '#15803D' : s === 'approx' ? '#B45309' : '#B91C1C';
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
+      <div className="xl:col-span-8">
+        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+          {/* 3-part socle section */}
+          <rect
+            x={secX - 8}
+            y={secTopY}
+            width={secW + 16}
+            height={deckH}
+            fill="#DFD6C3"
+            stroke="#1C1917"
+            strokeWidth={1.2}
+          />
+          <rect
+            x={secX}
+            y={secTopY + deckH}
+            width={secW}
+            height={rumpfH}
+            fill="#EAE3D3"
+            stroke="#1C1917"
+            strokeWidth={1.2}
+          />
+          {Array.from({ length: Math.max(0, nCourses - 1) }).map((_, i) => {
+            const ry = secTopY + deckH + ((i + 1) / nCourses) * rumpfH;
+            return (
+              <line
+                key={i}
+                x1={secX}
+                y1={ry}
+                x2={secX + secW}
+                y2={ry}
+                stroke="#57534E"
+                strokeWidth={0.9}
+              />
+            );
+          })}
+          <rect
+            x={secX - 10}
+            y={secTopY + deckH + rumpfH}
+            width={secW + 20}
+            height={fussH}
+            fill="#D6CEBE"
+            stroke="#1C1917"
+            strokeWidth={1.2}
+          />
+
+          <text
+            x={secX + secW / 2}
+            y={secTopY + deckH / 2 + 3}
+            textAnchor="middle"
+            fontSize="9.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#1C1917"
+          >
+            Deck {formatMeters(deck, 2)} м
+          </text>
+          <text
+            x={secX + secW / 2}
+            y={secTopY + deckH + rumpfH / 2 + 3}
+            textAnchor="middle"
+            fontSize="9.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#1C1917"
+          >
+            Rumpf ({n} ряд.)
+          </text>
+          <text
+            x={secX + secW / 2}
+            y={secTopY + deckH + rumpfH + fussH / 2 + 3}
+            textAnchor="middle"
+            fontSize="9.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#1C1917"
+          >
+            Fuß {formatMeters(fuss, 2)} м
+          </text>
+          <text
+            x={secX + secW / 2}
+            y={svgH - 12}
+            textAnchor="middle"
+            fontSize="9.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#57534E"
+          >
+            3 части (эвристика)
+          </text>
+
+          {/* Hierarchy Bars */}
+          <text
+            x={chartX}
+            y={28}
+            fontSize="10.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fontWeight={600}
+            fill="#1C1917"
+          >
+            Шкала иерархии и допусков [min…max]
+          </text>
+
+          {bars.map((b) => {
+            const bandX = chartX + barX(b.range[0]);
+            const bandW = Math.max(4, barX(b.range[1]) - barX(b.range[0]));
+            const valW = Math.max(4, barX(b.val));
+            const col = colorOf(b.status);
+            return (
+              <g key={b.label}>
+                <text
+                  x={chartX}
+                  y={b.y - 7}
+                  fontSize="10"
+                  fontFamily="IBM Plex Mono, monospace"
+                  fill="#44403C"
+                >
+                  {b.label}
+                </text>
+                {/* Track */}
+                <rect x={chartX} y={b.y} width={chartW} height={18} fill="#F3EFE6" stroke="#E5DFD3" strokeWidth={1} />
+                {/* Allowed range band */}
+                <rect
+                  x={bandX}
+                  y={b.y - 3}
+                  width={bandW}
+                  height={24}
+                  fill="#9A3412"
+                  fillOpacity={0.14}
+                  stroke="#9A3412"
+                  strokeWidth={1}
+                  strokeDasharray="3 2"
+                />
+                {/* Actual bar */}
+                <rect x={chartX} y={b.y + 3} width={valW} height={12} fill={col} />
+                <text
+                  x={chartX}
+                  y={b.y + 31}
+                  fontSize="9"
+                  fontFamily="IBM Plex Mono, monospace"
+                  fill="#78716C"
+                >
+                  Норма: [{formatMeters(b.range[0], 2)} … {formatMeters(b.range[1], 2)}] м
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">
+        <p className="font-display text-lg font-medium text-[#1C1917]">Цоколь и соподчинение</p>
+        <dl className="divide-y divide-[#E5DFD3] font-mono tabular-nums text-[11px]">
+          <div className="py-1.5 flex justify-between">
+            <dt className="text-[#78716C]">h_socle / H_total:</dt>
+            <dd className="font-medium text-[#1C1917]">
+              {(effectiveSocleH / Math.max(0.01, params.totalHeight) * 100).toFixed(1)} % (1/{formatMeters(params.totalHeight / Math.max(0.01, effectiveSocleH), 1)})
+            </dd>
+          </div>
+          <div className="py-1.5 flex justify-between">
+            <dt className="text-[#78716C]">h_gurt &lt; h_main &lt; h_socle:</dt>
+            <dd className="font-medium text-[#1C1917]">
+              {formatMeters(params.hGurt, 2)} &lt; {formatMeters(params.hMain, 2)} &lt; {formatMeters(effectiveSocleH, 2)}
+            </dd>
+          </div>
+          <div className="py-1.5 flex justify-between">
+            <dt className="text-[#78716C]">Ряды руста:</dt>
+            <dd className="font-medium text-[#9A3412]">
+              {n} ({oddPreferred ? 'нечёт.' : 'чёт.'}) × {formatMeters(rowHeight)} м
+            </dd>
+          </div>
+        </dl>
+        <p className="text-[11px] leading-relaxed text-[#57534E]">
+          Главный карниз должен быть меньше цоколя, а поясной — меньше главного карниза; рустика и профили смягчаются кверху (S. 10, 16–17).
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// 5.7 Разрез межэтажной ленты (Gurtgesims, B-1…B-37)
+function BeltProfilePlate({
+  params,
+  summary,
+}: {
+  params: FacadeParameters;
+  summary: FacadeSummary;
+}) {
+  const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];
+  const { hUpper, hLower, hCrown, effect } = summary.beltCrowningCheck;
+  const beltStatus: 'ok' | 'approx' | 'violation' =
+    summary.beltHeightCheck.status === 'violation' ||
+    summary.beltCrowningCheck.status === 'violation' ||
+    summary.beltColumnsCheck.status === 'violation' ||
+    summary.beltSpecialCheck.status === 'violation'
+      ? 'violation'
+      : summary.beltCrowningCheck.status === 'approx' ||
+          summary.beltSpecialCheck.status === 'approx'
+        ? 'approx'
+        : 'ok';
+
+  const accentStroke =
+    beltStatus === 'violation'
+      ? '#B91C1C'
+      : beltStatus === 'approx'
+        ? '#B45309'
+        : '#1C1917';
+
+  const svgW = 540;
+  const svgH = 270;
+  const wallX = 72;
+  const wallW = 86;
+  const totalBeltPx = 148;
+  const topY = 48;
+  const crownPx = totalBeltPx * beltMeta.crownShareOfBelt;
+  const subPx = totalBeltPx - crownPx;
+  const upperPx = (hUpper / Math.max(0.01, hCrown)) * crownPx;
+  const lowerPx = crownPx - upperPx;
+
+  // Условный «умеренный вынос» для схематического разреза (число в книге не задано)
+  const outX = wallX + wallW;
+  const crownReach = params.beltMode === 'crowning' ? 102 : 78;
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
+      <div className="xl:col-span-8">
+        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+          {/* Заголовок разреза */}
+          <text
+            x={16}
+            y={22}
+            fontSize="10.5"
+            fontFamily="IBM Plex Mono, monospace"
+            fontWeight={600}
+            fill={accentStroke}
+          >
+            Разрез пояса · {beltMeta.titleRu} ({params.beltMode === 'binding' ? 'связующая' : 'венчающая'})
+          </text>
+
+          {/* Тело стены (верхний и нижний этажи) */}
+          <rect x={wallX} y={32} width={wallW} height={212} fill="#EAE3D3" stroke="#44403C" strokeWidth={1.2} />
+          <line x1={wallX} y1={32} x2={outX} y2={32} stroke="#44403C" strokeDasharray="3 3" strokeWidth={0.9} />
+          <text
+            x={wallX + 6}
+            y={44}
+            fontSize="9"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#57534E"
+          >
+            Верхн. этаж ({formatMeters(params.beltUpperFloorHeight, 2)}м)
+          </text>
+          <text
+            x={wallX + 6}
+            y={236}
+            fontSize="9"
+            fontFamily="IBM Plex Mono, monospace"
+            fill="#57534E"
+          >
+            Нижн. этаж ({formatMeters(params.H, 2)}м)
+          </text>
+
+          {/* Режим замены рустовкой */}
+          {params.beltAsRusticationMode ? (
+            <g>
+              {[0, 1, 2].map((rIdx) => (
+                <rect
+                  key={rIdx}
+                  x={outX}
+                  y={topY + rIdx * 34}
+                  width={22}
+                  height={28}
+                  fill="#DFD6C3"
+                  stroke={accentStroke}
+                  strokeWidth={1}
+                />
+              ))}
+              {params.beltRusticationHasBaseProfile ? (
+                <path
+                  d={`M ${outX} ${topY + 104} H ${outX + 42} V ${topY + 120} Q ${outX + 18} ${topY + 122} ${outX} ${topY + 132} Z`}
+                  fill="#D6CEBE"
+                  stroke={accentStroke}
+                  strokeWidth={1.3}
+                />
+              ) : (
+                <text
+                  x={outX + 16}
+                  y={topY + 122}
+                  fontSize="10"
+                  fontFamily="IBM Plex Mono, monospace"
+                  fill="#B91C1C"
+                  fontWeight={600}
+                >
+                  ✕ Отсутствует базовый профиль (Fußprofil, S. 16)
+                </text>
+              )}
+              <text
+                x={outX + 54}
+                y={topY + 46}
+                fontSize="10"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#1C1917"
+              >
+                Шовное членение (Fugenteilung)
+              </text>
+              <text
+                x={outX + 54}
+                y={topY + 118}
+                fontSize="10"
+                fontFamily="IBM Plex Mono, monospace"
+                fill={params.beltRusticationHasBaseProfile ? '#15803D' : '#B91C1C'}
+              >
+                {params.beltRusticationHasBaseProfile ? 'Опора: базовый профиль (Fußprofil)' : 'Ошибка опоры!'}
+              </text>
+            </g>
+          ) : params.beltIsAbsent ? (
+            <g>
+              <line
+                x1={outX - 10}
+                y1={topY + totalBeltPx / 2}
+                x2={outX + 140}
+                y2={topY + totalBeltPx / 2}
+                stroke={accentStroke}
+                strokeWidth={1.2}
+                strokeDasharray="5 4"
+              />
+              <text
+                x={outX + 16}
+                y={topY + totalBeltPx / 2 - 10}
+                fontSize="10"
+                fontFamily="IBM Plex Mono, monospace"
+                fill={accentStroke}
+                fontWeight={600}
+              >
+                Лента отсутствует — этажи единым целым
+              </text>
+              <text
+                x={outX + 16}
+                y={topY + totalBeltPx / 2 + 16}
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#57534E"
+              >
+                {params.beltOnlySillUnderSecond
+                  ? '✕ Только подоконник под 2 эт. запрещён (S. 22)'
+                  : 'Допустимо в 3-эт. (схема 3) или схеме B (S. 22–23)'}
+              </text>
+            </g>
+          ) : (
+            <g>
+              {/* Зона 1: Верхние обломы венчающей части (h_верх) */}
+              <rect
+                x={outX + 160}
+                y={topY}
+                width={150}
+                height={upperPx}
+                fill="rgba(154, 52, 18, 0.08)"
+                stroke="#9A3412"
+                strokeWidth={0.8}
+                strokeDasharray="3 2"
+              />
+              {/* Зона 2: Нижние обломы венчающей части (h_низ) */}
+              <rect
+                x={outX + 160}
+                y={topY + upperPx}
+                width={150}
+                height={lowerPx}
+                fill="rgba(21, 128, 61, 0.08)"
+                stroke="#15803D"
+                strokeWidth={0.8}
+                strokeDasharray="3 2"
+              />
+
+              {/* Геометрия верхних обломов в зависимости от effect (heavy/light/neutral) */}
+              {effect === 'heavy' ? (
+                /* Тяжёлый: одна массивная плита + микрополочка */
+                <path
+                  d={`M ${outX} ${topY} H ${outX + crownReach} V ${topY + upperPx * 0.22} H ${outX + crownReach - 4} V ${topY + upperPx} H ${outX} Z`}
+                  fill="#D6CEBE"
+                  stroke={accentStroke}
+                  strokeWidth={1.3}
+                />
+              ) : effect === 'light' ? (
+                /* Лёгкий: выкружка/гусёк над плитой */
+                <path
+                  d={`M ${outX} ${topY} Q ${outX + crownReach * 0.85} ${topY + 2} ${outX + crownReach} ${topY + upperPx * 0.52} L ${outX + crownReach - 12} ${topY + upperPx * 0.58} V ${topY + upperPx} H ${outX} Z`}
+                  fill="#DFD6C3"
+                  stroke={accentStroke}
+                  strokeWidth={1.3}
+                />
+              ) : (
+                /* Нейтральный 1:1 */
+                <path
+                  d={`M ${outX} ${topY} L ${outX + crownReach} ${topY + upperPx * 0.35} V ${topY + upperPx} H ${outX} Z`}
+                  fill="#DFD6C3"
+                  stroke={accentStroke}
+                  strokeWidth={1.3}
+                />
+              )}
+
+              {/* Геометрия нижних обломов венца (связующая кривая к стене) */}
+              <path
+                d={`M ${outX} ${topY + upperPx} H ${outX + crownReach * 0.72} Q ${outX + crownReach * 0.44} ${topY + upperPx + lowerPx * 0.55} ${outX + crownReach * 0.3} ${topY + crownPx} H ${outX} Z`}
+                fill="#EAE3D3"
+                stroke={accentStroke}
+                strokeWidth={1.25}
+              />
+
+              {/* Консоли при наличии */}
+              {params.beltConsoleMode === 'lying_lower' && (
+                <path
+                  d={`M ${outX + 18} ${topY + upperPx + 2} H ${outX + crownReach * 0.66} Q ${outX + crownReach * 0.45} ${topY + crownPx - 2} ${outX + 18} ${topY + crownPx - 2} Z`}
+                  fill="#9A3412"
+                  fillOpacity={0.25}
+                  stroke="#9A3412"
+                  strokeWidth={1}
+                />
+              )}
+
+              {/* Подвенцовые элементы по Классам 2, 3, 4 */}
+              {params.beltType === 2 && (
+                /* Класс 2: архитравные полосы */
+                <g>
+                  <rect
+                    x={outX}
+                    y={topY + crownPx}
+                    width={crownReach * 0.3}
+                    height={subPx * 0.55}
+                    fill="#E5DFD3"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                  <rect
+                    x={outX}
+                    y={topY + crownPx + subPx * 0.55}
+                    width={crownReach * 0.2}
+                    height={subPx * 0.45}
+                    fill="#DFD6C3"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                </g>
+              )}
+
+              {params.beltType === 3 && (
+                /* Класс 3: Шейка (Hals) и поясок (Halsband) */
+                <g>
+                  <path
+                    d={`M ${outX} ${topY + crownPx} H ${outX + crownReach * 0.28} Q ${outX + crownReach * 0.14} ${topY + crownPx + subPx * 0.4} ${outX + crownReach * 0.16} ${topY + crownPx + subPx * 0.78} H ${outX} Z`}
+                    fill="#F3EFE6"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                  <rect
+                    x={outX}
+                    y={topY + crownPx + subPx * 0.78}
+                    width={crownReach * 0.24}
+                    height={Math.max(7, subPx * 0.22)}
+                    fill="#D6CEBE"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                </g>
+              )}
+
+              {params.beltType === 4 && (
+                /* Класс 4: Фриз и архитрав */
+                <g>
+                  <rect
+                    x={outX}
+                    y={topY + crownPx}
+                    width={crownReach * 0.26}
+                    height={subPx * 0.62}
+                    fill="#F3EFE6"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                  {params.beltConsoleMode === 'standing_frieze' && (
+                    <rect
+                      x={outX + 4}
+                      y={topY + crownPx + 4}
+                      width={crownReach * 0.2}
+                      height={Math.max(10, subPx * 0.62 - 8)}
+                      fill="#9A3412"
+                      fillOpacity={0.25}
+                      stroke="#9A3412"
+                      strokeWidth={0.9}
+                    />
+                  )}
+                  <rect
+                    x={outX}
+                    y={topY + crownPx + subPx * 0.62}
+                    width={crownReach * 0.34}
+                    height={subPx * 0.38}
+                    fill="#DFD6C3"
+                    stroke={accentStroke}
+                    strokeWidth={1.1}
+                  />
+                </g>
+              )}
+
+              {/* Подписи зон */}
+              <text
+                x={outX + 168}
+                y={topY + Math.max(12, upperPx / 2 + 3)}
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#9A3412"
+              >
+                Верхние обломы h_в = {formatMeters(hUpper)}м
+              </text>
+              <text
+                x={outX + 168}
+                y={topY + upperPx + Math.max(12, lowerPx / 2 + 3)}
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#15803D"
+              >
+                Нижние обломы h_н = {formatMeters(hLower)}м
+              </text>
+
+              {subPx > 8 && (
+                <text
+                  x={outX + 168}
+                  y={topY + crownPx + subPx / 2 + 3}
+                  fontSize="9.5"
+                  fontFamily="IBM Plex Mono, monospace"
+                  fill="#44403C"
+                >
+                  {params.beltType === 2
+                    ? 'Архитравные полосы'
+                    : params.beltType === 3
+                      ? 'Шейка (Hals) + поясок'
+                      : 'Фриз + архитрав'}
+                </text>
+              )}
+
+              {/* Пометка про вынос */}
+              <text
+                x={outX + 4}
+                y={svgH - 14}
+                fontSize="9"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#78716C"
+              >
+                Вынос (Ausladung): умеренный — число в источнике не задано (S. 16)
+              </text>
+            </g>
+          )}
+        </svg>
+      </div>
+
+      <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">
+        <p className="font-display text-lg font-medium text-[#1C1917]">Параметры разреза ленты</p>
+        <dl className="divide-y divide-[#E5DFD3] font-mono tabular-nums text-[11px]">
+          <div className="py-1.5 flex justify-between gap-2">
+            <dt className="text-[#78716C]">H_ленты / норма:</dt>
+            <dd className="font-medium text-[#1C1917]">
+              {formatMeters(params.hGurt)} м [{formatMeters(summary.beltHeightCheck.range[0], 2)}…{formatMeters(summary.beltHeightCheck.range[1], 2)}]
+            </dd>
+          </div>
+          <div className="py-1.5 flex justify-between gap-2">
+            <dt className="text-[#78716C]">h_верх : h_низ:</dt>
+            <dd className="font-medium text-[#9A3412]">
+              {formatMeters(params.beltCrowningRatio, 2)} : 1 (доп. 0.5…2.0)
+            </dd>
+          </div>
+          <div className="py-1.5 flex justify-between gap-2">
+            <dt className="text-[#78716C]">Иерархия S. 16:</dt>
+            <dd className="font-medium text-[#1C1917]">
+              {formatMeters(params.hGurt, 2)} &lt; min({formatMeters(params.hMain, 2)}, {formatMeters(params.useFullFloorAsSocle ? params.H : params.hSocle, 2)})
+            </dd>
+          </div>
+        </dl>
+        <p className="text-[11px] leading-relaxed text-[#57534E]">
+          {beltMeta.descriptionRu}
+        </p>
+      </div>
+    </div>
+  );
+}
+
