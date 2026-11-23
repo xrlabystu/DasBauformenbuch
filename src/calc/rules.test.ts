@@ -95,6 +95,8 @@ import {
 import { countLockedParams, filterUnlockedPatch, isParamLocked } from './paramLocks.ts';
 import { RULE_BOOK_EXCERPTS, getExcerptForCheckId } from './ruleBookRefs.ts';
 import { BRAUSEWETTER_PAGES } from '../data/brausewetter_1895.ts';
+import { exportFacadeToDwg } from './dwgExport.ts';
+import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
 
@@ -897,5 +899,25 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
         `DE quote mismatch for ${key} on page ${excerpt.pageNumber}: "${excerpt.bookQuoteDe}"`
       );
     }
+  });
+
+  it('24. Экспорт ортогонального чертежа в DWG: корректный бинарный AC1027 со слоями и геометрией', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const summary = evaluateFacadeSummary(base, { expertMode: true });
+    const dwgBytes = exportFacadeToDwg(base, summary);
+
+    assert.ok(dwgBytes instanceof Uint8Array);
+    assert.ok(dwgBytes.byteLength > 2000, 'DWG buffer should not be empty');
+    const magic = new TextDecoder('ascii').decode(dwgBytes.slice(0, 6));
+    assert.equal(magic, 'AC1027');
+
+    // Проверяем обратное чтение DWG библиотекой
+    const arrayBuffer = new Uint8Array(dwgBytes).buffer;
+    const parsedDoc = DwgReader.readFromStream(arrayBuffer);
+    assert.ok(parsedDoc.layers?.tryGetValue('01_WALL_FACADE'));
+    assert.ok(parsedDoc.layers?.tryGetValue('02_SOCLE'));
+    assert.ok(parsedDoc.layers?.tryGetValue('05_WINDOWS_DOORS'));
+    assert.ok(parsedDoc.layers?.tryGetValue('08_DIMENSIONS'));
+    assert.ok((parsedDoc.modelSpace?.entities.count ?? 0) > 25);
   });
 });

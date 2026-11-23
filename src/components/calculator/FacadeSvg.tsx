@@ -9,6 +9,7 @@ import {
 } from 'react';
 import {
   BookOpen,
+  Download,
   Maximize2,
   Minimize2,
   Move,
@@ -28,6 +29,7 @@ import {
   type ValidationStatus,
 } from '../../calc/rules';
 import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
+import { downloadFacadeDwg } from '../../calc/dwgExport';
 
 interface FacadeSvgProps {
   params: FacadeParameters;
@@ -515,8 +517,19 @@ export function FacadeSvg({
       : 1;
   const corniceOverhangPx =
     Math.min(26, Math.max(8, corniceM * scale * 0.55)) * boostMult;
-  const huPx = summary.corniceCheck.h_u * scale;
-  const hlPx = summary.corniceCheck.h_l * scale;
+  const tcSumM = Math.max(0.05, summary.corniceCheck.h_u + summary.corniceCheck.h_l);
+  const hasCorniceFrieze = corniceM > tcSumM + 0.04;
+  const corniceFriezeM = hasCorniceFrieze ? corniceM - tcSumM : 0;
+  const huM = hasCorniceFrieze
+    ? summary.corniceCheck.h_u
+    : corniceM * (summary.corniceCheck.h_u / tcSumM);
+  const hlM = hasCorniceFrieze
+    ? summary.corniceCheck.h_l
+    : Math.max(0, corniceM - huM);
+  const totalCornicePx = Math.max(8, corniceM * scale);
+  const huPx = Math.max(3, (huM / corniceM) * totalCornicePx);
+  const hlPx = Math.max(3, (hlM / corniceM) * totalCornicePx);
+  const friezePx = hasCorniceFrieze ? Math.max(2, totalCornicePx - huPx - hlPx) : 0;
 
   // Позиция входа (N7)
   const entranceAxisIdx =
@@ -707,6 +720,16 @@ export function FacadeSvg({
                   <span>Во весь экран</span>
                 </>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadFacadeDwg(params, summary)}
+              title="Скачать ортогональный чертёж в формате AutoCAD DWG (1 ед. = 1 мм, со слоями и размерами)"
+              aria-label="Экспортировать ортогональный чертёж в формат DWG"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 border border-[#9A3412]/45 bg-[#9A3412]/10 text-[#9A3412] hover:bg-[#9A3412] hover:text-[#FBF9F5] transition-colors whitespace-nowrap shrink-0 ml-1"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>DWG</span>
             </button>
           </div>
         </div>
@@ -1225,7 +1248,7 @@ export function FacadeSvg({
             );
           })}
 
-          {/* Crowning Cornice (Главный карниз) */}
+          {/* Crowning Cornice (Главный карниз) — строго от wallTopM до corniceTopM */}
           <g
             className="cursor-pointer"
             onClick={() => onSelectElement?.('cornice')}
@@ -1235,7 +1258,7 @@ export function FacadeSvg({
               x={xM(0) - corniceOverhangPx}
               y={yFromGroundM(corniceTopM)}
               width={facadePxW + corniceOverhangPx * 2}
-              height={Math.max(4, huPx)}
+              height={huPx}
               fill={
                 isHi('cornice') || corniceStatus === 'violation'
                   ? STATUS_FILL[corniceStatus]
@@ -1250,9 +1273,9 @@ export function FacadeSvg({
             />
             <rect
               x={xM(0) - corniceOverhangPx * 0.55}
-              y={yFromGroundM(corniceTopM) + Math.max(4, huPx)}
+              y={yFromGroundM(corniceTopM) + huPx}
               width={facadePxW + corniceOverhangPx * 1.1}
-              height={Math.max(4, hlPx)}
+              height={hlPx}
               fill={
                 isHi('cornice') || corniceStatus === 'violation'
                   ? STATUS_FILL[corniceStatus]
@@ -1265,6 +1288,25 @@ export function FacadeSvg({
               }
               strokeWidth={corniceStatus === 'violation' ? 1.6 : 1.1}
             />
+            {friezePx > 0 && (
+              <rect
+                x={xM(0) - corniceOverhangPx * 0.16}
+                y={yFromGroundM(corniceTopM) + huPx + hlPx}
+                width={facadePxW + corniceOverhangPx * 0.32}
+                height={friezePx}
+                fill={
+                  isHi('cornice') || corniceStatus === 'violation'
+                    ? STATUS_FILL[corniceStatus]
+                    : '#F0EAD8'
+                }
+                stroke={
+                  isHi('cornice') || corniceStatus === 'violation'
+                    ? STATUS_STROKE[corniceStatus]
+                    : '#292524'
+                }
+                strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.05}
+              />
+            )}
           </g>
 
           {/* Vertical Window Axes + Windows per floor */}
