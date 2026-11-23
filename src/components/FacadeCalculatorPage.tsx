@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { Lock, RotateCcw } from 'lucide-react';
 import {
   D_from_A,
   RULES_DATA,
@@ -18,6 +18,13 @@ import {
   type MultiSub,
   type RuleRecord,
 } from '../calc/rules';
+import {
+  countLockedParams,
+  filterUnlockedPatch,
+  isParamLocked,
+  type LockedParamsMap,
+} from '../calc/paramLocks';
+import type { RuleBookExcerpt } from '../calc/ruleBookRefs';
 import { FacadeSvg } from './calculator/FacadeSvg';
 import { AnalyticalPlates, type AnalyticalPlateId } from './calculator/AnalyticalPlates';
 import {
@@ -28,7 +35,7 @@ import {
 import { RuleCardsView, TestCasesVerificationView } from './calculator/RuleCardsPanel';
 
 interface FacadeCalculatorPageProps {
-  onOpenBookPage?: (pageNum: number) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }
 
 type CalculatorSubpage = 'workspace' | 'rules' | 'tests';
@@ -64,29 +71,64 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
   const [activeModule, setActiveModule] = useState<CalculatorModuleId>('axes');
   const [activePlate, setActivePlate] = useState<AnalyticalPlateId>('fan');
   const [highlightedElement, setHighlightedElement] = useState<FacadeTargetElement | null>(null);
+  const [lockedParams, setLockedParams] = useState<LockedParamsMap>({});
 
   const summary = useMemo(
     () => evaluateFacadeSummary(params, { expertMode }),
     [params, expertMode]
   );
   const currentTypology = useMemo(() => getTypology(params.buildingType), [params.buildingType]);
+  const lockedCount = useMemo(() => countLockedParams(lockedParams), [lockedParams]);
 
-  const handleUpdateParams = (patch: Partial<FacadeParameters>) => {
+  const handleToggleLock = (key: string) => {
+    setLockedParams((prev) => {
+      const next = { ...prev };
+      if (next[key]) {
+        delete next[key];
+      } else {
+        next[key] = true;
+      }
+      return next;
+    });
+  };
+
+  const handleUpdateParams = (rawPatch: Partial<FacadeParameters>) => {
     setParams((prev) => {
+      const patch = filterUnlockedPatch(prev, rawPatch, lockedParams);
+      if (Object.keys(patch).length === 0) return prev;
+
       const next: FacadeParameters = { ...prev, ...patch };
+      const isHLocked = isParamLocked(lockedParams, 'H');
+      const isFloorsLocked = isParamLocked(lockedParams, 'floors');
+      const isTotalHeightLocked =
+        isParamLocked(lockedParams, 'totalHeight') ||
+        isParamLocked(lockedParams, 'levels.manualTotalHeight');
 
       if (patch.levels === undefined) {
-        if (patch.floors !== undefined && patch.floors !== prev.floors) {
-          next.levels = buildDefaultLevels(
+        if (!isFloorsLocked && patch.floors !== undefined && patch.floors !== prev.floors) {
+          const baseLevels = buildDefaultLevels(
             Math.max(1, Math.round(patch.floors)),
-            next.H,
-            prev.levels.groundToFloor1
+            isHLocked ? prev.H : next.H,
+            isParamLocked(lockedParams, 'levels.groundToFloor1')
+              ? prev.levels.groundToFloor1
+              : prev.levels.groundToFloor1
           );
-        } else if (patch.H !== undefined && patch.H !== prev.H) {
-          next.levels = syncLevelsWithH(prev.levels, patch.H);
+          next.levels = filterUnlockedPatch(
+            prev,
+            { levels: baseLevels },
+            lockedParams
+          ).levels ?? baseLevels;
+        } else if (!isHLocked && patch.H !== undefined && patch.H !== prev.H) {
+          const synced = syncLevelsWithH(prev.levels, patch.H);
+          next.levels =
+            filterUnlockedPatch(prev, { levels: synced }, lockedParams).levels ?? synced;
         }
 
-        if (patch.totalHeight !== undefined && patch.totalHeight !== prev.totalHeight) {
+        if (
+          !isTotalHeightLocked &&
+          patch.totalHeight !== undefined &&
+          patch.totalHeight !== prev.totalHeight
+        ) {
           next.levels = {
             ...next.levels,
             manualTotalHeight: patch.totalHeight,
@@ -105,14 +147,20 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
         next.hMain
       );
 
-      if (patch.levels !== undefined || patch.floors !== undefined) {
+      if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
         next.H = dg.H_max;
+      }
+      if (!isFloorsLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
         next.floors = next.levels.floors.length;
       }
-      if (patch.totalHeight === undefined || patch.levels !== undefined) {
+      if (!isTotalHeightLocked && (patch.totalHeight === undefined || patch.levels !== undefined)) {
         next.totalHeight = dg.totalHeight;
       }
-      if (next.levels.floors[1] && patch.beltUpperFloorHeight === undefined) {
+      if (
+        !isParamLocked(lockedParams, 'beltUpperFloorHeight') &&
+        next.levels.floors[1] &&
+        patch.beltUpperFloorHeight === undefined
+      ) {
         next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
       }
 
@@ -122,11 +170,12 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
 
   const handleChangeBuildingType = (type: BuildingTypeId) => {
     const preset = createDefaultParamsForTypology(type);
-    setParams(preset);
+    handleUpdateParams(preset);
   };
 
   const handleResetToBookExample = () => {
     // Классический пример из текста S. 5: H = 4.00 м, A:H = 4:5 (A = 3.20 м), w = 1.15 м, u = 0.20 м, k_D = 4/5
+    setLockedParams({});
     setParams(createDefaultParamsForTypology('urban_house'));
     setHighlightedElement(null);
   };
@@ -313,6 +362,17 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                       : `Нарушения: ${summary.violationCount}`
                 }
               />
+              {lockedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setLockedParams({})}
+                  title="Нажмите, чтобы снять замочки со всех закреплённых параметров"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-[#9A3412]/50 bg-[#9A3412]/10 text-[#9A3412] hover:bg-[#9A3412]/15 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Lock className="w-3 h-3" />
+                  <span>Замочков: {lockedCount} · Снять все</span>
+                </button>
+              )}
               <button
                 type="button"
                 aria-pressed={expertMode}
@@ -364,6 +424,8 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 params={params}
                 summary={summary}
                 expertMode={expertMode}
+                lockedParams={lockedParams}
+                onToggleLock={handleToggleLock}
                 onUpdateParams={handleUpdateParams}
                 onHighlightElement={setHighlightedElement}
                 onOpenBookPage={onOpenBookPage}
@@ -376,6 +438,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 summary={summary}
                 highlightedElement={highlightedElement}
                 onSelectElement={handleSelectElementFromSvg}
+                onOpenBookPage={onOpenBookPage}
               />
 
               {/* Compact Tabular Readout Strip */}
@@ -444,6 +507,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 params={params}
                 summary={summary}
                 onUpdateParams={handleUpdateParams}
+                lockedParams={lockedParams}
               />
             </div>
           </div>

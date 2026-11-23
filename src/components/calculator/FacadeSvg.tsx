@@ -1,17 +1,54 @@
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import {
+  BookOpen,
+  Maximize2,
+  Minimize2,
+  Move,
+  RotateCcw,
+  X,
+  XCircle,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import {
   formatMeters,
+  mergeStatuses,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
+  type SummaryCheckItem,
   type ValidationStatus,
 } from '../../calc/rules';
+import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
 
 interface FacadeSvgProps {
   params: FacadeParameters;
   summary: FacadeSummary;
   highlightedElement: FacadeTargetElement | null;
   onSelectElement?: (el: FacadeTargetElement) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }
+
+const ELEMENT_LABELS_RU: Record<FacadeTargetElement, string> = {
+  axenweite: 'Оси и пропорция фасада (Axenweite)',
+  pier: 'Межоконный простенок (p)',
+  framing_pier: 'Простенок и наличник (p_c, u)',
+  corner: 'Угол фасада (D, p_corner)',
+  window: 'Оконный проём (w × h)',
+  entablature: 'Сандрик и обрамление (R:F:K)',
+  pilaster: 'Пилястр / лопатка / колонна',
+  cornice: 'Главный карниз (Hauptgesims)',
+  socle: 'Цоколь и иерархия (Sockel)',
+  belt: 'Межэтажная лента (Gurtgesims)',
+};
 
 const STATUS_STROKE: Record<ValidationStatus, string> = {
   ok: '#15803D',
@@ -36,7 +73,36 @@ export function FacadeSvg({
   summary,
   highlightedElement,
   onSelectElement,
+  onOpenBookPage,
 }: FacadeSvgProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const [hoveredViolation, setHoveredViolation] = useState<{
+    element: FacadeTargetElement;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const [view, setView] = useState<{ zoom: number; pan: { x: number; y: number } }>({
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+  });
+  const zoom = view.zoom;
+  const pan = view.pan;
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const dragStateRef = useRef<{
+    active: boolean;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startPanX: number;
+    startPanY: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressNextClickRef = useRef(false);
+
   const safeH = Math.max(1.8, summary.derivedGeometry.H_max);
   const safeA = Math.max(1.0, params.A);
   const safeW = Math.max(0.4, params.w);
@@ -100,14 +166,255 @@ export function FacadeSvg({
   const xM = (meters: number) => originX + meters * scale;
   const yFromGroundM = (metersAboveGround: number) => groundY - metersAboveGround * scale;
 
-  const cornerStatus = summary.cornerCheck.status;
-  const pierStatus = summary.pierResult.status;
-  const windowStatus = summary.windowCheck.status;
-  const corniceStatus = summary.corniceCheck.status;
-  const pilasterStatus = summary.pilasterCheck.status;
-  const ahStatus = summary.ahCheck.status;
-  const entablatureStatus = summary.framingResult.status;
-  const socleStatus: ValidationStatus =
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 5;
+
+  const clampPan = useCallback(
+    (nextX: number, nextY: number, targetZoom: number) => {
+      const vbW = svgW / targetZoom;
+      const vbH = svgH / targetZoom;
+      const minX = Math.min(0, svgW - vbW) - svgW * 0.35;
+      const maxX = Math.max(0, svgW - vbW) + svgW * 0.35;
+      const minY = Math.min(0, svgH - vbH) - svgH * 0.35;
+      const maxY = Math.max(0, svgH - vbH) + svgH * 0.35;
+      return {
+        x: Math.max(minX, Math.min(maxX, nextX)),
+        y: Math.max(minY, Math.min(maxY, nextY)),
+      };
+    },
+    [svgW, svgH]
+  );
+
+  const vbW = svgW / zoom;
+  const vbH = svgH / zoom;
+  const clampedPan = clampPan(pan.x, pan.y, zoom);
+  const vbX = clampedPan.x;
+  const vbY = clampedPan.y;
+
+  const zoomByFactor = useCallback(
+    (factor: number, clientPt?: { clientX: number; clientY: number }) => {
+      setView((prev) => {
+        const nextZoom = Math.max(
+          MIN_ZOOM,
+          Math.min(MAX_ZOOM, Number((prev.zoom * factor).toFixed(3)))
+        );
+        const prevVbW = svgW / prev.zoom;
+        const prevVbH = svgH / prev.zoom;
+        const curPan = clampPan(prev.pan.x, prev.pan.y, prev.zoom);
+
+        let fx = curPan.x + prevVbW / 2;
+        let fy = curPan.y + prevVbH / 2;
+
+        if (clientPt && svgRef.current) {
+          const rect = svgRef.current.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const scaleSvgPerPx = Math.max(prevVbW / rect.width, prevVbH / rect.height);
+            const renderedW = prevVbW / scaleSvgPerPx;
+            const renderedH = prevVbH / scaleSvgPerPx;
+            const offsetX = rect.left + (rect.width - renderedW) / 2;
+            const offsetY = rect.top + (rect.height - renderedH) / 2;
+            fx = curPan.x + (clientPt.clientX - offsetX) * scaleSvgPerPx;
+            fy = curPan.y + (clientPt.clientY - offsetY) * scaleSvgPerPx;
+          }
+        }
+
+        const relX = (fx - curPan.x) / prevVbW;
+        const relY = (fy - curPan.y) / prevVbH;
+        const newVbW = svgW / nextZoom;
+        const newVbH = svgH / nextZoom;
+        const nextPan = clampPan(fx - relX * newVbW, fy - relY * newVbH, nextZoom);
+        return { zoom: nextZoom, pan: nextPan };
+      });
+    },
+    [clampPan, svgW, svgH]
+  );
+
+  const handleResetView = useCallback(() => {
+    setView({ zoom: 1, pan: { x: 0, y: 0 } });
+  }, []);
+
+  const openBookFromSvg = useCallback(
+    (pageNum: number, excerpt?: RuleBookExcerpt) => {
+      setIsFullscreen(false);
+      onOpenBookPage?.(pageNum, excerpt);
+    },
+    [onOpenBookPage]
+  );
+
+  // Escape closes fullscreen; body scroll locked while fullscreen is active
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullscreen(false);
+      } else if (e.key === '+' || e.key === '=') {
+        zoomByFactor(1.25);
+      } else if (e.key === '-' || e.key === '_') {
+        zoomByFactor(0.8);
+      } else if (e.key === '0') {
+        handleResetView();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isFullscreen, zoomByFactor, handleResetView]);
+
+  // Non-passive wheel handler: zooms in fullscreen, with Ctrl/Cmd (incl. pinch), or once zoomed
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const shouldZoom = isFullscreen || e.ctrlKey || e.metaKey || Math.abs(zoom - 1) > 0.01;
+      if (!shouldZoom) return;
+      e.preventDefault();
+      setHoveredViolation(null);
+      const factor = Math.exp(-e.deltaY * 0.0018);
+      zoomByFactor(factor, { clientX: e.clientX, clientY: e.clientY });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isFullscreen, zoom, zoomByFactor]);
+
+  const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Ignore right-click or clicks inside the floating violation popover
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('[role="dialog"]')) return;
+    dragStateRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startPanX: vbX,
+      startPanY: vbY,
+      moved: false,
+    };
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || !drag.active || drag.pointerId !== e.pointerId) return;
+    const dxPx = e.clientX - drag.startClientX;
+    const dyPx = e.clientY - drag.startClientY;
+    if (!drag.moved && Math.hypot(dxPx, dyPx) < 4) return;
+
+    if (!drag.moved) {
+      drag.moved = true;
+      setIsPanning(true);
+      setHoveredViolation(null);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer capture is unavailable
+      }
+    }
+
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const scaleSvgPerPx = Math.max(vbW / rect.width, vbH / rect.height);
+    const nextPan = clampPan(
+      drag.startPanX - dxPx * scaleSvgPerPx,
+      drag.startPanY - dyPx * scaleSvgPerPx,
+      zoom
+    );
+    setView((prev) => ({ ...prev, pan: nextPan }));
+  };
+
+  const handlePointerUpOrCancel = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (drag.moved) {
+      suppressNextClickRef.current = true;
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 40);
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // Ignore
+      }
+    }
+    dragStateRef.current = null;
+    setIsPanning(false);
+  };
+
+  const checksByElement = useMemo(() => {
+    const map: Record<FacadeTargetElement, SummaryCheckItem[]> = {
+      axenweite: [],
+      pier: [],
+      framing_pier: [],
+      corner: [],
+      window: [],
+      entablature: [],
+      pilaster: [],
+      cornice: [],
+      socle: [],
+      belt: [],
+    };
+    for (const c of summary.checks) {
+      map[c.targetElement].push(c);
+      // Дублируем нарушение пропорции главного карниза на сам карниз, чтобы наведение на него тоже показывало правило
+      if (c.id === 'main_cornice_subordination' && c.targetElement !== 'cornice') {
+        map.cornice.push(c);
+      }
+      // Связанные проверки простенка/наличника доступны при наведении на простенок
+      if (c.targetElement === 'framing_pier' && !params.withFraming) {
+        map.pier.push(c);
+      }
+    }
+    return map;
+  }, [summary.checks, params.withFraming]);
+
+  const getViolationsForElement = (el: FacadeTargetElement): SummaryCheckItem[] => {
+    if (el === 'pier' || el === 'framing_pier') {
+      const combined = [...checksByElement.pier, ...checksByElement.framing_pier];
+      const seen = new Set<string>();
+      return combined.filter((c) => {
+        if (c.status !== 'violation' || seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+    }
+    return checksByElement[el].filter((c) => c.status === 'violation');
+  };
+
+  const getWorstCheckStatus = (
+    el: FacadeTargetElement,
+    baseStatus: ValidationStatus
+  ): ValidationStatus => {
+    let acc = baseStatus;
+    for (const c of checksByElement[el]) {
+      acc = mergeStatuses(acc, c.status);
+    }
+    return acc;
+  };
+
+  const cornerStatus = getWorstCheckStatus('corner', summary.cornerCheck.status);
+  const pierStatus = getWorstCheckStatus(
+    params.withFraming ? 'framing_pier' : 'pier',
+    summary.pierResult.status
+  );
+  const windowStatus = getWorstCheckStatus('window', summary.windowCheck.status);
+  const corniceStatus = getWorstCheckStatus(
+    'cornice',
+    mergeStatuses(summary.corniceCheck.status, summary.mainCorniceCheck.status)
+  );
+  const pilasterStatus = getWorstCheckStatus('pilaster', summary.pilasterCheck.status);
+  const ahStatus = getWorstCheckStatus(
+    'axenweite',
+    mergeStatuses(summary.ahCheck.status, summary.variantAxisCheck.status)
+  );
+  const entablatureStatus = getWorstCheckStatus('entablature', summary.framingResult.status);
+  const socleBaseStatus: ValidationStatus =
     summary.socleHeightCheck.status === 'violation' ||
     summary.mainCorniceCheck.status === 'violation' ||
     summary.decreasingCheck.status === 'violation'
@@ -117,8 +424,9 @@ export function FacadeSvg({
           summary.abkroepfungCheck.status === 'approx'
         ? 'approx'
         : 'ok';
+  const socleStatus = getWorstCheckStatus('socle', socleBaseStatus);
 
-  const beltStatus: ValidationStatus =
+  const beltBaseStatus: ValidationStatus =
     summary.beltHeightCheck.status === 'violation' ||
     summary.beltCrowningCheck.status === 'violation' ||
     summary.beltColumnsCheck.status === 'violation' ||
@@ -129,6 +437,71 @@ export function FacadeSvg({
           summary.beltSpecialCheck.status === 'approx'
         ? 'approx'
         : 'ok';
+  const beltStatus = getWorstCheckStatus('belt', beltBaseStatus);
+
+  const cancelHideTimer = () => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+
+  const scheduleHideViolation = () => {
+    cancelHideTimer();
+    hideTimerRef.current = window.setTimeout(() => {
+      setHoveredViolation(null);
+    }, 180);
+  };
+
+  const handleElementMouseEnter = (
+    el: FacadeTargetElement,
+    e: ReactMouseEvent<SVGElement>
+  ) => {
+    const violations = getViolationsForElement(el);
+    if (violations.length === 0) return;
+    cancelHideTimer();
+    const box = containerRef.current?.getBoundingClientRect();
+    const rawX = box ? e.clientX - box.left : 24;
+    const rawY = box ? e.clientY - box.top : 24;
+    const maxW = box ? Math.max(40, box.width - 348) : 400;
+    const maxH = box ? Math.max(40, box.height - 230) : 260;
+    setHoveredViolation({
+      element: el,
+      x: Math.max(12, Math.min(rawX + 14, maxW)),
+      y: Math.max(12, Math.min(rawY + 14, maxH)),
+    });
+  };
+
+  const violationHoverProps = (el: FacadeTargetElement) => ({
+    onMouseEnter: (e: ReactMouseEvent<SVGElement>) => handleElementMouseEnter(el, e),
+    onMouseLeave: scheduleHideViolation,
+  });
+
+  const activeViolationItems = hoveredViolation
+    ? getViolationsForElement(hoveredViolation.element)
+    : [];
+
+  const allViolationElements = useMemo(() => {
+    const order: FacadeTargetElement[] = [
+      'axenweite',
+      'pier',
+      'framing_pier',
+      'corner',
+      'window',
+      'entablature',
+      'pilaster',
+      'cornice',
+      'socle',
+      'belt',
+    ];
+    return order
+      .map((el) => ({
+        element: el,
+        label: ELEMENT_LABELS_RU[el],
+        violations: checksByElement[el].filter((c) => c.status === 'violation'),
+      }))
+      .filter((item) => item.violations.length > 0);
+  }, [checksByElement]);
 
   const p_corner = D - safeW / 2 - effectiveU;
   const p_inter = safeA - safeW - 2 * effectiveU;
@@ -175,6 +548,7 @@ export function FacadeSvg({
     return (
       <g
         onClick={onClickEl && onSelectElement ? () => onSelectElement(onClickEl) : undefined}
+        {...(onClickEl ? violationHoverProps(onClickEl) : {})}
         className={onClickEl ? 'cursor-pointer' : undefined}
       >
         <line x1={minX} y1={y - 5} x2={minX} y2={y + 5} stroke={color} strokeWidth={1.25} />
@@ -232,10 +606,19 @@ export function FacadeSvg({
         ? 'стоячий прямоугольник'
         : 'квадрат (избегать)';
 
+  const isViewModified = Math.abs(zoom - 1) > 0.01 || Math.abs(pan.x) > 0.5 || Math.abs(pan.y) > 0.5;
+  const zoomPct = Math.round(zoom * 100);
+
   return (
-    <div className="border border-[#D6CEBE] bg-[#FBF9F5]">
+    <div
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 bg-[#FBF9F5] flex flex-col'
+          : 'border border-[#D6CEBE] bg-[#FBF9F5]'
+      }
+    >
       {/* Header strip inside drafting sheet */}
-      <div className="px-4 py-2.5 border-b border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div className="px-4 py-2.5 border-b border-[#E5DFD3] bg-[#F3EFE6]/85 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[#44403C]">
           <span className="font-display text-base font-semibold text-[#1C1917]">
             Ортогональный чертёж ({safeFloors} эт. · {safeAxesCount} осей)
@@ -246,21 +629,118 @@ export function FacadeSvg({
           </span>
         </div>
 
-        <div className="flex items-center gap-4 text-[11px] font-mono tabular-nums">
-          <span className="text-[#15803D]">■ OK</span>
-          <span className="text-[#B45309]">▲ ПРИБЛ.</span>
-          <span className="text-[#B91C1C]">✕ НАРУШЕНИЕ</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="hidden sm:flex items-center gap-3 text-[11px] font-mono tabular-nums pr-2 border-r border-[#D6CEBE]">
+            <span className="text-[#15803D]">■ OK</span>
+            <span className="text-[#B45309]">▲ ПРИБЛ.</span>
+            <span className="text-[#B91C1C]">✕ НАРУШЕНИЕ</span>
+          </div>
+
+          {/* Zoom / Pan / Fullscreen Controls */}
+          <div className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums">
+            <button
+              type="button"
+              onClick={() => zoomByFactor(0.8)}
+              disabled={zoom <= MIN_ZOOM + 0.001}
+              title="Уменьшить масштаб (−)"
+              aria-label="Уменьшить масштаб чертежа"
+              className="p-1.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleResetView}
+              title="Сбросить масштаб до 100% и центрировать (0)"
+              className="px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors min-w-[52px] text-center"
+            >
+              {zoomPct}%
+            </button>
+            <button
+              type="button"
+              onClick={() => zoomByFactor(1.25)}
+              disabled={zoom >= MAX_ZOOM - 0.001}
+              title="Увеличить масштаб (+)"
+              aria-label="Увеличить масштаб чертежа"
+              className="p-1.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            {isViewModified && (
+              <button
+                type="button"
+                onClick={handleResetView}
+                title="Сбросить масштаб и сдвиг"
+                aria-label="Сбросить масштаб и сдвиг чертежа"
+                className="inline-flex items-center gap-1 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#57534E] hover:text-[#1C1917] hover:bg-[#EAE3D5] transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span className="hidden md:inline">Сброс</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setHoveredViolation(null);
+                setIsFullscreen((v) => !v);
+              }}
+              aria-pressed={isFullscreen}
+              title={
+                isFullscreen
+                  ? 'Вернуться в обычный режим (Esc)'
+                  : 'Развернуть ортогональный чертёж во весь экран'
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 border transition-colors whitespace-nowrap shrink-0 ml-1 ${
+                isFullscreen
+                  ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917] hover:bg-[#292524]'
+                  : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+              }`}
+            >
+              {isFullscreen ? (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  <span>Обычный режим</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>Во весь экран</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="p-2 sm:p-4 overflow-x-auto">
+      <div
+        ref={containerRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUpOrCancel}
+        onPointerCancel={handlePointerUpOrCancel}
+        onClickCapture={(e) => {
+          if (suppressNextClickRef.current) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        }}
+        style={{ touchAction: isFullscreen || isViewModified ? 'none' : 'pan-y' }}
+        className={`relative overflow-hidden select-none ${
+          isFullscreen ? 'flex-1 min-h-0 p-3 sm:p-5 bg-[#FBF9F5]' : 'p-2 sm:p-4'
+        } ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+      >
         <svg
-          viewBox={`0 0 ${svgW} ${svgH}`}
+          ref={svgRef}
+          viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
           role="img"
           aria-label="Параметрическая схема фасада по правилам Brausewetter 1895"
-          className="w-full h-auto min-w-[540px] select-none"
+          className={
+            isFullscreen
+              ? 'w-full h-full select-none'
+              : 'w-full h-auto select-none'
+          }
         >
-          <rect x={0} y={0} width={svgW} height={svgH} fill="#FBF9F5" />
+          <rect x={vbX - 400} y={vbY - 400} width={vbW + 800} height={vbH + 800} fill="#FBF9F5" />
 
           {/* Ground baseline */}
           <line
@@ -284,7 +764,11 @@ export function FacadeSvg({
           />
 
           {/* Plinth / Цоколь (Sockel) */}
-          <g className="cursor-pointer" onClick={() => onSelectElement?.('socle')}>
+          <g
+            className="cursor-pointer"
+            onClick={() => onSelectElement?.('socle')}
+            {...violationHoverProps('socle')}
+          >
             <rect
               x={xM(0) - 3}
               y={yFromGroundM(visualSocleTopM)}
@@ -294,13 +778,13 @@ export function FacadeSvg({
                 isHi('socle')
                   ? STATUS_FILL[socleStatus]
                   : socleStatus === 'violation'
-                    ? 'rgba(185, 28, 28, 0.08)'
+                    ? 'rgba(185, 28, 28, 0.14)'
                     : '#E6DFD0'
               }
               stroke={
                 isHi('socle') || socleStatus === 'violation' ? STATUS_STROKE[socleStatus] : '#292524'
               }
-              strokeWidth={isHi('socle') ? 1.8 : 1.2}
+              strokeWidth={isHi('socle') || socleStatus === 'violation' ? 1.8 : 1.2}
             />
             {!params.useFullFloorAsSocle && (
               <>
@@ -369,13 +853,19 @@ export function FacadeSvg({
               isHi('corner')
                 ? STATUS_FILL[cornerStatus]
                 : cornerStatus === 'violation'
-                  ? 'rgba(185, 28, 28, 0.08)'
+                  ? 'rgba(185, 28, 28, 0.14)'
                   : 'transparent'
             }
-            stroke={isHi('corner') ? STATUS_STROKE[cornerStatus] : 'none'}
-            strokeWidth={isHi('corner') ? 1.8 : 0}
+            stroke={
+              isHi('corner') || cornerStatus === 'violation'
+                ? STATUS_STROKE[cornerStatus]
+                : 'none'
+            }
+            strokeWidth={isHi('corner') || cornerStatus === 'violation' ? 1.8 : 0}
+            strokeDasharray={cornerStatus === 'violation' && !isHi('corner') ? '5 3' : undefined}
             className="cursor-pointer"
             onClick={() => onSelectElement?.('corner')}
+            {...violationHoverProps('corner')}
           />
 
           {/* Highlight overlay: Intermediate pier (between axis 0 and 1) */}
@@ -389,13 +879,25 @@ export function FacadeSvg({
                 isHi('pier') || isHi('framing_pier')
                   ? STATUS_FILL[pierStatus]
                   : pierStatus === 'violation'
-                    ? 'rgba(185, 28, 28, 0.08)'
+                    ? 'rgba(185, 28, 28, 0.14)'
                     : 'transparent'
               }
-              stroke={isHi('pier') || isHi('framing_pier') ? STATUS_STROKE[pierStatus] : 'none'}
-              strokeWidth={isHi('pier') || isHi('framing_pier') ? 1.8 : 0}
+              stroke={
+                isHi('pier') || isHi('framing_pier') || pierStatus === 'violation'
+                  ? STATUS_STROKE[pierStatus]
+                  : 'none'
+              }
+              strokeWidth={
+                isHi('pier') || isHi('framing_pier') || pierStatus === 'violation' ? 1.8 : 0
+              }
+              strokeDasharray={
+                pierStatus === 'violation' && !isHi('pier') && !isHi('framing_pier')
+                  ? '5 3'
+                  : undefined
+              }
               className="cursor-pointer"
               onClick={() => onSelectElement?.(params.withFraming ? 'framing_pier' : 'pier')}
+              {...violationHoverProps(params.withFraming ? 'framing_pier' : 'pier')}
             />
           )}
 
@@ -460,7 +962,15 @@ export function FacadeSvg({
                     key={`gurt-absent-${upperFloorNum}`}
                     className="cursor-pointer"
                     onClick={() => onSelectElement?.('belt')}
+                    {...violationHoverProps('belt')}
                   >
+                    <rect
+                      x={xM(0)}
+                      y={yFromGroundM(floorStartM) - 8}
+                      width={facadePxW}
+                      height={16}
+                      fill={beltStatus === 'violation' ? 'rgba(185, 28, 28, 0.08)' : 'transparent'}
+                    />
                     <line
                       x1={xM(0)}
                       y1={yFromGroundM(floorStartM)}
@@ -481,7 +991,15 @@ export function FacadeSvg({
                     key={`gurt-off-${upperFloorNum}`}
                     className="cursor-pointer"
                     onClick={() => onSelectElement?.('belt')}
+                    {...violationHoverProps('belt')}
                   >
+                    <rect
+                      x={xM(0)}
+                      y={yFromGroundM(floorStartM) - 10}
+                      width={facadePxW}
+                      height={20}
+                      fill={beltStatus === 'violation' ? 'rgba(185, 28, 28, 0.10)' : 'transparent'}
+                    />
                     <line
                       x1={xM(0)}
                       y1={yFromGroundM(floorStartM)}
@@ -492,7 +1010,7 @@ export function FacadeSvg({
                           ? STATUS_STROKE[beltStatus]
                           : '#A8A29E'
                       }
-                      strokeWidth={1}
+                      strokeWidth={beltStatus === 'violation' ? 1.5 : 1}
                       strokeDasharray="5 4"
                     />
                     {upperFloorNum === 2 && (
@@ -545,14 +1063,20 @@ export function FacadeSvg({
                     key={`gurt-rust-${upperFloorNum}`}
                     className="cursor-pointer"
                     onClick={() => onSelectElement?.('belt')}
+                    {...violationHoverProps('belt')}
                   >
                     <rect
                       x={xM(0)}
                       y={yBelt - 10}
                       width={facadePxW}
                       height={14}
-                      fill={isHi('belt') ? STATUS_FILL[beltStatus] : 'rgba(214, 206, 190, 0.35)'}
-                      stroke="none"
+                      fill={
+                        isHi('belt') || beltStatus === 'violation'
+                          ? STATUS_FILL[beltStatus]
+                          : 'rgba(214, 206, 190, 0.35)'
+                      }
+                      stroke={beltStatus === 'violation' ? STATUS_STROKE.violation : 'none'}
+                      strokeWidth={beltStatus === 'violation' ? 1.2 : 0}
                     />
                     <line
                       x1={xM(0)}
@@ -604,6 +1128,7 @@ export function FacadeSvg({
                   key={`gurt-${upperFloorNum}`}
                   className="cursor-pointer"
                   onClick={() => onSelectElement?.('belt')}
+                  {...violationHoverProps('belt')}
                 >
                   <rect
                     x={xM(0) - (params.beltMode === 'crowning' ? 7 : 5)}
@@ -659,15 +1184,20 @@ export function FacadeSvg({
                 key={idx}
                 className="cursor-pointer"
                 onClick={() => onSelectElement?.('pilaster')}
+                {...violationHoverProps('pilaster')}
               >
                 <rect
                   x={xLeft}
                   y={yTop + capH}
                   width={pilasterPxW}
                   height={Math.max(4, hPx - capH - baseH)}
-                  fill={isHi('pilaster') ? STATUS_FILL[pilasterStatus] : '#EAE3D3'}
+                  fill={
+                    isHi('pilaster') || pilasterStatus === 'violation'
+                      ? STATUS_FILL[pilasterStatus]
+                      : '#EAE3D3'
+                  }
                   stroke={strokeCol}
-                  strokeWidth={isHi('pilaster') ? 1.6 : 1}
+                  strokeWidth={isHi('pilaster') || pilasterStatus === 'violation' ? 1.6 : 1}
                 />
                 {!params.isMauerpfeiler && (
                   <>
@@ -676,18 +1206,18 @@ export function FacadeSvg({
                       y={yTop}
                       width={pilasterPxW + 4}
                       height={capH}
-                      fill="#DFD6C3"
+                      fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
                       stroke={strokeCol}
-                      strokeWidth={1}
+                      strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
                     />
                     <rect
                       x={xLeft - 2}
                       y={yTop + hPx - baseH}
                       width={pilasterPxW + 4}
                       height={baseH}
-                      fill="#DFD6C3"
+                      fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
                       stroke={strokeCol}
-                      strokeWidth={1}
+                      strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
                     />
                   </>
                 )}
@@ -696,32 +1226,44 @@ export function FacadeSvg({
           })}
 
           {/* Crowning Cornice (Главный карниз) */}
-          <g className="cursor-pointer" onClick={() => onSelectElement?.('cornice')}>
+          <g
+            className="cursor-pointer"
+            onClick={() => onSelectElement?.('cornice')}
+            {...violationHoverProps('cornice')}
+          >
             <rect
               x={xM(0) - corniceOverhangPx}
               y={yFromGroundM(corniceTopM)}
               width={facadePxW + corniceOverhangPx * 2}
               height={Math.max(4, huPx)}
-              fill={isHi('cornice') ? STATUS_FILL[corniceStatus] : '#DFD6C3'}
+              fill={
+                isHi('cornice') || corniceStatus === 'violation'
+                  ? STATUS_FILL[corniceStatus]
+                  : '#DFD6C3'
+              }
               stroke={
                 isHi('cornice') || corniceStatus === 'violation'
                   ? STATUS_STROKE[corniceStatus]
                   : '#292524'
               }
-              strokeWidth={1.25}
+              strokeWidth={corniceStatus === 'violation' ? 1.8 : 1.25}
             />
             <rect
               x={xM(0) - corniceOverhangPx * 0.55}
               y={yFromGroundM(corniceTopM) + Math.max(4, huPx)}
               width={facadePxW + corniceOverhangPx * 1.1}
               height={Math.max(4, hlPx)}
-              fill={isHi('cornice') ? STATUS_FILL[corniceStatus] : '#EAE3D3'}
+              fill={
+                isHi('cornice') || corniceStatus === 'violation'
+                  ? STATUS_FILL[corniceStatus]
+                  : '#EAE3D3'
+              }
               stroke={
                 isHi('cornice') || corniceStatus === 'violation'
                   ? STATUS_STROKE[corniceStatus]
                   : '#292524'
               }
-              strokeWidth={1.1}
+              strokeWidth={corniceStatus === 'violation' ? 1.6 : 1.1}
             />
           </g>
 
@@ -735,11 +1277,24 @@ export function FacadeSvg({
                   y1={padTop - 20}
                   x2={cx}
                   y2={groundY + 18}
-                  stroke="#9A3412"
-                  strokeOpacity={0.4}
-                  strokeWidth={0.85}
+                  stroke={ahStatus === 'violation' ? '#B91C1C' : '#9A3412'}
+                  strokeOpacity={ahStatus === 'violation' ? 0.72 : 0.4}
+                  strokeWidth={ahStatus === 'violation' ? 1.35 : 0.85}
                   strokeDasharray="5 3"
                 />
+                {ahStatus === 'violation' && (
+                  <line
+                    x1={cx}
+                    y1={padTop - 20}
+                    x2={cx}
+                    y2={groundY + 18}
+                    stroke="transparent"
+                    strokeWidth={14}
+                    className="cursor-pointer"
+                    onClick={() => onSelectElement?.('axenweite')}
+                    {...violationHoverProps('axenweite')}
+                  />
+                )}
                 {floorOffsetsM.map((floorStartM, flIdx) => {
                   const isEntranceDoor = flIdx === 0 && axIdx === entranceAxisIdx;
                   const flH = floorHeightsM[flIdx];
@@ -828,24 +1383,37 @@ export function FacadeSvg({
                         <g
                           className="cursor-pointer"
                           onClick={() => onSelectElement?.('entablature')}
+                          {...violationHoverProps('entablature')}
                         >
                           <rect
                             x={winX - uPx}
                             y={winY - rPx}
                             width={winWpx + 2 * uPx}
                             height={winHpx + rPx + uPx * 0.5}
-                            fill={isHi('entablature') ? STATUS_FILL[entablatureStatus] : '#E6DEC9'}
-                            stroke={isHi('entablature') ? STATUS_STROKE[entablatureStatus] : '#44403C'}
-                            strokeWidth={1.05}
+                            fill={
+                              isHi('entablature') || entablatureStatus === 'violation'
+                                ? STATUS_FILL[entablatureStatus]
+                                : '#E6DEC9'
+                            }
+                            stroke={
+                              isHi('entablature') || entablatureStatus === 'violation'
+                                ? STATUS_STROKE[entablatureStatus]
+                                : '#44403C'
+                            }
+                            strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.05}
                           />
                           <rect
                             x={winX - uPx}
                             y={winY - rPx - fPx}
                             width={winWpx + 2 * uPx}
                             height={Math.max(2, fPx)}
-                            fill="#EFE8D7"
-                            stroke={isHi('entablature') ? STATUS_STROKE[entablatureStatus] : '#44403C'}
-                            strokeWidth={0.95}
+                            fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#EFE8D7'}
+                            stroke={
+                              isHi('entablature') || entablatureStatus === 'violation'
+                                ? STATUS_STROKE[entablatureStatus]
+                                : '#44403C'
+                            }
+                            strokeWidth={entablatureStatus === 'violation' ? 1.4 : 0.95}
                           />
                           {params.withConsoles && (
                             <>
@@ -855,7 +1423,11 @@ export function FacadeSvg({
                                 width={Math.max(4, uPx * 0.7)}
                                 height={Math.max(4, fPx + rPx * 0.5)}
                                 fill="#D6CEBE"
-                                stroke="#44403C"
+                                stroke={
+                                  entablatureStatus === 'violation'
+                                    ? STATUS_STROKE.violation
+                                    : '#44403C'
+                                }
                                 strokeWidth={0.85}
                               />
                               <rect
@@ -864,7 +1436,11 @@ export function FacadeSvg({
                                 width={Math.max(4, uPx * 0.7)}
                                 height={Math.max(4, fPx + rPx * 0.5)}
                                 fill="#D6CEBE"
-                                stroke="#44403C"
+                                stroke={
+                                  entablatureStatus === 'violation'
+                                    ? STATUS_STROKE.violation
+                                    : '#44403C'
+                                }
                                 strokeWidth={0.85}
                               />
                             </>
@@ -874,9 +1450,13 @@ export function FacadeSvg({
                             y={winY - rPx - fPx - kPx}
                             width={winWpx + 2 * uPx + kOverhangPx * 2}
                             height={Math.max(3, kPx)}
-                            fill="#DDD4C0"
-                            stroke={isHi('entablature') ? STATUS_STROKE[entablatureStatus] : '#292524'}
-                            strokeWidth={1.1}
+                            fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#DDD4C0'}
+                            stroke={
+                              isHi('entablature') || entablatureStatus === 'violation'
+                                ? STATUS_STROKE[entablatureStatus]
+                                : '#292524'
+                            }
+                            strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.1}
                           />
                         </g>
                       )}
@@ -893,7 +1473,11 @@ export function FacadeSvg({
                         />
                       )}
 
-                      <g className="cursor-pointer" onClick={() => onSelectElement?.('window')}>
+                      <g
+                        className="cursor-pointer"
+                        onClick={() => onSelectElement?.('window')}
+                        {...violationHoverProps('window')}
+                      >
                         <rect
                           x={winX}
                           y={winY}
@@ -911,7 +1495,7 @@ export function FacadeSvg({
                               ? STATUS_STROKE[windowStatus]
                               : '#292524'
                           }
-                          strokeWidth={isHi('window') ? 1.8 : 1.1}
+                          strokeWidth={isHi('window') || windowStatus === 'violation' ? 1.8 : 1.1}
                         />
                         <line
                           x1={cx}
@@ -1031,7 +1615,11 @@ export function FacadeSvg({
             return (
               <g>
                 {/* Socle vertical dimension */}
-                <g className="cursor-pointer" onClick={() => onSelectElement?.('socle')}>
+                <g
+                  className="cursor-pointer"
+                  onClick={() => onSelectElement?.('socle')}
+                  {...violationHoverProps('socle')}
+                >
                   <line x1={dimX} y1={yGround} x2={dimX} y2={ySocTop} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
                   <line x1={dimX - 4} y1={yGround} x2={dimX + 4} y2={yGround} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
                   <line x1={dimX - 4} y1={ySocTop} x2={dimX + 4} y2={ySocTop} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
@@ -1086,7 +1674,116 @@ export function FacadeSvg({
             );
           })()}
         </svg>
+
+        {/* Subtle navigation hint inside drafting sheet */}
+        <div className="pointer-events-none absolute bottom-2 right-2.5 z-10 hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 border border-[#D6CEBE]/90 bg-[#FBF9F5]/90 text-[10px] font-mono text-[#78716C]">
+          <Move className="w-3 h-3" />
+          <span>
+            {isFullscreen
+              ? 'Сдвиг: перетаскивание · Масштаб: колесо / +− · Esc: выйти'
+              : isViewModified
+                ? 'Сдвиг: перетаскивание · Масштаб: колесо / +− · 100%: сброс'
+                : 'Сдвиг: перетаскивание · Масштаб: Ctrl+колесо или + / −'}
+          </span>
+        </div>
+
+        {/* Floating Explanatory Popover for Hovered Violation Element */}
+        {hoveredViolation && activeViolationItems.length > 0 && (
+          <div
+            role="dialog"
+            aria-label={`Нарушение правила: ${ELEMENT_LABELS_RU[hoveredViolation.element]}`}
+            onMouseEnter={cancelHideTimer}
+            onMouseLeave={scheduleHideViolation}
+            style={{
+              left: `${hoveredViolation.x}px`,
+              top: `${hoveredViolation.y}px`,
+            }}
+            className="absolute z-30 w-[332px] max-w-[calc(100%-24px)] border-2 border-[#B91C1C] bg-[#FBF9F5] shadow-lg p-3 space-y-2.5 text-xs cursor-default"
+          >
+            <div className="flex items-start justify-between gap-2 pb-1.5 border-b border-[#E5DFD3]">
+              <div className="flex items-center gap-1.5 text-[#B91C1C] font-semibold">
+                <XCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>Нарушение · {ELEMENT_LABELS_RU[hoveredViolation.element]}</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Закрыть подсказку"
+                onClick={() => setHoveredViolation(null)}
+                className="text-[#78716C] hover:text-[#1C1917] p-0.5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-0.5">
+              {activeViolationItems.slice(0, 3).map((item) => {
+                const excerpt = getExcerptForCheckId(item.id, item.page);
+                return (
+                  <div key={item.id} className="space-y-1.5">
+                    <div className="flex flex-wrap items-baseline justify-between gap-1">
+                      <span className="font-medium text-[#1C1917]">{item.title}</span>
+                      <span className="font-mono text-[10px] text-[#B91C1C]">
+                        {item.valueText}
+                      </span>
+                    </div>
+                    <p className="text-[11px] leading-snug text-[#57534E]">{item.explanation}</p>
+
+                    <button
+                      type="button"
+                      onClick={() => openBookFromSvg(excerpt.pageNumber, excerpt)}
+                      className="w-full text-left p-2 border border-[#B91C1C]/35 border-l-3 border-l-[#B91C1C] bg-[#FEF2F2]/85 hover:bg-[#FEE2E2]/80 transition-colors space-y-1 group cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-[#B91C1C]">
+                        <span>Нарушенное правило ({item.page})</span>
+                        <span className="inline-flex items-center gap-1 underline underline-offset-2 group-hover:text-[#7F1D1D]">
+                          <BookOpen className="w-3 h-3" />
+                          <span>В читальный зал →</span>
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-snug text-[#1C1917]">
+                        <mark className="bg-[#FDE68A]/85 text-[#1C1917] px-1 py-0.5 rounded-[2px] font-medium">
+                          {excerpt.ruleSummaryHighlight}
+                        </mark>
+                      </p>
+                      {excerpt.bookQuoteRu && (
+                        <p className="text-[10.5px] italic text-[#44403C] line-clamp-2">
+                          «{excerpt.bookQuoteRu}»
+                        </p>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Compact Interactive Violation Strip below SVG when violations exist */}
+      {allViolationElements.length > 0 && (
+        <div className="px-4 py-2.5 border-t border-[#B91C1C]/25 bg-[#FEF2F2]/65 flex flex-wrap items-center gap-2 text-[11px] shrink-0">
+          <span className="font-mono uppercase tracking-wider text-[#B91C1C] font-semibold">
+            Нарушения на схеме (наведите на элемент):
+          </span>
+          {allViolationElements.map(({ element, label, violations }) => {
+            const first = violations[0];
+            const excerpt = getExcerptForCheckId(first.id, first.page);
+            return (
+              <button
+                key={element}
+                type="button"
+                onMouseEnter={() => onSelectElement?.(element)}
+                onClick={() => openBookFromSvg(excerpt.pageNumber, excerpt)}
+                title={`${first.title} — открыть в «Читальном зале» (${first.page})`}
+                className="inline-flex items-center gap-1 px-2 py-0.5 border border-[#B91C1C]/45 bg-[#FBF9F5] text-[#B91C1C] hover:bg-[#B91C1C] hover:text-[#FBF9F5] transition-colors font-mono text-[10.5px]"
+              >
+                <span>✕ {label.split(' (')[0]}</span>
+                <span className="opacity-75">({first.page})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,8 @@ import {
 import { FacsimileViewer } from './components/FacsimileViewer';
 import { CorpusJsonPanel } from './components/CorpusJsonPanel';
 import { FacadeCalculatorPage } from './components/FacadeCalculatorPage';
-import { highlightTermsInText } from './utils/termHighlight';
+import { highlightRuleAndTermsInText, highlightTermsInText } from './utils/termHighlight';
+import type { RuleBookExcerpt } from './calc/ruleBookRefs';
 
 type ActiveSection = 'reader' | 'calculator' | 'glossary' | 'corpus' | 'provenance';
 type TextMode = 'parallel' | 'de' | 'ru';
@@ -28,10 +29,15 @@ export default function App() {
     pageNumber: string;
     term: ArchitecturalTerm;
   } | null>(null);
+  const [selectedRuleExcerpt, setSelectedRuleExcerpt] = useState<RuleBookExcerpt | null>(null);
 
   const pages = BRAUSEWETTER_PAGES;
   const page: BookPage = pages[currentPageIndex] ?? pages[0];
   const activeTerm = selectedTerm?.pageId === page.id ? selectedTerm.term : null;
+  const activeRuleExcerpt =
+    selectedRuleExcerpt && Number(page.pageNumber) === selectedRuleExcerpt.pageNumber
+      ? selectedRuleExcerpt
+      : null;
 
   useEffect(() => {
     if (activeSection !== 'reader' || !activeTerm) return;
@@ -43,6 +49,17 @@ export default function App() {
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [activeSection, currentPageIndex, activeTerm]);
+
+  useEffect(() => {
+    if (activeSection !== 'reader' || !activeRuleExcerpt) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-rule-highlight="true"]');
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSection, currentPageIndex, activeRuleExcerpt]);
 
   useEffect(() => {
     if (activeSection !== 'glossary' || !focusedGlossaryTerm) return;
@@ -60,6 +77,7 @@ export default function App() {
     setTextMode('parallel');
     setActiveSection('reader');
     setFocusedGlossaryTerm(null);
+    setSelectedRuleExcerpt(null);
     setSelectedTerm({ pageId, term });
   };
 
@@ -92,12 +110,16 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleOpenBookPageFromCalc = (pageNum: number) => {
-    const idx = pages.findIndex((p) => Number(p.pageNumber) === pageNum);
+  const handleOpenBookPageFromCalc = (pageNum: number, excerpt?: RuleBookExcerpt) => {
+    const targetPageNum = excerpt?.pageNumber ?? pageNum;
+    const idx = pages.findIndex((p) => Number(p.pageNumber) === targetPageNum);
     setSelectedTerm(null);
+    setSelectedRuleExcerpt(excerpt ?? null);
     setCurrentPageIndex(idx >= 0 ? idx : 0);
     setActiveSection('reader');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!excerpt) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const navItems: { id: ActiveSection; label: string }[] = [
@@ -217,6 +239,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setSelectedTerm(null);
+                    setSelectedRuleExcerpt(null);
                     setCurrentPageIndex((i) => Math.max(0, i - 1));
                   }}
                   disabled={currentPageIndex === 0}
@@ -235,6 +258,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setSelectedTerm(null);
+                    setSelectedRuleExcerpt(null);
                     setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
                   }}
                   disabled={currentPageIndex >= pages.length - 1}
@@ -334,6 +358,41 @@ export default function App() {
                     </span>
                   </div>
                 </header>
+
+                {activeRuleExcerpt && (
+                  <div className="mt-4 py-3 px-4 border border-[#B91C1C]/45 bg-[#FEF3C7]/45 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="space-y-0.5 text-[#1C1917]">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono uppercase tracking-wider text-[10px] px-1.5 py-0.5 bg-[#B91C1C] text-[#FBF9F5]">
+                          Правило из калькулятора · Стр. {activeRuleExcerpt.pageNumber}
+                        </span>
+                        <strong className="font-medium text-[#1C1917]">
+                          {activeRuleExcerpt.ruleTitle}
+                        </strong>
+                      </div>
+                      <p className="text-[11px] text-[#57534E]">
+                        {activeRuleExcerpt.ruleSummaryHighlight}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveSection('calculator')}
+                        className="text-[#9A3412] hover:text-[#7C2D12] underline underline-offset-4 transition-colors"
+                      >
+                        Вернуться в калькулятор
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRuleExcerpt(null)}
+                        className="inline-flex items-center gap-1 text-[#57534E] hover:text-[#1C1917] transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Сбросить</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {activeTerm && (
                   <div className="mt-4 py-2.5 px-4 border border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -451,16 +510,26 @@ export default function App() {
                               lang="de"
                               className={`whitespace-pre-line text-[15.5px] leading-[1.75] text-[#1C1917] ${dropCapClasses}`}
                             >
-                              {highlightTermsInText(para.de, page.terms, activeTerm, 'de', (t) =>
-                                handleJumpToGlossary(page.id, page.pageNumber, t)
+                              {highlightRuleAndTermsInText(
+                                para.de,
+                                page.terms,
+                                activeTerm,
+                                'de',
+                                (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                activeRuleExcerpt?.bookQuoteDe
                               )}
                             </p>
                             <p
                               lang="ru"
                               className={`whitespace-pre-line text-[15.5px] leading-[1.75] text-[#292524] ${dropCapClasses}`}
                             >
-                              {highlightTermsInText(para.ru, page.terms, activeTerm, 'ru', (t) =>
-                                handleJumpToGlossary(page.id, page.pageNumber, t)
+                              {highlightRuleAndTermsInText(
+                                para.ru,
+                                page.terms,
+                                activeTerm,
+                                'ru',
+                                (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                activeRuleExcerpt?.bookQuoteRu
                               )}
                             </p>
                           </div>
@@ -469,8 +538,13 @@ export default function App() {
                             lang="de"
                             className={`whitespace-pre-line max-w-prose text-[16.5px] leading-[1.8] text-[#1C1917] ${dropCapClasses}`}
                           >
-                            {highlightTermsInText(para.de, page.terms, activeTerm, 'de', (t) =>
-                              handleJumpToGlossary(page.id, page.pageNumber, t)
+                            {highlightRuleAndTermsInText(
+                              para.de,
+                              page.terms,
+                              activeTerm,
+                              'de',
+                              (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                              activeRuleExcerpt?.bookQuoteDe
                             )}
                           </p>
                         ) : (
@@ -478,8 +552,13 @@ export default function App() {
                             lang="ru"
                             className={`whitespace-pre-line max-w-prose text-[16.5px] leading-[1.8] text-[#1C1917] ${dropCapClasses}`}
                           >
-                            {highlightTermsInText(para.ru, page.terms, activeTerm, 'ru', (t) =>
-                              handleJumpToGlossary(page.id, page.pageNumber, t)
+                            {highlightRuleAndTermsInText(
+                              para.ru,
+                              page.terms,
+                              activeTerm,
+                              'ru',
+                              (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                              activeRuleExcerpt?.bookQuoteRu
                             )}
                           </p>
                         )}
@@ -546,6 +625,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setSelectedTerm(null);
+                      setSelectedRuleExcerpt(null);
                       setCurrentPageIndex((i) => Math.max(0, i - 1));
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
@@ -565,6 +645,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setSelectedTerm(null);
+                      setSelectedRuleExcerpt(null);
                       setCurrentPageIndex((i) => Math.min(pages.length - 1, i + 1));
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}

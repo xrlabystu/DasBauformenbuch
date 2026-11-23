@@ -10,6 +10,7 @@ import {
   type FacadeParameters,
   type FacadeSummary,
 } from '../../calc/rules';
+import { isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
 
 export type AnalyticalPlateId = 'fan' | 'golden' | 'diagonal' | 'cornice' | 'socle' | 'belt';
 
@@ -19,6 +20,7 @@ interface AnalyticalPlatesProps {
   params: FacadeParameters;
   summary: FacadeSummary;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
+  lockedParams?: LockedParamsMap;
 }
 
 export function AnalyticalPlates({
@@ -27,6 +29,7 @@ export function AnalyticalPlates({
   params,
   summary,
   onUpdateParams,
+  lockedParams = {},
 }: AnalyticalPlatesProps) {
   const plateTabs: { id: AnalyticalPlateId; label: string; ref: string }[] = [
     { id: 'fan', label: 'Веер A : H', ref: 'S. 5–6' },
@@ -73,7 +76,12 @@ export function AnalyticalPlates({
       <div className="p-4">
         {activePlate === 'fan' && <RatioFanPlate params={params} summary={summary} />}
         {activePlate === 'golden' && (
-          <GoldenCompassPlate params={params} summary={summary} onUpdateParams={onUpdateParams} />
+          <GoldenCompassPlate
+            params={params}
+            summary={summary}
+            onUpdateParams={onUpdateParams}
+            lockedParams={lockedParams}
+          />
         )}
         {activePlate === 'diagonal' && <DiagonalTestPlate params={params} summary={summary} />}
         {activePlate === 'cornice' && <CorniceProfilePlate params={params} summary={summary} />}
@@ -278,11 +286,15 @@ function GoldenCompassPlate({
   params,
   summary,
   onUpdateParams,
+  lockedParams = {},
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
+  lockedParams?: LockedParamsMap;
 }) {
+  const hLocked = isParamLocked(lockedParams, 'h');
+  const wLocked = isParamLocked(lockedParams, 'w');
   const w = Math.max(0.4, params.w);
   const h = Math.max(0.5, params.h);
   const a = w; // меньший отрезок w
@@ -441,33 +453,42 @@ function GoldenCompassPlate({
         <div className="grid grid-cols-2 gap-2 pt-1">
           <button
             type="button"
+            disabled={hLocked}
             onClick={() => onUpdateParams({ h: w * PHI })}
-            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors text-left"
+            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            По ширине → высоту (φ)
+            По ширине → высоту (φ){hLocked ? ' · замок' : ''}
           </button>
           <button
             type="button"
+            disabled={wLocked}
             onClick={() => onUpdateParams({ w: h / PHI })}
-            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors text-left"
+            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            По высоте → ширину (φ)
+            По высоте → ширину (φ){wLocked ? ' · замок' : ''}
           </button>
           <button
             type="button"
+            disabled={hLocked}
             onClick={() => onUpdateParams({ h: h_from_w_ratio(w, 3, 5) })}
-            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors text-left"
+            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Проверить 3:5 (h={formatMeters(h_from_w_ratio(w, 3, 5))})
+            Проверить 3:5 (h={formatMeters(h_from_w_ratio(w, 3, 5))}){hLocked ? ' · замок' : ''}
           </button>
           <button
             type="button"
+            disabled={hLocked}
             onClick={() => onUpdateParams({ h: h_from_w_ratio(w, 5, 8) })}
-            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors text-left"
+            className="px-2.5 py-2 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Проверить 5:8 (h={formatMeters(h_from_w_ratio(w, 5, 8))})
+            Проверить 5:8 (h={formatMeters(h_from_w_ratio(w, 5, 8))}){hLocked ? ' · замок' : ''}
           </button>
         </div>
+        {(wLocked || hLocked) && (
+          <div className="text-[11px] text-[#9A3412] bg-[#9A3412]/10 border border-[#9A3412]/25 px-2.5 py-1.5">
+            Заблокировано замочком: {wLocked && hLocked ? 'w и h' : wLocked ? 'w' : 'h'}. Кнопки изменения заблокированного параметра отключены.
+          </div>
+        )}
         <div className="text-[11px] text-[#78716C] font-mono">
           Для w={formatMeters(w_from_h_ratio(h, 3, 5))} м при h={formatMeters(h)} м (3:5)
         </div>

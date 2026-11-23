@@ -290,3 +290,46 @@ export function highlightTermsInText(
 
   return nodes;
 }
+
+export function highlightRuleAndTermsInText(
+  text: string,
+  terms: ArchitecturalTerm[],
+  activeTerm: ArchitecturalTerm | null | undefined,
+  lang: 'de' | 'ru',
+  onTermClick?: (term: ArchitecturalTerm) => void,
+  activeRuleQuote?: string | null
+): ReactNode {
+  const quote = activeRuleQuote?.trim();
+  if (!text || !quote) {
+    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick);
+  }
+
+  const normalizedQuote = quote.replace(/\s+/g, ' ');
+  const pattern = escapeRegExp(normalizedQuote).replace(/\\ /g, '\\s+');
+  const regex = new RegExp(pattern, 'iu');
+  const match = regex.exec(text);
+
+  if (!match || match.index === undefined || match[0].length === 0) {
+    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick);
+  }
+
+  const start = match.index;
+  const end = start + match[0].length;
+  const before = text.slice(0, start);
+  const matched = text.slice(start, end);
+  const after = text.slice(end);
+
+  return (
+    <>
+      {before ? highlightTermsInText(before, terms, activeTerm, lang, onTermClick) : null}
+      <mark
+        data-rule-highlight="true"
+        className="bg-[#FDE68A]/85 text-[#1C1917] border-b-2 border-[#B91C1C] px-1 py-0.5 rounded-[2px] font-medium"
+      >
+        {matched}
+      </mark>
+      {after ? highlightTermsInText(after, terms, activeTerm, lang, onTermClick) : null}
+    </>
+  );
+}
+

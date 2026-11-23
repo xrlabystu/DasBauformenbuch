@@ -92,6 +92,9 @@ import {
   w_from_h_ratio,
   w_max_from_A,
 } from './rules.ts';
+import { countLockedParams, filterUnlockedPatch, isParamLocked } from './paramLocks.ts';
+import { RULE_BOOK_EXCERPTS, getExcerptForCheckId } from './ruleBookRefs.ts';
+import { BRAUSEWETTER_PAGES } from '../data/brausewetter_1895.ts';
 
 const TOL = 1e-3;
 
@@ -799,5 +802,100 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     const expSummary = evaluateFacadeSummary(base, { expertMode: true });
     assert.equal(stdSummary.checks.some((c) => c.isExpertOnly), false);
     assert.equal(expSummary.checks.some((c) => c.isExpertOnly), true);
+  });
+
+  it('22. Замочки параметров: filterUnlockedPatch сохраняет заблокированные поля (скаляры, socleParts, levels)', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const locks = {
+      w: true,
+      hMain: true,
+      'socleParts.rumpf': true,
+      'levels.groundToFloor1': true,
+      'levels.floor.0.floorToFloor': true,
+    };
+
+    assert.equal(isParamLocked(locks, 'w'), true);
+    assert.equal(isParamLocked(locks, 'h'), false);
+    assert.equal(countLockedParams(locks), 5);
+
+    const presetPatch = applyBuildingVariantPreset(base, 'two-story', 'general');
+    const filtered = filterUnlockedPatch(base, presetPatch, locks);
+    const next = { ...base, ...filtered };
+
+    assert.equal(next.w, base.w);
+    assert.equal(next.hMain, base.hMain);
+    assert.equal(next.socleParts.rumpf, base.socleParts.rumpf);
+    assert.equal(next.levels.groundToFloor1, base.levels.groundToFloor1);
+    assert.equal(next.levels.floors[0].floorToFloor, base.levels.floors[0].floorToFloor);
+    // Незаблокированный параметр меняется свободно
+    assert.equal(next.floors, 2);
+
+    // Блокировка H защищает также levels.floors[*].floorToFloor от синхронизации, если меняется H
+    const hLocked = filterUnlockedPatch(base, { H: 5.5, w: 2.0 }, { H: true });
+    assert.equal(hLocked.H, undefined);
+    assert.equal(hLocked.w, 2.0);
+  });
+
+  it('23. Нарушения и читальный зал: все ID проверок покрыты RULE_BOOK_EXCERPTS и цитаты дословно совпадают со страницами', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const variants: typeof base[] = [
+      base,
+      {
+        ...base,
+        compKind: 'five_part',
+        beltIsSillCornice: true,
+        hasWallRustication: true,
+        withConsoles: true,
+        hasPairedPilasters: true,
+        columnProfileType: 'half',
+      },
+      {
+        ...base,
+        compKind: 'seven_part',
+      },
+      {
+        ...base,
+        compKind: 'two_side_risalits',
+      },
+    ];
+
+    for (const v of variants) {
+      const summary = evaluateFacadeSummary(v, { expertMode: true });
+      for (const check of summary.checks) {
+        const direct = RULE_BOOK_EXCERPTS[check.id];
+        assert.ok(direct, `Missing RULE_BOOK_EXCERPTS entry for check.id=${check.id}`);
+        const excerpt = getExcerptForCheckId(check.id, check.page);
+        assert.equal(excerpt.id, check.id);
+        assert.ok(excerpt.bookQuoteRu.length > 0 && excerpt.bookQuoteDe.length > 0);
+      }
+    }
+
+    const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+    for (const [key, excerpt] of Object.entries(RULE_BOOK_EXCERPTS)) {
+      const page = BRAUSEWETTER_PAGES.find((p) => p.pageNumber === String(excerpt.pageNumber));
+      assert.ok(page, `Missing BRAUSEWETTER_PAGES entry for ${key} (page ${excerpt.pageNumber})`);
+      const ruFull = normalize(
+        [
+          page.sectionTitleRu,
+          ...page.paragraphs.flatMap((p) => [p.subheadingRu ?? '', p.subsubheadingRu ?? '', p.ru]),
+          ...(page.figures?.map((f) => f.captionRu) ?? []),
+        ].join(' ')
+      );
+      const deFull = normalize(
+        [
+          page.sectionTitleDe,
+          ...page.paragraphs.flatMap((p) => [p.subheadingDe ?? '', p.subsubheadingDe ?? '', p.de]),
+          ...(page.figures?.map((f) => f.captionDe) ?? []),
+        ].join(' ')
+      );
+      assert.ok(
+        ruFull.includes(normalize(excerpt.bookQuoteRu)),
+        `RU quote mismatch for ${key} on page ${excerpt.pageNumber}: "${excerpt.bookQuoteRu}"`
+      );
+      assert.ok(
+        deFull.includes(normalize(excerpt.bookQuoteDe)),
+        `DE quote mismatch for ${key} on page ${excerpt.pageNumber}: "${excerpt.bookQuoteDe}"`
+      );
+    }
   });
 });

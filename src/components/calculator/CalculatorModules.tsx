@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Lock, Unlock, XCircle } from 'lucide-react';
+import { isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
+import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
 import {
   A_from_H,
   A_from_pw,
@@ -66,9 +68,11 @@ interface CalculatorModulesProps {
   params: FacadeParameters;
   summary: FacadeSummary;
   expertMode?: boolean;
+  lockedParams?: LockedParamsMap;
+  onToggleLock?: (key: string) => void;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
   onHighlightElement: (el: FacadeTargetElement | null) => void;
-  onOpenBookPage?: (pageNum: number) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }
 
 export function StatusBadge({ status, text }: { status: ValidationStatus; text?: string }) {
@@ -96,6 +100,40 @@ export function StatusBadge({ status, text }: { status: ValidationStatus; text?:
   );
 }
 
+function LockToggleButton({
+  lockKey,
+  locked,
+  onToggleLock,
+  label,
+}: {
+  lockKey: string;
+  locked: boolean;
+  onToggleLock?: (key: string) => void;
+  label?: string;
+}) {
+  if (!onToggleLock) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onToggleLock(lockKey)}
+      aria-pressed={locked}
+      title={
+        locked
+          ? `Параметр «${label ?? lockKey}» закреплён замочком — нажмите, чтобы разрешить изменение`
+          : `Закрепить «${label ?? lockKey}» замочком (не будет меняться при пересчётах и пресетах)`
+      }
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 border text-[10px] font-mono transition-colors shrink-0 ${
+        locked
+          ? 'border-[#9A3412]/60 bg-[#9A3412]/12 text-[#9A3412] hover:bg-[#9A3412]/20'
+          : 'border-[#D6CEBE] bg-[#FBF9F5] text-[#78716C] hover:text-[#1C1917] hover:bg-[#EAE3D5]'
+      }`}
+    >
+      {locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+      {locked && <span>замок</span>}
+    </button>
+  );
+}
+
 function MeterControl({
   id,
   label,
@@ -106,6 +144,9 @@ function MeterControl({
   unit = 'м',
   disabled = false,
   note,
+  lockKey,
+  locked = false,
+  onToggleLock,
   onChange,
 }: {
   id: string;
@@ -117,14 +158,34 @@ function MeterControl({
   unit?: string;
   disabled?: boolean;
   note?: string;
+  lockKey?: string;
+  locked?: boolean;
+  onToggleLock?: (key: string) => void;
   onChange: (val: number) => void;
 }) {
+  const isLocked = Boolean(lockKey && locked);
+  const inputDisabled = disabled || isLocked;
+
   return (
-    <div className="space-y-1.5">
+    <div
+      className={`space-y-1.5 ${
+        isLocked ? 'p-2 -mx-2 border border-[#9A3412]/35 bg-[#9A3412]/[0.04]' : ''
+      }`}
+    >
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor={id} className="text-xs font-medium text-[#1C1917]">
-          {label}
-        </label>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <label htmlFor={id} className="text-xs font-medium text-[#1C1917]">
+            {label}
+          </label>
+          {lockKey && (
+            <LockToggleButton
+              lockKey={lockKey}
+              locked={isLocked}
+              onToggleLock={onToggleLock}
+              label={label}
+            />
+          )}
+        </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <input
             id={`${id}-num`}
@@ -133,7 +194,7 @@ function MeterControl({
             min={min}
             max={max * 2}
             step={step}
-            disabled={disabled}
+            disabled={inputDisabled}
             aria-label={`${label} (${unit})`}
             onChange={(e) => {
               const parsed = parseFloat(e.target.value);
@@ -150,11 +211,11 @@ function MeterControl({
         min={min}
         max={max}
         step={step}
-        disabled={disabled}
+        disabled={inputDisabled}
         value={Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))}
         aria-label={label}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-45"
+        className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       />
       {note && <p className="text-[11px] text-[#78716C]">{note}</p>}
     </div>
@@ -162,6 +223,7 @@ function MeterControl({
 }
 
 function WhyBlock({
+  ruleId,
   status,
   formula,
   page,
@@ -170,16 +232,18 @@ function WhyBlock({
   sourceStatus,
   onOpenBookPage,
 }: {
+  ruleId?: string;
   status: ValidationStatus;
   formula: string;
   page: string;
   explanation: string;
   isHeuristic?: boolean;
   sourceStatus?: SourceStatus;
-  onOpenBookPage?: (pageNum: number) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }) {
   const firstPageMatch = page.match(/\d+/);
   const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
+  const excerpt = ruleId ? getExcerptForCheckId(ruleId, page) : undefined;
   const provenanceText = sourceStatus
     ? SOURCE_STATUS_LABELS[sourceStatus]
     : isHeuristic
@@ -189,7 +253,13 @@ function WhyBlock({
     isHeuristic || sourceStatus === 'heuristic' || sourceStatus === 'gap';
 
   return (
-    <div className="mt-4 p-3.5 border border-[#D6CEBE] bg-[#F3EFE6]/60 space-y-2 text-xs">
+    <div
+      className={`mt-4 p-3.5 border space-y-2 text-xs ${
+        status === 'violation'
+          ? 'border-[#B91C1C]/60 bg-[#B91C1C]/[0.05]'
+          : 'border-[#D6CEBE] bg-[#F3EFE6]/60'
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="font-mono text-[11px] uppercase tracking-wider text-[#57534E]">
@@ -208,7 +278,8 @@ function WhyBlock({
           {onOpenBookPage ? (
             <button
               type="button"
-              onClick={() => onOpenBookPage(pageNum)}
+              onClick={() => onOpenBookPage(excerpt?.pageNumber ?? pageNum, excerpt)}
+              title="Открыть правило в читальном зале с подсветкой текста"
               className="font-mono text-[11px] text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
             >
               {page}
@@ -232,6 +303,8 @@ export function CalculatorModules({
   params,
   summary,
   expertMode = false,
+  lockedParams = {},
+  onToggleLock,
   onUpdateParams,
   onHighlightElement,
   onOpenBookPage,
@@ -369,9 +442,17 @@ export function CalculatorModules({
                       onClick={() => {
                         setAxesRatioChoice(r.label);
                         if (axesSolveMode === 'find_A') {
-                          onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
+                          if (isParamLocked(lockedParams, 'A') && !isParamLocked(lockedParams, 'H')) {
+                            onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
+                          } else {
+                            onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
+                          }
                         } else {
-                          onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
+                          if (isParamLocked(lockedParams, 'H') && !isParamLocked(lockedParams, 'A')) {
+                            onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
+                          } else {
+                            onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
+                          }
                         }
                       }}
                       className={`px-2 py-1 text-[11px] font-mono border transition-colors ${
@@ -447,9 +528,12 @@ export function CalculatorModules({
                 min={2.2}
                 max={6.5}
                 disabled={axesSolveMode === 'find_H'}
+                lockKey="H"
+                locked={isParamLocked(lockedParams, 'H')}
+                onToggleLock={onToggleLock}
                 note="Для многоэтажного здания расчёт ведётся от наибольшей высоты комнаты (S. 5)."
                 onChange={(H) => {
-                  if (axesSolveMode === 'find_A') {
+                  if (axesSolveMode === 'find_A' && !isParamLocked(lockedParams, 'A')) {
                     const [n, m] = getActiveAxRatio();
                     onUpdateParams({ H, A: A_from_H(H, n, m) });
                   } else {
@@ -465,11 +549,14 @@ export function CalculatorModules({
                 min={1.4}
                 max={6.0}
                 disabled={axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A'}
+                lockKey="A"
+                locked={isParamLocked(lockedParams, 'A')}
+                onToggleLock={onToggleLock}
                 onChange={(A) => {
-                  if (axesSolveMode === 'find_H') {
+                  if (axesSolveMode === 'find_H' && !isParamLocked(lockedParams, 'H')) {
                     const [n, m] = getActiveAxRatio();
                     onUpdateParams({ A, H: H_from_A(A, n, m) });
-                  } else if (axesSolveMode === 'find_w') {
+                  } else if (axesSolveMode === 'find_w' && !isParamLocked(lockedParams, 'w')) {
                     const wMax = params.withFraming ? Math.max(0.4, A / 2 - 2 * params.u) : w_max_from_A(A);
                     onUpdateParams({ A, w: wMax });
                   } else {
@@ -485,6 +572,7 @@ export function CalculatorModules({
                   value={targetPierInput}
                   min={0.6}
                   max={3.5}
+                  disabled={isParamLocked(lockedParams, 'A')}
                   onChange={(pVal) => {
                     setTargetPierInput(pVal);
                     onUpdateParams({ A: A_from_pw(pVal, params.w) });
@@ -499,8 +587,11 @@ export function CalculatorModules({
                 min={0.6}
                 max={2.4}
                 disabled={axesSolveMode === 'find_w'}
+                lockKey="w"
+                locked={isParamLocked(lockedParams, 'w')}
+                onToggleLock={onToggleLock}
                 onChange={(w) => {
-                  if (axesSolveMode === 'find_p_A') {
+                  if (axesSolveMode === 'find_p_A' && !isParamLocked(lockedParams, 'A')) {
                     onUpdateParams({ w, A: A_from_pw(targetPierInput, w) });
                   } else {
                     onUpdateParams({ w });
@@ -515,6 +606,9 @@ export function CalculatorModules({
                   value={params.u}
                   min={0.05}
                   max={0.45}
+                  lockKey="u"
+                  locked={isParamLocked(lockedParams, 'u')}
+                  onToggleLock={onToggleLock}
                   onChange={(u) => onUpdateParams({ u })}
                 />
               )}
@@ -551,6 +645,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="axen_ratio"
               status={summary.ahCheck.status}
               sourceStatus={summary.ahCheck.sourceStatus}
               formula="A = H × (n/m)"
@@ -559,6 +654,7 @@ export function CalculatorModules({
               onOpenBookPage={onOpenBookPage}
             />
             <WhyBlock
+              ruleId="pier_width"
               status={summary.pierResult.status}
               sourceStatus={summary.pierResult.sourceStatus}
               formula={summary.pierResult.formula}
@@ -568,6 +664,7 @@ export function CalculatorModules({
             />
             {params.withFraming && (
               <WhyBlock
+                ruleId="n1_framing_width"
                 status={summary.framingWidthCheck.status}
                 sourceStatus={summary.framingWidthCheck.sourceStatus}
                 formula={summary.framingWidthCheck.formula}
@@ -723,6 +820,9 @@ export function CalculatorModules({
                       max={1.5}
                       step={0.05}
                       unit="×"
+                      lockKey="mainCorniceProjectionBoost"
+                      locked={isParamLocked(lockedParams, 'mainCorniceProjectionBoost')}
+                      onToggleLock={onToggleLock}
                       note="N27: при невысоком карнизе богатого 5-эт. особняка вынос усиливается (≥1.2× — UX-эвристика)."
                       onChange={(mainCorniceProjectionBoost) =>
                         onUpdateParams({ mainCorniceProjectionBoost })
@@ -751,6 +851,9 @@ export function CalculatorModules({
                 min={0.2}
                 max={2.6}
                 step={0.05}
+                lockKey="levels.groundToFloor1"
+                locked={isParamLocked(lockedParams, 'levels.groundToFloor1')}
+                onToggleLock={onToggleLock}
                 onChange={(val) =>
                   onUpdateParams({
                     levels: { ...params.levels, groundToFloor1: val },
@@ -761,6 +864,10 @@ export function CalculatorModules({
               <div className="space-y-2 pt-1 border-t border-[#E5DFD3]">
                 {params.levels.floors.map((fl, idx) => {
                   const derivedClear = fl.floorToFloor - fl.slabThickness;
+                  const f2fKey = `levels.floor.${idx}.floorToFloor`;
+                  const slabKey = `levels.floor.${idx}.slabThickness`;
+                  const f2fLocked = isParamLocked(lockedParams, f2fKey) || isParamLocked(lockedParams, 'H');
+                  const slabLocked = isParamLocked(lockedParams, slabKey);
                   return (
                     <div
                       key={idx}
@@ -769,13 +876,22 @@ export function CalculatorModules({
                       <span className="font-medium text-[#1C1917]">
                         Этаж {idx + 1} (в свету {formatMeters(derivedClear, 2)} м)
                       </span>
-                      <label className="flex items-center justify-between gap-1 text-[#57534E]">
-                        <span>пол–пол:</span>
+                      <div className="flex items-center justify-between gap-1 text-[#57534E]">
+                        <span className="inline-flex items-center gap-1">
+                          <span>пол–пол:</span>
+                          <LockToggleButton
+                            lockKey={f2fKey}
+                            locked={f2fLocked}
+                            onToggleLock={onToggleLock}
+                            label={`Этаж ${idx + 1} пол–пол`}
+                          />
+                        </span>
                         <input
                           type="number"
                           min={2.2}
                           max={7.5}
                           step={0.05}
+                          disabled={f2fLocked}
                           value={Number(fl.floorToFloor.toFixed(2))}
                           onChange={(e) => {
                             const nextF2F = Math.max(2.0, parseFloat(e.target.value) || fl.floorToFloor);
@@ -792,16 +908,25 @@ export function CalculatorModules({
                               levels: { ...params.levels, floors: nextFloors },
                             });
                           }}
-                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917]"
+                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917] disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
                         />
-                      </label>
-                      <label className="flex items-center justify-between gap-1 text-[#57534E]">
-                        <span>перекр.:</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-1 text-[#57534E]">
+                        <span className="inline-flex items-center gap-1">
+                          <span>перекр.:</span>
+                          <LockToggleButton
+                            lockKey={slabKey}
+                            locked={slabLocked}
+                            onToggleLock={onToggleLock}
+                            label={`Этаж ${idx + 1} перекр.`}
+                          />
+                        </span>
                         <input
                           type="number"
                           min={0.15}
                           max={0.8}
                           step={0.05}
+                          disabled={slabLocked}
                           value={Number(fl.slabThickness.toFixed(2))}
                           onChange={(e) => {
                             const nextSlab = Math.max(0.1, parseFloat(e.target.value) || fl.slabThickness);
@@ -818,39 +943,49 @@ export function CalculatorModules({
                               levels: { ...params.levels, floors: nextFloors },
                             });
                           }}
-                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917]"
+                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917] disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
                         />
-                      </label>
+                      </div>
                     </div>
                   );
                 })}
               </div>
 
               <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <label className="flex items-center gap-2 cursor-pointer text-[#1C1917]">
-                  <input
-                    type="checkbox"
-                    checked={params.levels.manualTotalHeight !== undefined}
-                    onChange={(e) =>
-                      onUpdateParams({
-                        levels: {
-                          ...params.levels,
-                          manualTotalHeight: e.target.checked
-                            ? summary.derivedGeometry.totalHeight
-                            : undefined,
-                        },
-                      })
-                    }
-                    className="accent-[#9A3412]"
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-[#1C1917]">
+                    <input
+                      type="checkbox"
+                      disabled={isParamLocked(lockedParams, 'levels.manualTotalHeight')}
+                      checked={params.levels.manualTotalHeight !== undefined}
+                      onChange={(e) =>
+                        onUpdateParams({
+                          levels: {
+                            ...params.levels,
+                            manualTotalHeight: e.target.checked
+                              ? summary.derivedGeometry.totalHeight
+                              : undefined,
+                          },
+                        })
+                      }
+                      className="accent-[#9A3412]"
+                    />
+                    <span>Задать H_зд вручную</span>
+                  </label>
+                  <LockToggleButton
+                    lockKey="levels.manualTotalHeight"
+                    locked={isParamLocked(lockedParams, 'levels.manualTotalHeight')}
+                    onToggleLock={onToggleLock}
+                    label="H_зд"
                   />
-                  <span>Задать H_зд вручную</span>
-                </label>
+                </div>
                 {params.levels.manualTotalHeight !== undefined && (
                   <input
                     type="number"
                     min={4.0}
                     max={30.0}
                     step={0.1}
+                    disabled={isParamLocked(lockedParams, 'levels.manualTotalHeight')}
                     value={Number(params.levels.manualTotalHeight.toFixed(2))}
                     onChange={(e) => {
                       const val = Math.max(3.0, parseFloat(e.target.value) || 8.0);
@@ -858,7 +993,7 @@ export function CalculatorModules({
                         levels: { ...params.levels, manualTotalHeight: val },
                       });
                     }}
-                    className="w-24 px-2 py-1 text-xs font-mono border border-[#D6CEBE] bg-[#FBF9F5] text-right"
+                    className="w-24 px-2 py-1 text-xs font-mono border border-[#D6CEBE] bg-[#FBF9F5] text-right disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
                   />
                 )}
               </div>
@@ -867,16 +1002,23 @@ export function CalculatorModules({
             {/* Параметры осей, положения входа (N7) и режима карниза */}
             <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#1C1917]">
-                  Число оконных осей фасада (S. 14–16)
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1C1917]">
+                  <span>Число оконных осей фасада (S. 14–16)</span>
+                  <LockToggleButton
+                    lockKey="axesCount"
+                    locked={isParamLocked(lockedParams, 'axesCount')}
+                    onToggleLock={onToggleLock}
+                    label="Число осей"
+                  />
                 </span>
                 <div className="flex flex-wrap gap-1">
                   {[3, 4, 5, 6, 7, 8].map((ax) => (
                     <button
                       key={ax}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'axesCount')}
                       onClick={() => onUpdateParams({ axesCount: ax })}
-                      className={`px-2 py-1 text-[11px] font-mono border ${
+                      className={`px-2 py-1 text-[11px] font-mono border disabled:opacity-45 ${
                         params.axesCount === ax
                           ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                           : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
@@ -896,13 +1038,24 @@ export function CalculatorModules({
                 max={10}
                 step={1}
                 unit="ос."
+                lockKey="axesCount"
+                locked={isParamLocked(lockedParams, 'axesCount')}
+                onToggleLock={onToggleLock}
                 onChange={(val) => onUpdateParams({ axesCount: Math.max(2, Math.round(val)) })}
               />
 
               <div className="space-y-1.5">
-                <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                  Положение главного входа (S. 14–16)
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    Положение главного входа (S. 14–16)
+                  </span>
+                  <LockToggleButton
+                    lockKey="entrancePosition"
+                    locked={isParamLocked(lockedParams, 'entrancePosition')}
+                    onToggleLock={onToggleLock}
+                    label="Положение входа"
+                  />
+                </div>
                 <div className="flex flex-wrap gap-1.5">
                   {(
                     [
@@ -915,8 +1068,9 @@ export function CalculatorModules({
                     <button
                       key={ep.id}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'entrancePosition')}
                       onClick={() => onUpdateParams({ entrancePosition: ep.id })}
-                      className={`px-2.5 py-1 text-[11px] border ${
+                      className={`px-2.5 py-1 text-[11px] border disabled:opacity-50 ${
                         params.entrancePosition === ep.id
                           ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                           : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
@@ -1021,6 +1175,9 @@ export function CalculatorModules({
                       min={2.5}
                       max={18.0}
                       step={0.1}
+                      lockKey="wCentralRisalit"
+                      locked={isParamLocked(lockedParams, 'wCentralRisalit')}
+                      onToggleLock={onToggleLock}
                       onChange={(wCentralRisalit) => onUpdateParams({ wCentralRisalit })}
                     />
                     <MeterControl
@@ -1030,6 +1187,9 @@ export function CalculatorModules({
                       min={1.5}
                       max={12.0}
                       step={0.1}
+                      lockKey="wSideRisalit"
+                      locked={isParamLocked(lockedParams, 'wSideRisalit')}
+                      onToggleLock={onToggleLock}
                       onChange={(wSideRisalit) => onUpdateParams({ wSideRisalit })}
                     />
                     <MeterControl
@@ -1039,6 +1199,9 @@ export function CalculatorModules({
                       min={1.5}
                       max={14.0}
                       step={0.1}
+                      lockKey="wWing"
+                      locked={isParamLocked(lockedParams, 'wWing')}
+                      onToggleLock={onToggleLock}
                       onChange={(wWing) => onUpdateParams({ wWing })}
                     />
                     <MeterControl
@@ -1048,81 +1211,129 @@ export function CalculatorModules({
                       min={0.4}
                       max={4.0}
                       step={0.05}
+                      lockKey="pWing"
+                      locked={isParamLocked(lockedParams, 'pWing')}
+                      onToggleLock={onToggleLock}
                       onChange={(pWing) => onUpdateParams({ pWing })}
                     />
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                      <span>Оси центр. риз.:</span>
+                    <div className="flex items-center justify-between gap-1.5 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span className="inline-flex items-center gap-1 min-w-0">
+                        <span className="truncate">Оси центр. риз.:</span>
+                        <LockToggleButton
+                          lockKey="centralRisalitAxes"
+                          locked={isParamLocked(lockedParams, 'centralRisalitAxes')}
+                          onToggleLock={onToggleLock}
+                          label="Оси центр. ризалита"
+                        />
+                      </span>
                       <input
                         type="number"
                         min={1}
                         max={7}
+                        disabled={isParamLocked(lockedParams, 'centralRisalitAxes')}
                         value={params.centralRisalitAxes}
                         onChange={(e) =>
                           onUpdateParams({ centralRisalitAxes: Math.max(1, parseInt(e.target.value, 10) || 1) })
                         }
-                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right disabled:bg-[#F3EFE6]"
                       />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                      <span>Оси крыла:</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1.5 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span className="inline-flex items-center gap-1 min-w-0">
+                        <span className="truncate">Оси крыла:</span>
+                        <LockToggleButton
+                          lockKey="wingAxes"
+                          locked={isParamLocked(lockedParams, 'wingAxes')}
+                          onToggleLock={onToggleLock}
+                          label="Оси крыла"
+                        />
+                      </span>
                       <input
                         type="number"
                         min={1}
                         max={7}
+                        disabled={isParamLocked(lockedParams, 'wingAxes')}
                         value={params.wingAxes}
                         onChange={(e) =>
                           onUpdateParams({ wingAxes: Math.max(1, parseInt(e.target.value, 10) || 1) })
                         }
-                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right disabled:bg-[#F3EFE6]"
                       />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                      <span>Оси середины:</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1.5 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span className="inline-flex items-center gap-1 min-w-0">
+                        <span className="truncate">Оси середины:</span>
+                        <LockToggleButton
+                          lockKey="middleAxesBetweenRisalits"
+                          locked={isParamLocked(lockedParams, 'middleAxesBetweenRisalits')}
+                          onToggleLock={onToggleLock}
+                          label="Оси середины"
+                        />
+                      </span>
                       <input
                         type="number"
                         min={1}
                         max={9}
+                        disabled={isParamLocked(lockedParams, 'middleAxesBetweenRisalits')}
                         value={params.middleAxesBetweenRisalits}
                         onChange={(e) =>
                           onUpdateParams({
                             middleAxesBetweenRisalits: Math.max(1, parseInt(e.target.value, 10) || 1),
                           })
                         }
-                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right disabled:bg-[#F3EFE6]"
                       />
-                    </label>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                      <span>Богатство ризалита (1–5):</span>
+                    <div className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span className="inline-flex items-center gap-1">
+                        <span>Богатство ризалита (1–5):</span>
+                        <LockToggleButton
+                          lockKey="risalitRichness"
+                          locked={isParamLocked(lockedParams, 'risalitRichness')}
+                          onToggleLock={onToggleLock}
+                          label="Богатство ризалита"
+                        />
+                      </span>
                       <input
                         type="number"
                         min={1}
                         max={5}
+                        disabled={isParamLocked(lockedParams, 'risalitRichness')}
                         value={params.risalitRichness}
                         onChange={(e) =>
                           onUpdateParams({ risalitRichness: Math.max(1, Math.min(5, parseInt(e.target.value, 10) || 1)) })
                         }
-                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right disabled:bg-[#F3EFE6]"
                       />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                      <span>Богатство крыла (1–5):</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span className="inline-flex items-center gap-1">
+                        <span>Богатство крыла (1–5):</span>
+                        <LockToggleButton
+                          lockKey="wingRichness"
+                          locked={isParamLocked(lockedParams, 'wingRichness')}
+                          onToggleLock={onToggleLock}
+                          label="Богатство крыла"
+                        />
+                      </span>
                       <input
                         type="number"
                         min={1}
                         max={5}
+                        disabled={isParamLocked(lockedParams, 'wingRichness')}
                         value={params.wingRichness}
                         onChange={(e) =>
                           onUpdateParams({ wingRichness: Math.max(1, Math.min(5, parseInt(e.target.value, 10) || 1)) })
                         }
-                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right disabled:bg-[#F3EFE6]"
                       />
-                    </label>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5 text-xs text-[#1C1917]">
@@ -1280,6 +1491,7 @@ export function CalculatorModules({
 
             {/* Автоматические проверки варианта */}
             <WhyBlock
+              ruleId="variant_axis_ratio"
               status={summary.variantAxisCheck.status}
               sourceStatus={summary.variantAxisCheck.sourceStatus}
               formula={summary.variantAxisCheck.formula}
@@ -1290,6 +1502,7 @@ export function CalculatorModules({
             />
 
             <WhyBlock
+              ruleId="facade_rectangle"
               status={summary.facadeRectCheck.status}
               sourceStatus={summary.facadeRectCheck.sourceStatus}
               formula={summary.facadeRectCheck.formula}
@@ -1299,6 +1512,7 @@ export function CalculatorModules({
             />
 
             <WhyBlock
+              ruleId="axes_count"
               status={summary.axesCountCheck.status}
               sourceStatus="explicit-verified"
               formula={summary.axesCountCheck.formula}
@@ -1309,6 +1523,7 @@ export function CalculatorModules({
 
             {params.levels.floors.length === 5 && (
               <WhyBlock
+                ruleId="n27_five_story_scheme"
                 status={summary.fiveStorySchemeCheck.status}
                 sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
                 formula={summary.fiveStorySchemeCheck.formula}
@@ -1319,6 +1534,7 @@ export function CalculatorModules({
             )}
 
             <WhyBlock
+              ruleId="main_cornice_subordination"
               status={summary.mainCorniceCheck.status}
               sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
               formula={summary.mainCorniceCheck.formula}
@@ -1329,6 +1545,7 @@ export function CalculatorModules({
             />
 
             <WhyBlock
+              ruleId="gurt_cornice"
               status={summary.gurtCheck.status}
               sourceStatus="explicit-verified"
               formula={summary.gurtCheck.formula}
@@ -1428,18 +1645,26 @@ export function CalculatorModules({
                       type="button"
                       onClick={() => {
                         setWinRatioChoice(opt);
+                        const wLocked = isParamLocked(lockedParams, 'w');
+                        const hLocked = isParamLocked(lockedParams, 'h');
+                        const effectiveMode =
+                          winSolveMode === 'find_h' && hLocked && !wLocked
+                            ? 'find_w'
+                            : winSolveMode === 'find_w' && wLocked && !hLocked
+                              ? 'find_h'
+                              : winSolveMode;
                         let nextH = params.h;
                         let nextW = params.w;
                         if (opt === 'phi') {
-                          if (winSolveMode === 'find_h') nextH = params.w * PHI;
+                          if (effectiveMode === 'find_h') nextH = params.w * PHI;
                           else nextW = params.h / PHI;
                         } else if (opt === 'custom') {
-                          if (winSolveMode === 'find_h') nextH = h_from_w_ratio(params.w, customWinN, customWinM);
+                          if (effectiveMode === 'find_h') nextH = h_from_w_ratio(params.w, customWinN, customWinM);
                           else nextW = w_from_h_ratio(params.h, customWinN, customWinM);
                         } else {
                           const found = RULES_DATA.goldenApproximations.find((g) => g.label === opt);
                           if (found) {
-                            if (winSolveMode === 'find_h') nextH = h_from_w_ratio(params.w, found.n, found.m);
+                            if (effectiveMode === 'find_h') nextH = h_from_w_ratio(params.w, found.n, found.m);
                             else nextW = w_from_h_ratio(params.h, found.n, found.m);
                           }
                         }
@@ -1507,8 +1732,11 @@ export function CalculatorModules({
                 min={0.5}
                 max={2.4}
                 disabled={winSolveMode === 'find_w'}
+                lockKey="w"
+                locked={isParamLocked(lockedParams, 'w')}
+                onToggleLock={onToggleLock}
                 onChange={(w) => {
-                  if (winSolveMode === 'find_h') {
+                  if (winSolveMode === 'find_h' && !isParamLocked(lockedParams, 'h')) {
                     const r = getActiveWinRatio();
                     const h = r.type === 'phi' ? w * PHI : h_from_w_ratio(w, r.n, r.m);
                     onUpdateParams({ w, h });
@@ -1525,8 +1753,11 @@ export function CalculatorModules({
                 min={0.8}
                 max={4.0}
                 disabled={winSolveMode === 'find_h'}
+                lockKey="h"
+                locked={isParamLocked(lockedParams, 'h')}
+                onToggleLock={onToggleLock}
                 onChange={(h) => {
-                  if (winSolveMode === 'find_w') {
+                  if (winSolveMode === 'find_w' && !isParamLocked(lockedParams, 'w')) {
                     const r = getActiveWinRatio();
                     const w = r.type === 'phi' ? h / PHI : w_from_h_ratio(h, r.n, r.m);
                     onUpdateParams({ w, h });
@@ -1544,6 +1775,9 @@ export function CalculatorModules({
                 max={12}
                 step={0.5}
                 unit="%"
+                lockKey="diagTolerance"
+                locked={isParamLocked(lockedParams, 'diagTolerance')}
+                onToggleLock={onToggleLock}
                 onChange={(pct) => onUpdateParams({ diagTolerance: pct / 100 })}
               />
 
@@ -1554,6 +1788,9 @@ export function CalculatorModules({
                   value={params.hSill}
                   min={0.08}
                   max={0.35}
+                  lockKey="hSill"
+                  locked={isParamLocked(lockedParams, 'hSill')}
+                  onToggleLock={onToggleLock}
                   onChange={(hSill) => onUpdateParams({ hSill })}
                 />
               )}
@@ -1570,6 +1807,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="window_range"
               status={summary.windowCheck.rangeCheck.status}
               sourceStatus="explicit-verified"
               formula="1.5w ≤ h ≤ 2w"
@@ -1578,6 +1816,7 @@ export function CalculatorModules({
               onOpenBookPage={onOpenBookPage}
             />
             <WhyBlock
+              ruleId="window_diag"
               status={summary.windowCheck.diagCheck.status}
               sourceStatus={summary.windowCheck.diagCheck.sourceStatus}
               formula="d = √(w² + h²); проверка w ≤ d/2"
@@ -1588,6 +1827,7 @@ export function CalculatorModules({
             />
             {params.withFraming && (
               <WhyBlock
+                ruleId="n2_sill_plate"
                 status={summary.sillPlateCheck.status}
                 sourceStatus={summary.sillPlateCheck.sourceStatus}
                 formula={summary.sillPlateCheck.formula}
@@ -1598,6 +1838,7 @@ export function CalculatorModules({
             )}
             {params.hasWallRustication && (
               <WhyBlock
+                ruleId="n4_window_rust_rows"
                 status={summary.windowRowsCheck.status}
                 sourceStatus={summary.windowRowsCheck.sourceStatus}
                 formula={summary.windowRowsCheck.formula}
@@ -1638,6 +1879,9 @@ export function CalculatorModules({
                 value={params.risalitWidth}
                 min={2.2}
                 max={8.0}
+                lockKey="risalitWidth"
+                locked={isParamLocked(lockedParams, 'risalitWidth')}
+                onToggleLock={onToggleLock}
                 onChange={(risalitWidth) => onUpdateParams({ risalitWidth })}
               />
             ) : (
@@ -1650,6 +1894,9 @@ export function CalculatorModules({
                   max={1.1}
                   step={0.01}
                   unit="×A"
+                  lockKey="k_D"
+                  locked={isParamLocked(lockedParams, 'k_D')}
+                  onToggleLock={onToggleLock}
                   onChange={(k_D) => onUpdateParams({ k_D })}
                 />
                 <div className="flex flex-wrap gap-1.5">
@@ -1662,8 +1909,9 @@ export function CalculatorModules({
                     <button
                       key={preset.label}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'k_D')}
                       onClick={() => onUpdateParams({ k_D: preset.val })}
-                      className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] hover:bg-[#EAE3D5]"
+                      className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] hover:bg-[#EAE3D5] disabled:opacity-45"
                     >
                       {preset.label}
                     </button>
@@ -1684,6 +1932,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="corner_pier"
               status={summary.cornerCheck.status}
               sourceStatus={summary.cornerCheck.sourceStatus}
               formula={summary.cornerCheck.formula}
@@ -1704,6 +1953,9 @@ export function CalculatorModules({
                 max={15}
                 step={1}
                 unit="ряд."
+                lockKey="cornerRustRows"
+                locked={isParamLocked(lockedParams, 'cornerRustRows')}
+                onToggleLock={onToggleLock}
                 onChange={(val) => onUpdateParams({ cornerRustRows: Math.max(1, Math.round(val)) })}
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1714,6 +1966,9 @@ export function CalculatorModules({
                   min={0.5}
                   max={5.0}
                   step={0.05}
+                  lockKey="cornerOffsetM"
+                  locked={isParamLocked(lockedParams, 'cornerOffsetM')}
+                  onToggleLock={onToggleLock}
                   onChange={(cornerOffsetM) => onUpdateParams({ cornerOffsetM })}
                 />
                 <MeterControl
@@ -1723,10 +1978,14 @@ export function CalculatorModules({
                   min={2.2}
                   max={5.5}
                   step={0.05}
+                  lockKey="upperStoryHeightN"
+                  locked={isParamLocked(lockedParams, 'upperStoryHeightN')}
+                  onToggleLock={onToggleLock}
                   onChange={(upperStoryHeightN) => onUpdateParams({ upperStoryHeightN })}
                 />
               </div>
               <WhyBlock
+                ruleId="n5_corner_rust_rows"
                 status={summary.cornerRustRowsCheck.status}
                 sourceStatus={summary.cornerRustRowsCheck.sourceStatus}
                 formula={summary.cornerRustRowsCheck.formula}
@@ -1735,6 +1994,7 @@ export function CalculatorModules({
                 onOpenBookPage={onOpenBookPage}
               />
               <WhyBlock
+                ruleId="n6_corner_offset_m_n"
                 status={summary.cornerOffsetCheck.status}
                 sourceStatus={summary.cornerOffsetCheck.sourceStatus}
                 formula={summary.cornerOffsetCheck.formula}
@@ -1788,9 +2048,17 @@ export function CalculatorModules({
             </div>
 
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2">
-              <label className="block text-xs font-medium text-[#1C1917]">
-                Отношение R : F : K (из текста S. 8)
-              </label>
+              <div className="flex items-center gap-2">
+                <label className="block text-xs font-medium text-[#1C1917]">
+                  Отношение R : F : K (из текста S. 8)
+                </label>
+                <LockToggleButton
+                  lockKey="framingRatio"
+                  locked={isParamLocked(lockedParams, 'framingRatio')}
+                  onToggleLock={onToggleLock}
+                  label="Отношение R:F:K"
+                />
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {RULES_DATA.framingRatios.map((fr) => {
                   const isCurrent =
@@ -1801,9 +2069,10 @@ export function CalculatorModules({
                     <button
                       key={fr.label}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'framingRatio')}
                       onClick={() => {
                         const nextRatio: [number, number, number] = [fr.r, fr.f, fr.k];
-                        if (framingInputMode !== 'by_T') {
+                        if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
                           const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
                           const res = framing_from_module(moduleValue, part, fr.r, fr.f, fr.k);
                           onUpdateParams({ framingRatio: nextRatio, T: res.T });
@@ -1811,7 +2080,7 @@ export function CalculatorModules({
                           onUpdateParams({ framingRatio: nextRatio });
                         }
                       }}
-                      className={`px-2 py-1 text-[11px] font-mono border ${
+                      className={`px-2 py-1 text-[11px] font-mono border disabled:opacity-45 ${
                         isCurrent
                           ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                           : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
@@ -1831,6 +2100,9 @@ export function CalculatorModules({
                 value={params.T}
                 min={0.3}
                 max={2.0}
+                lockKey="T"
+                locked={isParamLocked(lockedParams, 'T')}
+                onToggleLock={onToggleLock}
                 onChange={(T) => onUpdateParams({ T, withFraming: true })}
               />
             ) : (
@@ -1840,6 +2112,7 @@ export function CalculatorModules({
                 value={moduleValue}
                 min={0.1}
                 max={1.0}
+                disabled={isParamLocked(lockedParams, 'T')}
                 onChange={(val) => {
                   setModuleValue(val);
                   const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
@@ -1868,6 +2141,9 @@ export function CalculatorModules({
                   value={params.a_front}
                   min={0.01}
                   max={0.25}
+                  lockKey="a_front"
+                  locked={isParamLocked(lockedParams, 'a_front')}
+                  onToggleLock={onToggleLock}
                   onChange={(a_front) => onUpdateParams({ a_front })}
                 />
                 <MeterControl
@@ -1876,6 +2152,9 @@ export function CalculatorModules({
                   value={params.a_side}
                   min={0.01}
                   max={0.25}
+                  lockKey="a_side"
+                  locked={isParamLocked(lockedParams, 'a_side')}
+                  onToggleLock={onToggleLock}
                   onChange={(a_side) => onUpdateParams({ a_side })}
                 />
               </div>
@@ -1902,6 +2181,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="framing_rfk"
               status={summary.framingResult.status}
               formula={summary.framingResult.formula}
               page={summary.framingResult.page}
@@ -1910,6 +2190,7 @@ export function CalculatorModules({
             />
             {params.withConsoles && (
               <WhyBlock
+                ruleId="console_offset"
                 status={summary.offsetCheck.status}
                 formula={summary.offsetCheck.formula}
                 page={summary.offsetCheck.page}
@@ -1970,6 +2251,9 @@ export function CalculatorModules({
               value={params.Wp}
               min={0.25}
               max={1.4}
+              lockKey="Wp"
+              locked={isParamLocked(lockedParams, 'Wp')}
+              onToggleLock={onToggleLock}
               onChange={(Wp) => onUpdateParams({ Wp })}
             />
             <MeterControl
@@ -1978,6 +2262,9 @@ export function CalculatorModules({
               value={params.v}
               min={0.02}
               max={0.45}
+              lockKey="v"
+              locked={isParamLocked(lockedParams, 'v')}
+              onToggleLock={onToggleLock}
               onChange={(v) => onUpdateParams({ v })}
             />
 
@@ -1995,6 +2282,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="pilaster_check"
               status={summary.pilasterCheck.status}
               sourceStatus="explicit-verified"
               formula={summary.pilasterCheck.formula}
@@ -2028,6 +2316,9 @@ export function CalculatorModules({
                   max={35}
                   step={1}
                   unit="%"
+                  lockKey="pilasterHeightDiffPct"
+                  locked={isParamLocked(lockedParams, 'pilasterHeightDiffPct')}
+                  onToggleLock={onToggleLock}
                   onChange={(pct) => onUpdateParams({ pilasterHeightDiffPct: pct / 100 })}
                 />
               )}
@@ -2055,6 +2346,9 @@ export function CalculatorModules({
                   value={params.wpWallPier}
                   min={0.3}
                   max={2.4}
+                  lockKey="wpWallPier"
+                  locked={isParamLocked(lockedParams, 'wpWallPier')}
+                  onToggleLock={onToggleLock}
                   onChange={(wpWallPier) => onUpdateParams({ wpWallPier })}
                 />
                 <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
@@ -2073,6 +2367,9 @@ export function CalculatorModules({
                     value={params.pairedPilastersGap}
                     min={0.05}
                     max={1.2}
+                    lockKey="pairedPilastersGap"
+                    locked={isParamLocked(lockedParams, 'pairedPilastersGap')}
+                    onToggleLock={onToggleLock}
                     onChange={(pairedPilastersGap) => onUpdateParams({ pairedPilastersGap })}
                   />
                 )}
@@ -2130,6 +2427,9 @@ export function CalculatorModules({
               value={params.Tc}
               min={0.2}
               max={1.2}
+              lockKey="Tc"
+              locked={isParamLocked(lockedParams, 'Tc')}
+              onToggleLock={onToggleLock}
               onChange={(Tc) => onUpdateParams({ Tc })}
             />
 
@@ -2141,6 +2441,9 @@ export function CalculatorModules({
               max={2.5}
               step={0.05}
               unit=":1"
+              lockKey="corniceRatio"
+              locked={isParamLocked(lockedParams, 'corniceRatio')}
+              onToggleLock={onToggleLock}
               onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
             />
 
@@ -2162,8 +2465,9 @@ export function CalculatorModules({
                   <button
                     key={pr.label}
                     type="button"
+                    disabled={isParamLocked(lockedParams, 'plateShare')}
                     onClick={() => onUpdateParams({ plateShare: pr.share })}
-                    className={`px-2.5 py-1 text-[11px] border ${
+                    className={`px-2.5 py-1 text-[11px] border disabled:opacity-45 ${
                       Math.abs(params.plateShare - pr.share) < 0.05
                         ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                         : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE]'
@@ -2181,6 +2485,9 @@ export function CalculatorModules({
                 max={95}
                 step={1}
                 unit="%"
+                lockKey="plateShare"
+                locked={isParamLocked(lockedParams, 'plateShare')}
+                onToggleLock={onToggleLock}
                 note="Процентные пороги ≥75 % и ≤50 % — интерпретационное допущение UX поверх качественного описания S. 10–11."
                 onChange={(pct) => onUpdateParams({ plateShare: pct / 100 })}
               />
@@ -2198,6 +2505,7 @@ export function CalculatorModules({
             </div>
 
             <WhyBlock
+              ruleId="cornice_split"
               status={summary.corniceCheck.status}
               formula={summary.corniceCheck.formula}
               page={summary.corniceCheck.page}
@@ -2222,14 +2530,23 @@ export function CalculatorModules({
             {/* Этажность и общая высота здания */}
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#1C1917]">Число этажей здания</span>
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1C1917]">
+                  <span>Число этажей здания</span>
+                  <LockToggleButton
+                    lockKey="floors"
+                    locked={isParamLocked(lockedParams, 'floors')}
+                    onToggleLock={onToggleLock}
+                    label="Число этажей"
+                  />
+                </span>
                 <div className="flex flex-wrap gap-1">
                   {[1, 2, 3, 4, 5].map((fl) => (
                     <button
                       key={fl}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'floors')}
                       onClick={() => onUpdateParams({ floors: fl })}
-                      className={`px-2.5 py-1 text-[11px] font-mono border ${
+                      className={`px-2.5 py-1 text-[11px] font-mono border disabled:opacity-45 ${
                         params.floors === fl
                           ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                           : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
@@ -2261,6 +2578,7 @@ export function CalculatorModules({
                     <button
                       key={mode.id}
                       type="button"
+                      disabled={isParamLocked(lockedParams, 'hSocle')}
                       onClick={() => {
                         const res = socleHeight(summary.derivedGeometry.totalHeight, mode.id as SocleMode);
                         onUpdateParams({
@@ -2269,7 +2587,7 @@ export function CalculatorModules({
                           useFullFloorAsSocle: false,
                         });
                       }}
-                      className={`px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+                      className={`px-2.5 py-1 text-[11px] font-medium border transition-colors disabled:opacity-45 ${
                         params.socleMode === mode.id && !params.useFullFloorAsSocle
                           ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
                           : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
@@ -2288,26 +2606,39 @@ export function CalculatorModules({
                 min={0.3}
                 max={6.5}
                 disabled={params.useFullFloorAsSocle}
+                lockKey="hSocle"
+                locked={isParamLocked(lockedParams, 'hSocle')}
+                onToggleLock={onToggleLock}
                 note={`Допустимый диапазон по S. 16: ${formatMeters(summary.socleHeightCheck.range[0])}–${formatMeters(summary.socleHeightCheck.range[1])} м.`}
                 onChange={(hSocle) => onUpdateParams({ hSocle })}
               />
 
-              <label className="flex items-start gap-2 text-xs text-[#1C1917] cursor-pointer pt-1">
-                <input
-                  type="checkbox"
-                  checked={params.useFullFloorAsSocle}
-                  onChange={(e) => onUpdateParams({ useFullFloorAsSocle: e.target.checked })}
-                  className="accent-[#9A3412] mt-0.5"
+              <div className="flex items-start justify-between gap-2 pt-1">
+                <label className="flex items-start gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={isParamLocked(lockedParams, 'useFullFloorAsSocle')}
+                    checked={params.useFullFloorAsSocle}
+                    onChange={(e) => onUpdateParams({ useFullFloorAsSocle: e.target.checked })}
+                    className="accent-[#9A3412] mt-0.5"
+                  />
+                  <span>
+                    Включить весь 1-й этаж в цоколь (S. 16, 22; полн. высота = {formatMeters(summary.derivedGeometry.floor1FullHeight)} м) —{' '}
+                    <strong className={summary.fullFloorSocleCheck.applicable ? 'text-[#15803D]' : 'text-[#B91C1C]'}>
+                      {summary.fullFloorSocleCheck.applicable ? 'применимо' : 'недостаточно высоты'}
+                    </strong>
+                  </span>
+                </label>
+                <LockToggleButton
+                  lockKey="useFullFloorAsSocle"
+                  locked={isParamLocked(lockedParams, 'useFullFloorAsSocle')}
+                  onToggleLock={onToggleLock}
+                  label="1-й этаж как цоколь"
                 />
-                <span>
-                  Включить весь 1-й этаж в цоколь (S. 16, 22; полн. высота = {formatMeters(summary.derivedGeometry.floor1FullHeight)} м) —{' '}
-                  <strong className={summary.fullFloorSocleCheck.applicable ? 'text-[#15803D]' : 'text-[#B91C1C]'}>
-                    {summary.fullFloorSocleCheck.applicable ? 'применимо' : 'недостаточно высоты'}
-                  </strong>
-                </span>
-              </label>
+              </div>
 
               <WhyBlock
+                ruleId="socle_height"
                 status={summary.socleHeightCheck.status}
                 sourceStatus={params.buildingVariant === 'one-story' ? 'gap' : 'explicit-verified'}
                 formula={summary.socleHeightCheck.formula}
@@ -2329,6 +2660,9 @@ export function CalculatorModules({
                 value={params.hMain}
                 min={0.15}
                 max={2.5}
+                lockKey="hMain"
+                locked={isParamLocked(lockedParams, 'hMain')}
+                onToggleLock={onToggleLock}
                 note={
                   summary.mainCorniceCheck.isExtrapolated
                     ? `1-эт. экстраполяция ≥ ${formatMeters(summary.mainCorniceCheck.range[0])} м (в тексте не задано) и строго < h_socle.`
@@ -2338,6 +2672,7 @@ export function CalculatorModules({
               />
 
               <WhyBlock
+                ruleId="main_cornice_subordination"
                 status={summary.mainCorniceCheck.status}
                 sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
                 formula={summary.mainCorniceCheck.formula}
@@ -2354,6 +2689,9 @@ export function CalculatorModules({
                 min={0.0}
                 max={1.2}
                 disabled={summary.gurtCheck.notRequired}
+                lockKey="hGurt"
+                locked={isParamLocked(lockedParams, 'hGurt')}
+                onToggleLock={onToggleLock}
                 note={
                   summary.gurtCheck.notRequired
                     ? 'Для 1-этажного дома междуэтажный поясной карниз отсутствует (gurt = null).'
@@ -2363,6 +2701,7 @@ export function CalculatorModules({
               />
 
               <WhyBlock
+                ruleId="gurt_cornice"
                 status={summary.gurtCheck.status}
                 sourceStatus="explicit-verified"
                 formula={summary.gurtCheck.formula}
@@ -2392,6 +2731,9 @@ export function CalculatorModules({
                   max={45}
                   step={1}
                   unit="%"
+                  lockKey="socleParts.fuss"
+                  locked={isParamLocked(lockedParams, 'socleParts.fuss')}
+                  onToggleLock={onToggleLock}
                   onChange={(pct) =>
                     onUpdateParams({ socleParts: { ...params.socleParts, fuss: pct / 100 } })
                   }
@@ -2404,6 +2746,9 @@ export function CalculatorModules({
                   max={75}
                   step={1}
                   unit="%"
+                  lockKey="socleParts.rumpf"
+                  locked={isParamLocked(lockedParams, 'socleParts.rumpf')}
+                  onToggleLock={onToggleLock}
                   onChange={(pct) =>
                     onUpdateParams({ socleParts: { ...params.socleParts, rumpf: pct / 100 } })
                   }
@@ -2416,6 +2761,9 @@ export function CalculatorModules({
                   max={40}
                   step={1}
                   unit="%"
+                  lockKey="socleParts.deck"
+                  locked={isParamLocked(lockedParams, 'socleParts.deck')}
+                  onToggleLock={onToggleLock}
                   onChange={(pct) =>
                     onUpdateParams({ socleParts: { ...params.socleParts, deck: pct / 100 } })
                   }
@@ -2446,6 +2794,9 @@ export function CalculatorModules({
                   value={params.hPlate}
                   min={0.04}
                   max={0.45}
+                  lockKey="hPlate"
+                  locked={isParamLocked(lockedParams, 'hPlate')}
+                  onToggleLock={onToggleLock}
                   onChange={(hPlate) => onUpdateParams({ hPlate })}
                 />
                 <MeterControl
@@ -2454,11 +2805,15 @@ export function CalculatorModules({
                   value={params.hOtherSum}
                   min={0.02}
                   max={0.4}
+                  lockKey="hOtherSum"
+                  locked={isParamLocked(lockedParams, 'hOtherSum')}
+                  onToggleLock={onToggleLock}
                   onChange={(hOtherSum) => onUpdateParams({ hOtherSum })}
                 />
               </div>
 
               <WhyBlock
+                ruleId="socle_plate_dominant"
                 status={summary.plateCheck.status}
                 formula={summary.plateCheck.formula}
                 page={summary.plateCheck.page}
@@ -2480,6 +2835,9 @@ export function CalculatorModules({
                 value={params.rustRowHeight}
                 min={0.22}
                 max={0.48}
+                lockKey="rustRowHeight"
+                locked={isParamLocked(lockedParams, 'rustRowHeight')}
+                onToggleLock={onToggleLock}
                 onChange={(rustRowHeight) => onUpdateParams({ rustRowHeight })}
               />
 
@@ -2501,6 +2859,7 @@ export function CalculatorModules({
               </div>
 
               <WhyBlock
+                ruleId="socle_rustication_rows"
                 status={summary.rusticationCheck.status}
                 formula={summary.rusticationCheck.formula}
                 page={summary.rusticationCheck.page}
@@ -2515,6 +2874,9 @@ export function CalculatorModules({
                   value={params.hSocleRust}
                   min={0.2}
                   max={0.55}
+                  lockKey="hSocleRust"
+                  locked={isParamLocked(lockedParams, 'hSocleRust')}
+                  onToggleLock={onToggleLock}
                   onChange={(hSocleRust) => onUpdateParams({ hSocleRust })}
                 />
                 <MeterControl
@@ -2523,6 +2885,9 @@ export function CalculatorModules({
                   value={params.hEgRust}
                   min={0.15}
                   max={0.5}
+                  lockKey="hEgRust"
+                  locked={isParamLocked(lockedParams, 'hEgRust')}
+                  onToggleLock={onToggleLock}
                   onChange={(hEgRust) => onUpdateParams({ hEgRust })}
                 />
                 <MeterControl
@@ -2531,6 +2896,9 @@ export function CalculatorModules({
                   value={params.vSocleProfile}
                   min={0.02}
                   max={0.15}
+                  lockKey="vSocleProfile"
+                  locked={isParamLocked(lockedParams, 'vSocleProfile')}
+                  onToggleLock={onToggleLock}
                   onChange={(vSocleProfile) => onUpdateParams({ vSocleProfile })}
                 />
                 <MeterControl
@@ -2539,11 +2907,15 @@ export function CalculatorModules({
                   value={params.vEgProfile}
                   min={0.01}
                   max={0.15}
+                  lockKey="vEgProfile"
+                  locked={isParamLocked(lockedParams, 'vEgProfile')}
+                  onToggleLock={onToggleLock}
                   onChange={(vEgProfile) => onUpdateParams({ vEgProfile })}
                 />
               </div>
 
               <WhyBlock
+                ruleId="socle_decreasing_upward"
                 status={summary.decreasingCheck.status}
                 formula={summary.decreasingCheck.formula}
                 page={summary.decreasingCheck.page}
@@ -2573,6 +2945,7 @@ export function CalculatorModules({
               </div>
 
               <WhyBlock
+                ruleId="socle_abkroepfung"
                 status={summary.abkroepfungCheck.status}
                 formula={summary.abkroepfungCheck.formula}
                 page={summary.abkroepfungCheck.page}
@@ -2640,6 +3013,9 @@ export function CalculatorModules({
                   value={params.beltUpperFloorHeight}
                   min={2.2}
                   max={6.0}
+                  lockKey="beltUpperFloorHeight"
+                  locked={isParamLocked(lockedParams, 'beltUpperFloorHeight')}
+                  onToggleLock={onToggleLock}
                   onChange={(beltUpperFloorHeight) => onUpdateParams({ beltUpperFloorHeight })}
                 />
               </div>
@@ -2668,6 +3044,7 @@ export function CalculatorModules({
                 </span>
                 <button
                   type="button"
+                  disabled={isParamLocked(lockedParams, 'hGurt')}
                   onClick={() => {
                     const effectiveSocleH = params.useFullFloorAsSocle
                       ? summary.derivedGeometry.floor1FullHeight
@@ -2688,7 +3065,7 @@ export function CalculatorModules({
                     });
                     onUpdateParams({ hGurt: mid.h, beltIsAbsent: false });
                   }}
-                  className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#9A3412] hover:bg-[#EAE3D5]"
+                  className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#9A3412] hover:bg-[#EAE3D5] disabled:opacity-45"
                 >
                   Установить середину диапазона
                 </button>
@@ -2701,10 +3078,14 @@ export function CalculatorModules({
                 min={0.12}
                 max={1.2}
                 disabled={params.beltIsAbsent || params.buildingVariant === 'one-story'}
+                lockKey="hGurt"
+                locked={isParamLocked(lockedParams, 'hGurt')}
+                onToggleLock={onToggleLock}
                 onChange={(hGurt) => onUpdateParams({ hGurt })}
               />
 
               <WhyBlock
+                ruleId="gurt_cornice"
                 status={summary.beltHeightCheck.status}
                 sourceStatus="explicit-verified"
                 formula={summary.beltHeightCheck.formula}
@@ -2783,6 +3164,9 @@ export function CalculatorModules({
                 max={2.4}
                 step={0.05}
                 unit=":1"
+                lockKey="beltCrowningRatio"
+                locked={isParamLocked(lockedParams, 'beltCrowningRatio')}
+                onToggleLock={onToggleLock}
                 onChange={(beltCrowningRatio) => onUpdateParams({ beltCrowningRatio })}
               />
 
@@ -2798,7 +3182,12 @@ export function CalculatorModules({
                     key={ef.id}
                     type="button"
                     onClick={() =>
-                      onUpdateParams({ beltEffect: ef.id, beltCrowningRatio: ef.ratio })
+                      onUpdateParams({
+                        beltEffect: ef.id,
+                        ...(isParamLocked(lockedParams, 'beltCrowningRatio')
+                          ? {}
+                          : { beltCrowningRatio: ef.ratio }),
+                      })
                     }
                     className={`px-2.5 py-1 text-[11px] border ${
                       params.beltEffect === ef.id
@@ -2941,6 +3330,9 @@ export function CalculatorModules({
                       value={params.hSillCornice}
                       min={0.1}
                       max={0.6}
+                      lockKey="hSillCornice"
+                      locked={isParamLocked(lockedParams, 'hSillCornice')}
+                      onToggleLock={onToggleLock}
                       onChange={(hSillCornice) => onUpdateParams({ hSillCornice })}
                     />
                   </div>
@@ -3005,6 +3397,7 @@ export function CalculatorModules({
 
               {params.beltHasColumnsBelow && (
                 <WhyBlock
+                  ruleId="belt_crowning_and_special"
                   status={
                     summary.beltColumnsCheck.status === 'n/a'
                       ? 'ok'
@@ -3020,6 +3413,7 @@ export function CalculatorModules({
 
               {params.beltAsRusticationMode && (
                 <WhyBlock
+                  ruleId="belt_crowning_and_special"
                   status={summary.beltRusticationCheck.status}
                   sourceStatus="explicit-verified"
                   formula={summary.beltRusticationCheck.formula}
@@ -3031,6 +3425,7 @@ export function CalculatorModules({
 
               {params.beltIsSillCornice && (
                 <WhyBlock
+                  ruleId="n3_sill_cornice_over_u"
                   status={summary.sillCorniceCheck.status}
                   sourceStatus={summary.sillCorniceCheck.sourceStatus}
                   formula={summary.sillCorniceCheck.formula}
@@ -3041,6 +3436,7 @@ export function CalculatorModules({
               )}
 
               <WhyBlock
+                ruleId="belt_crowning_and_special"
                 status={summary.beltSpecialCheck.status}
                 sourceStatus="explicit-verified"
                 formula={summary.beltSpecialCheck.formula}
@@ -3102,32 +3498,63 @@ export function CalculatorModules({
             </div>
 
             <div className="divide-y divide-[#E5DFD3] border-t border-b border-[#E5DFD3]">
-              {summary.checks.map((item) => (
-                <div key={item.id} className="py-3 space-y-1.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onHighlightElement(item.targetElement)}
-                      className="text-left text-xs font-semibold text-[#1C1917] hover:text-[#9A3412] underline decoration-transparent hover:decoration-[#9A3412]/50 underline-offset-4 transition-colors"
-                    >
-                      {item.title}
-                    </button>
-                    <div className="flex items-center gap-3">
-                      <StatusBadge status={item.status} />
-                      <span className="font-mono text-[11px] text-[#78716C]">{item.page}</span>
+              {summary.checks.map((item) => {
+                const excerpt = getExcerptForCheckId(item.id, item.page);
+                const isViolation = item.status === 'violation';
+                return (
+                  <div
+                    key={item.id}
+                    className={`py-3 space-y-1.5 ${
+                      isViolation
+                        ? 'pl-3 -ml-1 border-l-4 border-l-[#B91C1C] bg-[#B91C1C]/[0.05] pr-2'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onHighlightElement(item.targetElement)}
+                        className="text-left text-xs font-semibold text-[#1C1917] hover:text-[#9A3412] underline decoration-transparent hover:decoration-[#9A3412]/50 underline-offset-4 transition-colors"
+                      >
+                        {item.title}
+                      </button>
+                      <div className="flex items-center gap-3">
+                        <StatusBadge status={item.status} />
+                        {onOpenBookPage ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenBookPage(excerpt.pageNumber, excerpt)}
+                            title="Открыть правило в читальном зале с подсветкой текста"
+                            className="font-mono text-[11px] text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                          >
+                            {item.page}
+                          </button>
+                        ) : (
+                          <span className="font-mono text-[11px] text-[#78716C]">{item.page}</span>
+                        )}
+                      </div>
                     </div>
+                    <p className="font-mono text-[11px] text-[#44403C] tabular-nums">
+                      {item.valueText} · <span className="text-[#78716C]">{item.formula}</span>
+                    </p>
+                    <p className="font-mono text-[10px] text-[#78716C]">
+                      {SOURCE_STATUS_LABELS[item.sourceStatus]}
+                      {item.priority ? ` · ${item.priority}` : ''}
+                      {item.isExpertOnly ? ' (Экспертный режим)' : ''}
+                    </p>
+                    <p className="text-xs text-[#57534E] leading-relaxed">{item.explanation}</p>
+                    {isViolation && onOpenBookPage && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenBookPage(excerpt.pageNumber, excerpt)}
+                        className="mt-1 inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium border border-[#B91C1C]/40 bg-[#FEF2F2] text-[#991B1B] hover:bg-[#FEE2E2] transition-colors"
+                      >
+                        <span>Открыть нарушенное правило в читальном зале (Стр. {excerpt.pageNumber}) →</span>
+                      </button>
+                    )}
                   </div>
-                  <p className="font-mono text-[11px] text-[#44403C] tabular-nums">
-                    {item.valueText} · <span className="text-[#78716C]">{item.formula}</span>
-                  </p>
-                  <p className="font-mono text-[10px] text-[#78716C]">
-                    {SOURCE_STATUS_LABELS[item.sourceStatus]}
-                    {item.priority ? ` · ${item.priority}` : ''}
-                    {item.isExpertOnly ? ' (Экспертный режим)' : ''}
-                  </p>
-                  <p className="text-xs text-[#57534E] leading-relaxed">{item.explanation}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
