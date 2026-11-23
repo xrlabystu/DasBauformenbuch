@@ -37,7 +37,7 @@ export function FacadeSvg({
   highlightedElement,
   onSelectElement,
 }: FacadeSvgProps) {
-  const safeH = Math.max(1.8, params.H);
+  const safeH = Math.max(1.8, summary.derivedGeometry.H_max);
   const safeA = Math.max(1.0, params.A);
   const safeW = Math.max(0.4, params.w);
   const safeWinH = Math.max(0.6, params.h);
@@ -47,40 +47,38 @@ export function FacadeSvg({
     : Math.max(0.5, safeA * params.k_D);
 
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
-  const safeFloors = Math.min(5, Math.max(1, Math.round(params.floors)));
+  const levelFloors = params.levels.floors;
+  const safeFloors = Math.min(6, Math.max(1, levelFloors.length));
   const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
 
-  // Общая ширина фасада с заданным числом осей
-  const totalWidthM = 2 * D + Math.max(0, safeAxesCount - 1) * safeA;
+  // Общая ширина фасада из DerivedGeometry
+  const totalWidthM = summary.derivedGeometry.facadeWidth;
 
-  // Высота цоколя и этажей
-  const effectiveSocleH = params.useFullFloorAsSocle ? safeH : Math.max(0.25, params.hSocle);
-  const plinthM = params.useFullFloorAsSocle ? 0.35 : Math.min(effectiveSocleH, safeH * 0.72);
-  const corniceM = Math.max(0.25, params.Tc);
-  const framingTotalM = params.withFraming ? summary.framingResult.T : 0;
-  const baseFloorM = Math.max(safeH, safeWinH + framingTotalM + 0.52);
+  // Поэтажные отметки из params.levels
+  const groundToFloor1 = Math.max(0.25, params.levels.groundToFloor1);
+  const effectiveSocleH = params.useFullFloorAsSocle
+    ? summary.derivedGeometry.floor1FullHeight
+    : Math.max(0.25, params.hSocle);
+  const corniceM = Math.max(0.2, params.hMain);
 
-  // Высоты каждого этажа снизу вверх (floorIdx 0 = 1-й этаж EG)
-  const floorHeightsM = Array.from({ length: safeFloors }, (_, flIdx) => {
-    if (safeFloors >= 3 && flIdx === safeFloors - 1 && summary.variantInfo.rules.upperFloorSmallest) {
-      return Math.max(2.3, baseFloorM * 0.84);
-    }
-    if (safeFloors >= 3 && flIdx === 1 && summary.variantInfo.rules.mainTierFloor === 2) {
-      return baseFloorM * 1.04;
-    }
-    return baseFloorM;
-  });
+  // Высоты каждого этажа снизу вверх (floorIdx 0 = 1-й этаж EG) строго из levels
+  const floorHeightsM = levelFloors
+    .slice(0, safeFloors)
+    .map((fl) => Math.max(1.8, fl.floorToFloor));
 
   const floorOffsetsM: number[] = [];
-  let cursorM = plinthM;
+  let cursorM = groundToFloor1;
   for (let i = 0; i < safeFloors; i++) {
     floorOffsetsM.push(cursorM);
     cursorM += floorHeightsM[i];
   }
-  const wallHeightM = cursorM - plinthM;
   const wallTopM = cursorM;
+  const wallHeightM = wallTopM - groundToFloor1;
   const corniceTopM = wallTopM + corniceM;
-  const totalHeightM = corniceTopM;
+  const totalHeightM = summary.derivedGeometry.totalHeight;
+  const plinthM = params.useFullFloorAsSocle
+    ? summary.derivedGeometry.floor1FullHeight
+    : Math.min(effectiveSocleH, wallTopM * 0.48);
 
   const svgW = 860;
   const svgH = safeFloors >= 4 ? 540 : 470;
@@ -91,7 +89,10 @@ export function FacadeSvg({
   const drawW = svgW - padLeft - padRight;
   const drawH = svgH - padTop - padBottom;
 
-  const scale = Math.min(drawW / Math.max(totalWidthM, 4), drawH / Math.max(totalHeightM, 3.5));
+  const scale = Math.min(
+    drawW / Math.max(totalWidthM, 4),
+    drawH / Math.max(corniceTopM, totalHeightM, 3.5)
+  );
   const facadePxW = totalWidthM * scale;
   const originX = padLeft + (drawW - facadePxW) / 2;
   const groundY = svgH - padBottom;
@@ -135,9 +136,24 @@ export function FacadeSvg({
 
   const isHi = (el: FacadeTargetElement) => highlightedElement === el;
 
-  const corniceOverhangPx = Math.min(26, Math.max(8, corniceM * scale * 0.55));
+  const boostMult =
+    safeFloors === 5 && params.fiveStoryScheme === 'rich_1_2_unified'
+      ? Math.max(1, params.mainCorniceProjectionBoost)
+      : 1;
+  const corniceOverhangPx =
+    Math.min(26, Math.max(8, corniceM * scale * 0.55)) * boostMult;
   const huPx = summary.corniceCheck.h_u * scale;
   const hlPx = summary.corniceCheck.h_l * scale;
+
+  // Позиция входа (N7)
+  const entranceAxisIdx =
+    params.entrancePosition === 'none'
+      ? -1
+      : params.entrancePosition === 'left'
+        ? 0
+        : params.entrancePosition === 'right'
+          ? safeAxesCount - 1
+          : Math.floor(safeAxesCount / 2);
 
   // Позиции пилястров по краям
   const pilasterW = Math.min(params.Wp, Math.max(0.2, p_corner * 0.72));
@@ -226,7 +242,7 @@ export function FacadeSvg({
           </span>
           <span aria-hidden="true">·</span>
           <span className="font-mono text-[11px] text-[#78716C] tabular-nums">
-            W={formatMeters(totalWidthM, 2)} м × H_зд={formatMeters(params.totalHeight, 2)} м ({rectOriRu})
+            W={formatMeters(totalWidthM, 2)} м × H_зд={formatMeters(totalHeightM, 2)} м ({rectOriRu})
           </span>
         </div>
 
@@ -261,7 +277,7 @@ export function FacadeSvg({
             x={xM(0)}
             y={yFromGroundM(wallTopM)}
             width={facadePxW}
-            height={(wallHeightM + plinthM) * scale}
+            height={wallTopM * scale}
             fill="#F4EFE4"
             stroke="#292524"
             strokeWidth={1.4}
@@ -383,7 +399,7 @@ export function FacadeSvg({
             />
           )}
 
-          {/* Lower-floor colonnade / pilasters hint when beltHasColumnsBelow is enabled (B-24…B-26) */}
+          {/* Lower-floor colonnade / pilasters hint when beltHasColumnsBelow is enabled (S. 17) */}
           {params.beltHasColumnsBelow && safeFloors >= 2 && (
             <g opacity={0.75}>
               {axesM.slice(0, -1).map((axX, idx) => {
@@ -425,11 +441,11 @@ export function FacadeSvg({
             </g>
           )}
 
-          {/* Belt Cornices / Gurtgesimse (B-1…B-37) */}
+          {/* Belt Cornices / Gurtgesimse (S. 16, 22) */}
           {safeFloors >= 2 &&
             floorOffsetsM.slice(1).map((floorStartM, idx) => {
               const upperFloorNum = idx + 2; // 2nd, 3rd...
-              const upperFloorH = floorHeightsM[idx + 1] ?? baseFloorM;
+              const upperFloorH = floorHeightsM[idx + 1] ?? floorHeightsM[0] ?? safeH;
               const isUpperBelt = upperFloorNum === 3;
 
               // При 3-этажном режиме вариант 'unified_upper' не прерывает 2 и 3 этажи карнизом
@@ -486,10 +502,10 @@ export function FacadeSvg({
                         textAnchor="middle"
                         fontSize="8.5"
                         fontFamily="IBM Plex Mono, monospace"
-                        fill={beltStatus === 'violation' ? '#B91C1C' : '#57534E'}
+                        fill={beltStatus === 'violation' ? '#B91C1C' : beltStatus === 'approx' ? '#B45309' : '#57534E'}
                       >
                         {params.beltOnlySillUnderSecond
-                          ? '✕ только подоконник под 2 эт. (нарушение S. 22)'
+                          ? '▲ только подоконник под 2 эт. (редко, S. 22)'
                           : 'Без ленты — этажи единым целым'}
                       </text>
                     )}
@@ -725,21 +741,76 @@ export function FacadeSvg({
                   strokeDasharray="5 3"
                 />
                 {floorOffsetsM.map((floorStartM, flIdx) => {
+                  const isEntranceDoor = flIdx === 0 && axIdx === entranceAxisIdx;
                   const flH = floorHeightsM[flIdx];
+                  const clearH = levelFloors[flIdx]?.clearHeight ?? Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
                   const isTopSmallest =
                     safeFloors >= 3 &&
                     flIdx === safeFloors - 1 &&
                     summary.variantInfo.rules.upperFloorSmallest;
                   const winHThisFloor = isTopSmallest
-                    ? Math.min(safeWinH * 0.78, flH * 0.62)
-                    : Math.min(safeWinH, flH * 0.68);
-                  const sillM = Math.max(0.22, (flH - winHThisFloor) * 0.34);
+                    ? Math.min(safeWinH * 0.78, clearH * 0.64)
+                    : Math.min(safeWinH, clearH * 0.72);
+                  const sillM = Math.max(0.22, (clearH - winHThisFloor) * 0.36);
                   const winTopThisM = floorStartM + sillM + winHThisFloor;
 
                   const winX = xM(axisM - safeW / 2);
                   const winY = yFromGroundM(winTopThisM);
                   const winWpx = safeW * scale;
                   const winHpx = winHThisFloor * scale;
+
+                  if (isEntranceDoor) {
+                    const doorWpx = Math.max(10, safeW * 0.95 * scale);
+                    const doorX = cx - doorWpx / 2;
+                    const doorTopY = winY;
+                    const doorBottomY = groundY;
+                    return (
+                      <g
+                        key={`door-${axIdx}-${flIdx}`}
+                        className="cursor-pointer"
+                        onClick={() => onSelectElement?.('axenweite')}
+                      >
+                        <rect
+                          x={doorX - 3}
+                          y={doorTopY - 3}
+                          width={doorWpx + 6}
+                          height={Math.max(8, doorBottomY - doorTopY + 3)}
+                          fill="#D6CEBE"
+                          stroke="#292524"
+                          strokeWidth={1.1}
+                        />
+                        <rect
+                          x={doorX}
+                          y={doorTopY}
+                          width={doorWpx}
+                          height={Math.max(8, doorBottomY - doorTopY)}
+                          fill="#6D4C3D"
+                          fillOpacity={0.82}
+                          stroke="#1C1917"
+                          strokeWidth={1}
+                        />
+                        <line
+                          x1={cx}
+                          y1={doorTopY}
+                          x2={cx}
+                          y2={doorBottomY}
+                          stroke="#FBF9F5"
+                          strokeOpacity={0.6}
+                          strokeWidth={0.8}
+                        />
+                        <text
+                          x={cx}
+                          y={doorBottomY + 11}
+                          textAnchor="middle"
+                          fontSize="8"
+                          fontFamily="IBM Plex Mono, monospace"
+                          fill="#9A3412"
+                        >
+                          вход
+                        </text>
+                      </g>
+                    );
+                  }
 
                   const showRichFraming = params.withFraming && flIdx === activeFramingFloor;
                   const uPx = effectiveU * scale;
@@ -866,15 +937,20 @@ export function FacadeSvg({
             );
           })}
 
-          {/* LEFT FLOOR TAGS & 4–5 STORY SCHEME BRACKETS */}
+          {/* LEFT FLOOR TAGS & 5-STORY UNIFIED 1+2 BRACKET */}
           {floorOffsetsM.map((floorStartM, flIdx) => {
             const flMidY = yFromGroundM(floorStartM + floorHeightsM[flIdx] / 2);
             const flNum = flIdx + 1;
             const isMainTier =
               safeFloors >= 3 && summary.variantInfo.rules.mainTierFloor === flNum;
             const isFullSocle = flNum === 1 && params.useFullFloorAsSocle;
+            const isUnified12 =
+              safeFloors === 5 &&
+              params.fiveStoryScheme === 'rich_1_2_unified' &&
+              (flNum === 1 || flNum === 2);
             let tag = `${flNum} эт.`;
-            if (isFullSocle) tag = '1 эт. (цоколь)';
+            if (isUnified12) tag = `${flNum} эт. (объед.)`;
+            else if (isFullSocle) tag = '1 эт. (цоколь)';
             else if (isMainTier) tag = '2 эт. (главн.)';
             else if (safeFloors >= 3 && flNum === safeFloors && summary.variantInfo.rules.upperFloorSmallest) {
               tag = `${flNum} эт. (мал.)`;
@@ -887,8 +963,8 @@ export function FacadeSvg({
                 textAnchor="end"
                 fontSize="9"
                 fontFamily="IBM Plex Mono, monospace"
-                fontWeight={isMainTier || isFullSocle ? 600 : 400}
-                fill={isMainTier ? '#9A3412' : '#57534E'}
+                fontWeight={isMainTier || isFullSocle || isUnified12 ? 600 : 400}
+                fill={isUnified12 || isMainTier ? '#9A3412' : '#57534E'}
               >
                 {tag}
               </text>
@@ -981,7 +1057,7 @@ export function FacadeSvg({
                   fontFamily="IBM Plex Mono, monospace"
                   fill="#44403C"
                 >
-                  H_зд={formatMeters(params.totalHeight, 1)}
+                  H_зд={formatMeters(totalHeightM, 1)}
                 </text>
 
                 {/* Main floor height */}

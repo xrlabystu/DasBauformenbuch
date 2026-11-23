@@ -4,6 +4,7 @@ import {
   A_from_H,
   D_from_A,
   RULES_DATA,
+  SOURCE_STATUS_LABELS,
   check_corner,
   check_pilaster,
   check_window,
@@ -20,15 +21,18 @@ import {
   type FacadeTargetElement,
   type RuleRecord,
   type RuleType,
+  type SourceStatus,
 } from '../../calc/rules';
 
 interface RuleCardsViewProps {
+  expertMode?: boolean;
+  onToggleExpertMode?: () => void;
   onHighlightRuleOnFacade: (rule: RuleRecord) => void;
   onOpenBookPage?: (pageNum: number) => void;
 }
 
 const RULE_TYPE_LABELS: Record<'all' | RuleType, string> = {
-  all: 'Все правила',
+  all: 'Все типы',
   formula: 'Формулы',
   constraint: 'Ограничения',
   heuristic: 'Эвристики / допущения',
@@ -36,27 +40,73 @@ const RULE_TYPE_LABELS: Record<'all' | RuleType, string> = {
   profile_rule: 'Профили карниза',
 };
 
+const SOURCE_FILTER_LABELS: Record<'all' | SourceStatus, string> = {
+  all: 'Любой источник',
+  'explicit-verified': 'Проверено по S. 1–23',
+  'explicit-unverified': 'Требует сверки',
+  heuristic: 'UX-эвристики',
+  editorial: 'Редакционная разметка',
+  gap: 'Пробелы / экстраполяция',
+};
+
 export function RuleCardsView({
+  expertMode = false,
+  onToggleExpertMode,
   onHighlightRuleOnFacade,
   onOpenBookPage,
 }: RuleCardsViewProps) {
   const [filter, setFilter] = useState<'all' | RuleType>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | SourceStatus>('all');
+  const [showP3InCatalog, setShowP3InCatalog] = useState<boolean>(true);
 
   const filtered = useMemo(() => {
-    if (filter === 'all') return RULES_DATA.rules;
-    return RULES_DATA.rules.filter((r) => r.type === filter);
-  }, [filter]);
+    return RULES_DATA.rules.filter((r) => {
+      if (!showP3InCatalog && r.priority === 'P3') return false;
+      if (filter !== 'all' && r.type !== filter) return false;
+      if (sourceFilter !== 'all' && r.sourceStatus !== sourceFilter) return false;
+      return true;
+    });
+  }, [filter, sourceFilter, showP3InCatalog]);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#E5DFD3]">
-        <div>
-          <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-            Свод правил из «Das Bauformenbuch» (1895, S. 1–12)
-          </h3>
-          <p className="mt-1 text-xs text-[#57534E]">
-            Карточки генерируются из единого JSON-реестра правил. Нажмите на правило, чтобы подсветить соответствующий узел на SVG-фасаде.
-          </p>
+      <div className="space-y-4 pb-4 border-b border-[#E5DFD3]">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display text-2xl font-medium text-[#1C1917]">
+              Свод правил из «Das Bauformenbuch» (1895, S. 1–23)
+            </h3>
+            <p className="mt-1 text-xs text-[#57534E]">
+              Всего в реестре: {RULES_DATA.rules.length} правил (показано {filtered.length}). Каждое правило классифицировано по достоверности относительно первоисточника.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowP3InCatalog((v) => !v)}
+              className={`px-2.5 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap ${
+                showP3InCatalog
+                  ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                  : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+              }`}
+            >
+              {showP3InCatalog ? 'Показывать экспертные P3' : 'Скрыть экспертные P3'}
+            </button>
+            {onToggleExpertMode && (
+              <button
+                type="button"
+                onClick={onToggleExpertMode}
+                className={`px-2.5 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap ${
+                  expertMode
+                    ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                    : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                }`}
+              >
+                {expertMode ? 'Экспертный расчёт вкл.' : 'Экспертный расчёт выкл.'}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1.5">
@@ -77,12 +127,31 @@ export function RuleCardsView({
             )
           )}
         </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {(['all', 'explicit-verified', 'heuristic', 'gap'] as const).map((srcKey) => (
+            <button
+              key={srcKey}
+              type="button"
+              onClick={() => setSourceFilter(srcKey)}
+              className={`px-2.5 py-1 text-[11px] font-mono border transition-colors whitespace-nowrap shrink-0 ${
+                sourceFilter === srcKey
+                  ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                  : 'bg-[#FBF9F5] text-[#57534E] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+              }`}
+            >
+              {SOURCE_FILTER_LABELS[srcKey]}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {filtered.map((rule) => {
           const firstPageMatch = rule.page.match(/\d+/);
           const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
+          const isHeuristicOrGap =
+            rule.sourceStatus === 'heuristic' || rule.sourceStatus === 'gap';
           return (
             <article
               key={rule.id}
@@ -93,6 +162,18 @@ export function RuleCardsView({
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#78716C]">
                   <div className="flex flex-wrap items-center gap-x-2">
                     <span className="text-[#1C1917] font-medium">{rule.id}</span>
+                    {rule.priority && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className={
+                            rule.priority === 'P3' ? 'text-[#9A3412] font-semibold' : 'text-[#57534E]'
+                          }
+                        >
+                          {rule.priority === 'P3' ? 'P3 Эксперт' : rule.priority}
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     {onOpenBookPage ? (
                       <button
@@ -110,7 +191,7 @@ export function RuleCardsView({
                   </div>
                   <span
                     className={
-                      rule.confidence === 'heuristic' ? 'text-[#B45309] font-medium' : 'text-[#44403C]'
+                      isHeuristicOrGap ? 'text-[#B45309] font-medium' : 'text-[#44403C]'
                     }
                   >
                     {rule.statusLabel}
@@ -134,10 +215,12 @@ export function RuleCardsView({
               </div>
 
               <div className="pt-3 border-t border-[#ECE7DC] flex items-center justify-between gap-3">
-                <span className="font-mono text-[11px] text-[#78716C]">
-                  {rule.confidence === 'heuristic'
-                    ? 'Пометка: допущение / эвристика'
-                    : 'Источник: Brausewetter 1895'}
+                <span
+                  className={`font-mono text-[11px] ${
+                    isHeuristicOrGap ? 'text-[#B45309]' : 'text-[#78716C]'
+                  }`}
+                >
+                  {SOURCE_STATUS_LABELS[rule.sourceStatus]}
                 </span>
                 <button
                   type="button"

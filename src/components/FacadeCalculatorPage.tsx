@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import {
+  D_from_A,
   RULES_DATA,
   applyBuildingVariantPreset,
+  buildDefaultLevels,
+  computeDerivedGeometry,
   createDefaultParamsForTypology,
   evaluateFacadeSummary,
   formatMeters,
   getTypology,
+  syncLevelsWithH,
   type BuildingTypeId,
   type BuildingVariant,
   type FacadeParameters,
@@ -53,6 +57,7 @@ const ELEMENT_TO_PLATE: Partial<Record<FacadeTargetElement, AnalyticalPlateId>> 
 
 export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPageProps) {
   const [subpage, setSubpage] = useState<CalculatorSubpage>('workspace');
+  const [expertMode, setExpertMode] = useState<boolean>(false);
   const [params, setParams] = useState<FacadeParameters>(() =>
     createDefaultParamsForTypology('urban_house')
   );
@@ -60,11 +65,59 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
   const [activePlate, setActivePlate] = useState<AnalyticalPlateId>('fan');
   const [highlightedElement, setHighlightedElement] = useState<FacadeTargetElement | null>(null);
 
-  const summary = useMemo(() => evaluateFacadeSummary(params), [params]);
+  const summary = useMemo(
+    () => evaluateFacadeSummary(params, { expertMode }),
+    [params, expertMode]
+  );
   const currentTypology = useMemo(() => getTypology(params.buildingType), [params.buildingType]);
 
   const handleUpdateParams = (patch: Partial<FacadeParameters>) => {
-    setParams((prev) => ({ ...prev, ...patch }));
+    setParams((prev) => {
+      const next: FacadeParameters = { ...prev, ...patch };
+
+      if (patch.levels === undefined) {
+        if (patch.floors !== undefined && patch.floors !== prev.floors) {
+          next.levels = buildDefaultLevels(
+            Math.max(1, Math.round(patch.floors)),
+            next.H,
+            prev.levels.groundToFloor1
+          );
+        } else if (patch.H !== undefined && patch.H !== prev.H) {
+          next.levels = syncLevelsWithH(prev.levels, patch.H);
+        }
+
+        if (patch.totalHeight !== undefined && patch.totalHeight !== prev.totalHeight) {
+          next.levels = {
+            ...next.levels,
+            manualTotalHeight: patch.totalHeight,
+          };
+        }
+      }
+
+      const D = next.isRisalitCentered
+        ? next.risalitWidth / 2
+        : D_from_A(next.A, next.k_D);
+      const dg = computeDerivedGeometry(
+        next.levels,
+        next.A,
+        D,
+        next.axesCount,
+        next.hMain
+      );
+
+      if (patch.levels !== undefined || patch.floors !== undefined) {
+        next.H = dg.H_max;
+        next.floors = next.levels.floors.length;
+      }
+      if (patch.totalHeight === undefined || patch.levels !== undefined) {
+        next.totalHeight = dg.totalHeight;
+      }
+      if (next.levels.floors[1] && patch.beltUpperFloorHeight === undefined) {
+        next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
+      }
+
+      return next;
+    });
   };
 
   const handleChangeBuildingType = (type: BuildingTypeId) => {
@@ -86,6 +139,9 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
   };
 
   const handleHighlightRuleOnFacade = (rule: RuleRecord) => {
+    if (rule.priority === 'P3' && !expertMode) {
+      setExpertMode(true);
+    }
     setSubpage('workspace');
     setHighlightedElement(rule.targetElement);
     setActiveModule(ELEMENT_TO_MODULE[rule.targetElement]);
@@ -97,7 +153,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
     patch: Partial<FacadeParameters>,
     el: FacadeTargetElement
   ) => {
-    setParams((prev) => ({ ...prev, ...patch }));
+    handleUpdateParams(patch);
     setSubpage('workspace');
     setHighlightedElement(el);
     setActiveModule(ELEMENT_TO_MODULE[el]);
@@ -111,7 +167,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
       <div className="pb-6 border-b border-[#E5DFD3] flex flex-col lg:flex-row lg:items-end justify-between gap-5">
         <div>
           <p className="text-xs tracking-widest uppercase text-[#78716C] font-mono">
-            Параметрический модуль · Brausewetter 1895 (S. 1–12, 16–17, 22)
+            Параметрический модуль · Brausewetter 1895 (S. 1–23)
           </p>
           <h2
             id="calculator-heading"
@@ -120,7 +176,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
             Интерактивный пропорциональный калькулятор фасада
           </h2>
           <p className="mt-2 text-sm text-[#57534E] max-w-2xl">
-            Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов и цоколя (Sockel) без округления промежуточных значений; все допущения помечены явно.
+            Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов, цоколя и поэтажных отметок без округления промежуточных значений; проверенные нормы книги отделены от UX-эвристик.
           </p>
         </div>
 
@@ -259,6 +315,18 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
               />
               <button
                 type="button"
+                aria-pressed={expertMode}
+                onClick={() => setExpertMode((v) => !v)}
+                className={`px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap shrink-0 ${
+                  expertMode
+                    ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                    : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                }`}
+              >
+                {expertMode ? 'Эксперт P3: вкл.' : 'Эксперт P3: выкл.'}
+              </button>
+              <button
+                type="button"
                 onClick={handleResetToBookExample}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
               >
@@ -295,6 +363,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 }}
                 params={params}
                 summary={summary}
+                expertMode={expertMode}
                 onUpdateParams={handleUpdateParams}
                 onHighlightElement={setHighlightedElement}
                 onOpenBookPage={onOpenBookPage}
@@ -353,12 +422,18 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                   </span>
                 </div>
                 <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Цоколь h_soc</span>
+                  <span className="block text-[10px] text-[#78716C] uppercase">Цоколь / H_зд</span>
                   <strong className="text-sm text-[#1C1917]">
-                    {formatMeters(params.useFullFloorAsSocle ? params.H : params.hSocle)} м
+                    {formatMeters(
+                      params.useFullFloorAsSocle
+                        ? summary.derivedGeometry.floor1FullHeight
+                        : params.hSocle,
+                      2
+                    )}{' '}
+                    м
                   </strong>
                   <span className="block text-[11px] text-[#57534E]">
-                    h_main={formatMeters(params.hMain, 2)} · {summary.rusticationCheck.n} ряд.
+                    H_зд={formatMeters(summary.derivedGeometry.totalHeight, 2)} · H_max={formatMeters(summary.derivedGeometry.H_max, 2)}
                   </span>
                 </div>
               </div>
@@ -377,6 +452,8 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
 
       {subpage === 'rules' && (
         <RuleCardsView
+          expertMode={expertMode}
+          onToggleExpertMode={() => setExpertMode((v) => !v)}
           onHighlightRuleOnFacade={handleHighlightRuleOnFacade}
           onOpenBookPage={onOpenBookPage}
         />
@@ -388,3 +465,4 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
     </section>
   );
 }
+

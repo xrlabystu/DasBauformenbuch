@@ -9,12 +9,14 @@ import {
   H_from_A,
   PHI,
   RULES_DATA,
+  SOURCE_STATUS_LABELS,
   VARIANT_TEXT_GAPS,
   applyBuildingVariantPreset,
   beltHeight,
   formatMeters,
   formatPercent,
   framing_from_module,
+  getAxesGroupingHint,
   gurtModeFromSchemeNumber,
   h_from_w_ratio,
   projection_45,
@@ -29,13 +31,18 @@ import {
   type BeltEffect,
   type BeltMode,
   type BuildingVariant,
+  type ColumnProfileType,
+  type CompositionKind,
   type CorniceVariantMode,
+  type EntrancePosition,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
-  type FourFiveScheme,
+  type FiveStoryScheme,
   type MultiSub,
+  type PedimentType,
   type SocleMode,
+  type SourceStatus,
   type ThreeStoryBeltSchemeNumber,
   type ThreeStoryGurtMode,
   type ValidationStatus,
@@ -58,6 +65,7 @@ interface CalculatorModulesProps {
   onSelectModule: (mod: CalculatorModuleId) => void;
   params: FacadeParameters;
   summary: FacadeSummary;
+  expertMode?: boolean;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
   onHighlightElement: (el: FacadeTargetElement | null) => void;
   onOpenBookPage?: (pageNum: number) => void;
@@ -159,6 +167,7 @@ function WhyBlock({
   page,
   explanation,
   isHeuristic,
+  sourceStatus,
   onOpenBookPage,
 }: {
   status: ValidationStatus;
@@ -166,21 +175,33 @@ function WhyBlock({
   page: string;
   explanation: string;
   isHeuristic?: boolean;
+  sourceStatus?: SourceStatus;
   onOpenBookPage?: (pageNum: number) => void;
 }) {
   const firstPageMatch = page.match(/\d+/);
   const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
+  const provenanceText = sourceStatus
+    ? SOURCE_STATUS_LABELS[sourceStatus]
+    : isHeuristic
+      ? SOURCE_STATUS_LABELS.heuristic
+      : SOURCE_STATUS_LABELS['explicit-verified'];
+  const isAccentProv =
+    isHeuristic || sourceStatus === 'heuristic' || sourceStatus === 'gap';
 
   return (
     <div className="mt-4 p-3.5 border border-[#D6CEBE] bg-[#F3EFE6]/60 space-y-2 text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="font-mono text-[11px] uppercase tracking-wider text-[#57534E]">
             Почему так?
           </span>
-          {isHeuristic && (
-            <span className="font-mono text-[11px] text-[#9A3412]">· допущение/эвристика</span>
-          )}
+          <span
+            className={`font-mono text-[11px] ${
+              isAccentProv ? 'text-[#9A3412]' : 'text-[#78716C]'
+            }`}
+          >
+            · {provenanceText}
+          </span>
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge status={status} />
@@ -210,6 +231,7 @@ export function CalculatorModules({
   onSelectModule,
   params,
   summary,
+  expertMode = false,
   onUpdateParams,
   onHighlightElement,
   onOpenBookPage,
@@ -530,6 +552,7 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.ahCheck.status}
+              sourceStatus={summary.ahCheck.sourceStatus}
               formula="A = H × (n/m)"
               page="S. 5–6"
               explanation={summary.ahCheck.explanation}
@@ -537,11 +560,22 @@ export function CalculatorModules({
             />
             <WhyBlock
               status={summary.pierResult.status}
+              sourceStatus={summary.pierResult.sourceStatus}
               formula={summary.pierResult.formula}
               page={summary.pierResult.page}
               explanation={summary.pierResult.explanation}
               onOpenBookPage={onOpenBookPage}
             />
+            {params.withFraming && (
+              <WhyBlock
+                status={summary.framingWidthCheck.status}
+                sourceStatus={summary.framingWidthCheck.sourceStatus}
+                formula={summary.framingWidthCheck.formula}
+                page={summary.framingWidthCheck.page}
+                explanation={summary.framingWidthCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+            )}
           </div>
         )}
 
@@ -598,7 +632,7 @@ export function CalculatorModules({
                     {(
                       [
                         { id: 'three', label: '3 этажа (идеал)' },
-                        { id: 'four-five', label: '4–5 этажей (схемы A/B)' },
+                        { id: 'four-five', label: '4–5 этажей (S. 23)' },
                         { id: 'general', label: 'Общий (mehrgeschossig)' },
                       ] as { id: MultiSub; label: string }[]
                     ).map((sub) => (
@@ -654,23 +688,23 @@ export function CalculatorModules({
               )}
 
               {params.buildingVariant === 'multi-story' && params.multiSub === 'four-five' && (
-                <div>
-                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
-                    Схема членения 4–5 этажей (S. 23)
+                <div className="space-y-2.5">
+                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    5-этажные схемы членения (S. 23)
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {(
                       [
-                        { id: 'A', label: 'Схема A: 1=Цоколь / 2–4=Ствол / 5+K=Венец' },
-                        { id: 'B', label: 'Схема B: 1+2=Нижний ярус / 3–5=Ствол / K' },
-                      ] as { id: FourFiveScheme; label: string }[]
+                        { id: 'standard', label: 'Стандарт (доходный): 1=Цоколь / 2–4=Ствол / 5+K=Венец' },
+                        { id: 'rich_1_2_unified', label: 'Богатый особняк: 1+2 объед. / 3–5=Ствол / K' },
+                      ] as { id: FiveStoryScheme; label: string }[]
                     ).map((sc) => (
                       <button
                         key={sc.id}
                         type="button"
-                        onClick={() => onUpdateParams({ fourFiveScheme: sc.id })}
+                        onClick={() => onUpdateParams({ fiveStoryScheme: sc.id })}
                         className={`px-2.5 py-1 text-[11px] border text-left ${
-                          params.fourFiveScheme === sc.id
+                          params.fiveStoryScheme === sc.id
                             ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                             : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
                         }`}
@@ -679,11 +713,158 @@ export function CalculatorModules({
                       </button>
                     ))}
                   </div>
+
+                  {params.fiveStoryScheme === 'rich_1_2_unified' && (
+                    <MeterControl
+                      id="calc-cornice-proj-boost"
+                      label="Усиление выноса главного карниза (UX-множитель, S. 23)"
+                      value={params.mainCorniceProjectionBoost}
+                      min={1.0}
+                      max={1.5}
+                      step={0.05}
+                      unit="×"
+                      note="N27: при невысоком карнизе богатого 5-эт. особняка вынос усиливается (≥1.2× — UX-эвристика)."
+                      onChange={(mainCorniceProjectionBoost) =>
+                        onUpdateParams({ mainCorniceProjectionBoost })
+                      }
+                    />
+                  )}
                 </div>
               )}
             </div>
 
-            {/* Параметры осей и режима карниза */}
+            {/* Поэтажная модель (Levels: отметки от земли до карниза) */}
+            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-medium text-[#1C1917]">
+                  Поэтажная модель высот (Levels, S. 5, 16)
+                </span>
+                <span className="font-mono text-[11px] text-[#78716C] tabular-nums">
+                  H_max={formatMeters(summary.derivedGeometry.H_max, 2)} м · H_зд={formatMeters(summary.derivedGeometry.totalHeight, 2)} м
+                </span>
+              </div>
+
+              <MeterControl
+                id="calc-ground-floor1"
+                label="От земли до пола 1-го этажа (groundToFloor1)"
+                value={params.levels.groundToFloor1}
+                min={0.2}
+                max={2.6}
+                step={0.05}
+                onChange={(val) =>
+                  onUpdateParams({
+                    levels: { ...params.levels, groundToFloor1: val },
+                  })
+                }
+              />
+
+              <div className="space-y-2 pt-1 border-t border-[#E5DFD3]">
+                {params.levels.floors.map((fl, idx) => {
+                  const derivedClear = fl.floorToFloor - fl.slabThickness;
+                  return (
+                    <div
+                      key={idx}
+                      className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/35 grid grid-cols-1 sm:grid-cols-3 gap-2 items-center text-[11px] font-mono"
+                    >
+                      <span className="font-medium text-[#1C1917]">
+                        Этаж {idx + 1} (в свету {formatMeters(derivedClear, 2)} м)
+                      </span>
+                      <label className="flex items-center justify-between gap-1 text-[#57534E]">
+                        <span>пол–пол:</span>
+                        <input
+                          type="number"
+                          min={2.2}
+                          max={7.5}
+                          step={0.05}
+                          value={Number(fl.floorToFloor.toFixed(2))}
+                          onChange={(e) => {
+                            const nextF2F = Math.max(2.0, parseFloat(e.target.value) || fl.floorToFloor);
+                            const nextFloors = params.levels.floors.map((item, i) =>
+                              i === idx
+                                ? {
+                                    ...item,
+                                    floorToFloor: nextF2F,
+                                    clearHeight: Number((nextF2F - item.slabThickness).toFixed(3)),
+                                  }
+                                : item
+                            );
+                            onUpdateParams({
+                              levels: { ...params.levels, floors: nextFloors },
+                            });
+                          }}
+                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917]"
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-1 text-[#57534E]">
+                        <span>перекр.:</span>
+                        <input
+                          type="number"
+                          min={0.15}
+                          max={0.8}
+                          step={0.05}
+                          value={Number(fl.slabThickness.toFixed(2))}
+                          onChange={(e) => {
+                            const nextSlab = Math.max(0.1, parseFloat(e.target.value) || fl.slabThickness);
+                            const nextFloors = params.levels.floors.map((item, i) =>
+                              i === idx
+                                ? {
+                                    ...item,
+                                    slabThickness: nextSlab,
+                                    clearHeight: Number((item.floorToFloor - nextSlab).toFixed(3)),
+                                  }
+                                : item
+                            );
+                            onUpdateParams({
+                              levels: { ...params.levels, floors: nextFloors },
+                            });
+                          }}
+                          className="w-16 px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917]"
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer text-[#1C1917]">
+                  <input
+                    type="checkbox"
+                    checked={params.levels.manualTotalHeight !== undefined}
+                    onChange={(e) =>
+                      onUpdateParams({
+                        levels: {
+                          ...params.levels,
+                          manualTotalHeight: e.target.checked
+                            ? summary.derivedGeometry.totalHeight
+                            : undefined,
+                        },
+                      })
+                    }
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Задать H_зд вручную</span>
+                </label>
+                {params.levels.manualTotalHeight !== undefined && (
+                  <input
+                    type="number"
+                    min={4.0}
+                    max={30.0}
+                    step={0.1}
+                    value={Number(params.levels.manualTotalHeight.toFixed(2))}
+                    onChange={(e) => {
+                      const val = Math.max(3.0, parseFloat(e.target.value) || 8.0);
+                      onUpdateParams({
+                        levels: { ...params.levels, manualTotalHeight: val },
+                      });
+                    }}
+                    className="w-24 px-2 py-1 text-xs font-mono border border-[#D6CEBE] bg-[#FBF9F5] text-right"
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Параметры осей, положения входа (N7) и режима карниза */}
             <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-[#1C1917]">
@@ -718,6 +899,35 @@ export function CalculatorModules({
                 onChange={(val) => onUpdateParams({ axesCount: Math.max(2, Math.round(val)) })}
               />
 
+              <div className="space-y-1.5">
+                <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                  Положение главного входа (S. 14–16)
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'center', label: 'По центру' },
+                      { id: 'left', label: 'Слева (сбоку)' },
+                      { id: 'right', label: 'Справа (сбоку)' },
+                      { id: 'none', label: 'Без входа' },
+                    ] as { id: EntrancePosition; label: string }[]
+                  ).map((ep) => (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      onClick={() => onUpdateParams({ entrancePosition: ep.id })}
+                      className={`px-2.5 py-1 text-[11px] border ${
+                        params.entrancePosition === ep.id
+                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                          : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                      }`}
+                    >
+                      {ep.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
                 <input
                   type="checkbox"
@@ -727,6 +937,15 @@ export function CalculatorModules({
                 />
                 <span>Встроенный в уличный ряд дом (допускает чётные оси при боковом входе, S. 14)</span>
               </label>
+
+              {(params.axesCount % 2 === 0 || params.axesCount >= 9) && (
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 space-y-1 text-[11px] text-[#44403C]">
+                  <span className="font-mono uppercase text-[10px] text-[#9A3412]">
+                    Схемы группировки (N7, S. 15–16):
+                  </span>
+                  <p>• {getAxesGroupingHint(params.axesCount)}</p>
+                </div>
+              )}
 
               <div className="pt-2 border-t border-[#E5DFD3]">
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
@@ -756,6 +975,243 @@ export function CalculatorModules({
               </div>
             </div>
 
+            {/* Композиция фасада: ризалиты, крылья, аттик, фронтон (N8–N17, N23–N26) */}
+            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+              <label className="flex items-center gap-2 text-xs font-medium text-[#1C1917] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={params.hasCompositionBreakdown}
+                  onChange={(e) => onUpdateParams({ hasCompositionBreakdown: e.target.checked })}
+                  className="accent-[#9A3412]"
+                />
+                <span>Композиция крыльев и ризалитов (N8–N17, N23–N26, S. 13–14, 18–20)</span>
+              </label>
+
+              {params.hasCompositionBreakdown && (
+                <div className="space-y-3 pt-2 border-t border-[#E5DFD3]">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        { id: 'two_part_wing', label: '2-частн. (ризалит+крыло)' },
+                        { id: 'five_part', label: '5-частн. (рис. 9)' },
+                        { id: 'seven_part', label: '7-частн. 1.5:3:5:3:1.5 (рис. 10)' },
+                        { id: 'two_side_risalits', label: '2 боковых ризалита (рис. 11)' },
+                      ] as { id: CompositionKind; label: string }[]
+                    ).map((ck) => (
+                      <button
+                        key={ck.id}
+                        type="button"
+                        onClick={() => onUpdateParams({ compKind: ck.id })}
+                        className={`px-2 py-1 text-[11px] border ${
+                          params.compKind === ck.id
+                            ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                            : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE]'
+                        }`}
+                      >
+                        {ck.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <MeterControl
+                      id="calc-w-central-ris"
+                      label="Ширина центр. ризалита"
+                      value={params.wCentralRisalit}
+                      min={2.5}
+                      max={18.0}
+                      step={0.1}
+                      onChange={(wCentralRisalit) => onUpdateParams({ wCentralRisalit })}
+                    />
+                    <MeterControl
+                      id="calc-w-side-ris"
+                      label="Ширина бок. ризалита"
+                      value={params.wSideRisalit}
+                      min={1.5}
+                      max={12.0}
+                      step={0.1}
+                      onChange={(wSideRisalit) => onUpdateParams({ wSideRisalit })}
+                    />
+                    <MeterControl
+                      id="calc-w-wing"
+                      label="Ширина крыла / середины"
+                      value={params.wWing}
+                      min={1.5}
+                      max={14.0}
+                      step={0.1}
+                      onChange={(wWing) => onUpdateParams({ wWing })}
+                    />
+                    <MeterControl
+                      id="calc-p-wing"
+                      label="Угловой простенок крыла p_wing"
+                      value={params.pWing}
+                      min={0.4}
+                      max={4.0}
+                      step={0.05}
+                      onChange={(pWing) => onUpdateParams({ pWing })}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span>Оси центр. риз.:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={7}
+                        value={params.centralRisalitAxes}
+                        onChange={(e) =>
+                          onUpdateParams({ centralRisalitAxes: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                        }
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span>Оси крыла:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={7}
+                        value={params.wingAxes}
+                        onChange={(e) =>
+                          onUpdateParams({ wingAxes: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                        }
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span>Оси середины:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={9}
+                        value={params.middleAxesBetweenRisalits}
+                        onChange={(e) =>
+                          onUpdateParams({
+                            middleAxesBetweenRisalits: Math.max(1, parseInt(e.target.value, 10) || 1),
+                          })
+                        }
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span>Богатство ризалита (1–5):</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={params.risalitRichness}
+                        onChange={(e) =>
+                          onUpdateParams({ risalitRichness: Math.max(1, Math.min(5, parseInt(e.target.value, 10) || 1)) })
+                        }
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2 p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <span>Богатство крыла (1–5):</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={params.wingRichness}
+                        onChange={(e) =>
+                          onUpdateParams({ wingRichness: Math.max(1, Math.min(5, parseInt(e.target.value, 10) || 1)) })
+                        }
+                        className="w-12 px-1 py-0.5 font-mono border border-[#D6CEBE] text-right"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-[#1C1917]">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={params.hasPilasterBetweenPairedWindows}
+                        onChange={(e) =>
+                          onUpdateParams({ hasPilasterBetweenPairedWindows: e.target.checked })
+                        }
+                        className="accent-[#9A3412]"
+                      />
+                      <span>Пилястр между парой сближенных окон в ризалите (N16)</span>
+                    </label>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={params.atticOverRisalit}
+                          onChange={(e) => onUpdateParams({ atticOverRisalit: e.target.checked })}
+                          className="accent-[#9A3412]"
+                        />
+                        <span>Аттик над ризалитом</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={params.atticOverWing}
+                          onChange={(e) => onUpdateParams({ atticOverWing: e.target.checked })}
+                          className="accent-[#9A3412]"
+                        />
+                        <span>Аттик над крылом</span>
+                      </label>
+                      {params.atticOverRisalit && params.atticOverWing && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={params.atticRisalitHeavier}
+                            onChange={(e) => onUpdateParams({ atticRisalitHeavier: e.target.checked })}
+                            className="accent-[#9A3412]"
+                          />
+                          <span>Над ризалитом массивнее (N23)</span>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  {expertMode && (
+                    <div className="pt-2 border-t border-[#E5DFD3] space-y-2">
+                      <span className="block font-mono text-[10px] uppercase tracking-wider text-[#9A3412]">
+                        Эксперт P3 · Фронтон ризалита (N24, N26)
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(
+                          [
+                            { id: 'none', label: 'Без фронтона' },
+                            { id: 'gentle', label: 'Пологий (классика)' },
+                            { id: 'steep', label: 'Крутой (готика/север)' },
+                          ] as { id: PedimentType; label: string }[]
+                        ).map((pd) => (
+                          <button
+                            key={pd.id}
+                            type="button"
+                            onClick={() => onUpdateParams({ pedimentType: pd.id })}
+                            className={`px-2 py-1 text-[11px] border ${
+                              params.pedimentType === pd.id
+                                ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                                : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE]'
+                            }`}
+                          >
+                            {pd.label}
+                          </button>
+                        ))}
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={params.pedimentClassical}
+                          onChange={(e) => onUpdateParams({ pedimentClassical: e.target.checked })}
+                          className="accent-[#9A3412]"
+                        />
+                        <span>Классическая композиция (N24: избегать крутого фронтона)</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Паспорт норм выбранного варианта */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
               <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
@@ -781,8 +1237,8 @@ export function CalculatorModules({
               <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
                 <span className="block text-[10px] text-[#78716C] uppercase">Предел A/H_max</span>
                 <strong>
-                  {formatMeters(summary.variantInfo.rules.axisRatio.min, 2)}…
-                  {formatMeters(summary.variantInfo.rules.axisRatio.max, 3)}
+                  {formatMeters(summary.variantAxisCheck.range[0], 2)}…
+                  {formatMeters(summary.variantAxisCheck.range[1], 3)}
                 </strong>
               </div>
               <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
@@ -825,6 +1281,7 @@ export function CalculatorModules({
             {/* Автоматические проверки варианта */}
             <WhyBlock
               status={summary.variantAxisCheck.status}
+              sourceStatus={summary.variantAxisCheck.sourceStatus}
               formula={summary.variantAxisCheck.formula}
               page={summary.variantAxisCheck.page}
               isHeuristic={summary.variantAxisCheck.isWideBayHeuristic}
@@ -834,6 +1291,7 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.facadeRectCheck.status}
+              sourceStatus={summary.facadeRectCheck.sourceStatus}
               formula={summary.facadeRectCheck.formula}
               page={summary.facadeRectCheck.page}
               explanation={summary.facadeRectCheck.explanation}
@@ -842,14 +1300,27 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.axesCountCheck.status}
+              sourceStatus="explicit-verified"
               formula={summary.axesCountCheck.formula}
               page={summary.axesCountCheck.page}
               explanation={summary.axesCountCheck.explanation}
               onOpenBookPage={onOpenBookPage}
             />
 
+            {params.levels.floors.length === 5 && (
+              <WhyBlock
+                status={summary.fiveStorySchemeCheck.status}
+                sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
+                formula={summary.fiveStorySchemeCheck.formula}
+                page={summary.fiveStorySchemeCheck.page}
+                explanation={summary.fiveStorySchemeCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+            )}
+
             <WhyBlock
               status={summary.mainCorniceCheck.status}
+              sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
               formula={summary.mainCorniceCheck.formula}
               page={summary.mainCorniceCheck.page}
               isHeuristic={summary.mainCorniceCheck.isExtrapolated}
@@ -859,6 +1330,7 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.gurtCheck.status}
+              sourceStatus="explicit-verified"
               formula={summary.gurtCheck.formula}
               page={summary.gurtCheck.page}
               explanation={summary.gurtCheck.explanation}
@@ -872,7 +1344,7 @@ export function CalculatorModules({
                   Чего в тексте Brausewetter (1895) нет
                 </h4>
                 <span className="font-mono text-[11px] text-[#9A3412]">
-                  явные пробелы и экстраполяции (6)
+                  явные пробелы и экстраполяции ({VARIANT_TEXT_GAPS.length})
                 </span>
               </div>
               <div className="divide-y divide-[#E5DFD3] border-t border-[#E5DFD3]">
@@ -1066,18 +1538,40 @@ export function CalculatorModules({
 
               <MeterControl
                 id="calc-win-tol"
-                label="Допуск правила половины диагонали (допущение/эвристика)"
+                label="Допуск правила половины диагонали (по умолчанию 7%)"
                 value={params.diagTolerance * 100}
                 min={1}
-                max={10}
+                max={12}
                 step={0.5}
                 unit="%"
                 onChange={(pct) => onUpdateParams({ diagTolerance: pct / 100 })}
               />
+
+              {params.withFraming && (
+                <MeterControl
+                  id="calc-win-sill"
+                  label="Высота подоконной плиты h_sill (N2, норма w/8…w/7)"
+                  value={params.hSill}
+                  min={0.08}
+                  max={0.35}
+                  onChange={(hSill) => onUpdateParams({ hSill })}
+                />
+              )}
+
+              <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={params.hasWallRustication}
+                  onChange={(e) => onUpdateParams({ hasWallRustication: e.target.checked })}
+                  className="accent-[#9A3412]"
+                />
+                <span>Стена с рустовкой (N4, S. 17: окно = 7–8 рядов руста)</span>
+              </label>
             </div>
 
             <WhyBlock
               status={summary.windowCheck.rangeCheck.status}
+              sourceStatus="explicit-verified"
               formula="1.5w ≤ h ≤ 2w"
               page="S. 6"
               explanation={summary.windowCheck.rangeCheck.explanation}
@@ -1085,12 +1579,33 @@ export function CalculatorModules({
             />
             <WhyBlock
               status={summary.windowCheck.diagCheck.status}
+              sourceStatus={summary.windowCheck.diagCheck.sourceStatus}
               formula="d = √(w² + h²); проверка w ≤ d/2"
               page="S. 7"
-              isHeuristic={summary.windowCheck.diagCheck.status === 'approx'}
+              isHeuristic={summary.windowCheck.diagCheck.sourceStatus === 'heuristic'}
               explanation={`${summary.windowCheck.diagCheck.explanation} Ближайшее приближение золотого сечения: ${summary.windowCheck.nearestApprox.spec.label}.`}
               onOpenBookPage={onOpenBookPage}
             />
+            {params.withFraming && (
+              <WhyBlock
+                status={summary.sillPlateCheck.status}
+                sourceStatus={summary.sillPlateCheck.sourceStatus}
+                formula={summary.sillPlateCheck.formula}
+                page={summary.sillPlateCheck.page}
+                explanation={summary.sillPlateCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+            )}
+            {params.hasWallRustication && (
+              <WhyBlock
+                status={summary.windowRowsCheck.status}
+                sourceStatus={summary.windowRowsCheck.sourceStatus}
+                formula={summary.windowRowsCheck.formula}
+                page={summary.windowRowsCheck.page}
+                explanation={summary.windowRowsCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+            )}
           </div>
         )}
 
@@ -1170,11 +1685,64 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.cornerCheck.status}
+              sourceStatus={summary.cornerCheck.sourceStatus}
               formula={summary.cornerCheck.formula}
               page={summary.cornerCheck.page}
               explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
               onOpenBookPage={onOpenBookPage}
             />
+
+            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+              <h4 className="font-display text-base font-medium text-[#1C1917]">
+                Угловая рустовка и отступ угла (N5–N6, S. 12, 17)
+              </h4>
+              <MeterControl
+                id="calc-corner-rust-rows"
+                label="Число рядов угловой рустовки (N5, нечётное)"
+                value={params.cornerRustRows}
+                min={3}
+                max={15}
+                step={1}
+                unit="ряд."
+                onChange={(val) => onUpdateParams({ cornerRustRows: Math.max(1, Math.round(val)) })}
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <MeterControl
+                  id="calc-corner-m"
+                  label="Угловой отступ M (рис. 7)"
+                  value={params.cornerOffsetM}
+                  min={0.5}
+                  max={5.0}
+                  step={0.05}
+                  onChange={(cornerOffsetM) => onUpdateParams({ cornerOffsetM })}
+                />
+                <MeterControl
+                  id="calc-upper-n"
+                  label="Высота верхнего этажа N (рис. 7)"
+                  value={params.upperStoryHeightN}
+                  min={2.2}
+                  max={5.5}
+                  step={0.05}
+                  onChange={(upperStoryHeightN) => onUpdateParams({ upperStoryHeightN })}
+                />
+              </div>
+              <WhyBlock
+                status={summary.cornerRustRowsCheck.status}
+                sourceStatus={summary.cornerRustRowsCheck.sourceStatus}
+                formula={summary.cornerRustRowsCheck.formula}
+                page={summary.cornerRustRowsCheck.page}
+                explanation={summary.cornerRustRowsCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+              <WhyBlock
+                status={summary.cornerOffsetCheck.status}
+                sourceStatus={summary.cornerOffsetCheck.sourceStatus}
+                formula={summary.cornerOffsetCheck.formula}
+                page={summary.cornerOffsetCheck.page}
+                explanation={summary.cornerOffsetCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+              />
+            </div>
           </div>
         )}
 
@@ -1428,11 +1996,119 @@ export function CalculatorModules({
 
             <WhyBlock
               status={summary.pilasterCheck.status}
+              sourceStatus="explicit-verified"
               formula={summary.pilasterCheck.formula}
               page={summary.pilasterCheck.page}
               explanation={`${summary.pilasterCheck.explanation} ${summary.pilasterCheck.baseCapitalNote}`}
               onOpenBookPage={onOpenBookPage}
             />
+
+            {/* N18–N19 Многоярусное применение пилястр (P2) */}
+            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2.5 text-xs">
+              <span className="block font-mono text-[11px] uppercase tracking-wider text-[#78716C]">
+                Многоярусное применение пилястр (N18–N19, S. 12–13)
+              </span>
+              <label className="flex items-center gap-2 text-[#1C1917] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={params.pilasterAdjacentSameHeight}
+                  onChange={(e) =>
+                    onUpdateParams({ pilasterAdjacentSameHeight: e.target.checked })
+                  }
+                  className="accent-[#9A3412]"
+                />
+                <span>Повторение ордера в смежных этажах близкой высоты (N18)</span>
+              </label>
+              {params.pilasterAdjacentSameHeight && (
+                <MeterControl
+                  id="calc-pil-diff-pct"
+                  label="Разница высот смежных этажей ΔH (UX-порог ≤10%)"
+                  value={params.pilasterHeightDiffPct * 100}
+                  min={0}
+                  max={35}
+                  step={1}
+                  unit="%"
+                  onChange={(pct) => onUpdateParams({ pilasterHeightDiffPct: pct / 100 })}
+                />
+              )}
+              <label className="flex items-center gap-2 text-[#1C1917] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={params.pilastersOnlyOnUpperFloor}
+                  onChange={(e) =>
+                    onUpdateParams({ pilastersOnlyOnUpperFloor: e.target.checked })
+                  }
+                  className="accent-[#9A3412]"
+                />
+                <span>Пилястры применены только на верхнем этаже (N19, нежелательно)</span>
+              </label>
+            </div>
+
+            {expertMode ? (
+              <div className="p-3 border border-[#D6CEBE] bg-[#FBF9F5] space-y-3">
+                <span className="block font-mono text-[11px] uppercase tracking-wider text-[#9A3412]">
+                  Экспертные проверки ордера P3 (N20–N22, S. 12–13)
+                </span>
+                <MeterControl
+                  id="calc-wp-wall-pier"
+                  label="Ширина стенового простенка W_стены (N20: W_p < W_стены)"
+                  value={params.wpWallPier}
+                  min={0.3}
+                  max={2.4}
+                  onChange={(wpWallPier) => onUpdateParams({ wpWallPier })}
+                />
+                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.hasPairedPilasters}
+                    onChange={(e) => onUpdateParams({ hasPairedPilasters: e.target.checked })}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Спаренные пилястры (N21: просвет 0.2·W_p … W_p)</span>
+                </label>
+                {params.hasPairedPilasters && (
+                  <MeterControl
+                    id="calc-paired-gap"
+                    label="Просвет между спаренными пилястрами"
+                    value={params.pairedPilastersGap}
+                    min={0.05}
+                    max={1.2}
+                    onChange={(pairedPilastersGap) => onUpdateParams({ pairedPilastersGap })}
+                  />
+                )}
+                <div className="space-y-1">
+                  <span className="block text-[11px] font-mono text-[#78716C]">
+                    Тип пристенной колонны (N22, S. 12):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        { id: 'none', label: 'Только пилястр' },
+                        { id: 'half_column', label: 'Полуколонна (0.5d)' },
+                        { id: 'three_quarter_column', label: '3/4-колонна (неудобно)' },
+                      ] as { id: ColumnProfileType; label: string }[]
+                    ).map((cp) => (
+                      <button
+                        key={cp.id}
+                        type="button"
+                        onClick={() => onUpdateParams({ columnProfileType: cp.id })}
+                        className={`px-2 py-1 text-[11px] border ${
+                          params.columnProfileType === cp.id
+                            ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                        }`}
+                      >
+                        {cp.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="font-mono text-[11px] text-[#78716C]">
+                Доп. проверки ордера N20–N22 доступны при включении «Эксперт P3».
+              </p>
+            )}
           </div>
         )}
 
@@ -1565,15 +2241,14 @@ export function CalculatorModules({
                 </div>
               </div>
 
-              <MeterControl
-                id="calc-total-height"
-                label="Общая высота здания H_total"
-                value={params.totalHeight}
-                min={4.0}
-                max={24.0}
-                step={0.1}
-                onChange={(totalHeight) => onUpdateParams({ totalHeight })}
-              />
+              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5] font-mono text-xs flex flex-wrap justify-between gap-2">
+                <span>
+                  H_зд (по этажам): <strong>{formatMeters(summary.derivedGeometry.totalHeight, 2)} м</strong>
+                </span>
+                <span>
+                  1-й эт. полн.: <strong>{formatMeters(summary.derivedGeometry.floor1FullHeight, 2)} м</strong>
+                </span>
+              </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <div className="flex flex-wrap gap-1.5">
@@ -1587,7 +2262,7 @@ export function CalculatorModules({
                       key={mode.id}
                       type="button"
                       onClick={() => {
-                        const res = socleHeight(params.totalHeight, mode.id as SocleMode);
+                        const res = socleHeight(summary.derivedGeometry.totalHeight, mode.id as SocleMode);
                         onUpdateParams({
                           socleMode: mode.id,
                           hSocle: res.h,
@@ -1609,9 +2284,9 @@ export function CalculatorModules({
               <MeterControl
                 id="calc-h-socle"
                 label="Высота цоколя h_socle"
-                value={params.useFullFloorAsSocle ? params.H : params.hSocle}
+                value={params.useFullFloorAsSocle ? summary.derivedGeometry.floor1FullHeight : params.hSocle}
                 min={0.3}
-                max={5.0}
+                max={6.5}
                 disabled={params.useFullFloorAsSocle}
                 note={`Допустимый диапазон по S. 16: ${formatMeters(summary.socleHeightCheck.range[0])}–${formatMeters(summary.socleHeightCheck.range[1])} м.`}
                 onChange={(hSocle) => onUpdateParams({ hSocle })}
@@ -1625,7 +2300,7 @@ export function CalculatorModules({
                   className="accent-[#9A3412] mt-0.5"
                 />
                 <span>
-                  Включить весь 1-й этаж в цоколь (S. 16, 22; H = {formatMeters(params.H)} м) —{' '}
+                  Включить весь 1-й этаж в цоколь (S. 16, 22; полн. высота = {formatMeters(summary.derivedGeometry.floor1FullHeight)} м) —{' '}
                   <strong className={summary.fullFloorSocleCheck.applicable ? 'text-[#15803D]' : 'text-[#B91C1C]'}>
                     {summary.fullFloorSocleCheck.applicable ? 'применимо' : 'недостаточно высоты'}
                   </strong>
@@ -1634,6 +2309,7 @@ export function CalculatorModules({
 
               <WhyBlock
                 status={summary.socleHeightCheck.status}
+                sourceStatus={params.buildingVariant === 'one-story' ? 'gap' : 'explicit-verified'}
                 formula={summary.socleHeightCheck.formula}
                 page={summary.socleHeightCheck.page}
                 explanation={summary.socleHeightCheck.explanation}
@@ -1663,6 +2339,7 @@ export function CalculatorModules({
 
               <WhyBlock
                 status={summary.mainCorniceCheck.status}
+                sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
                 formula={summary.mainCorniceCheck.formula}
                 page={summary.mainCorniceCheck.page}
                 isHeuristic={summary.mainCorniceCheck.isExtrapolated}
@@ -1680,13 +2357,14 @@ export function CalculatorModules({
                 note={
                   summary.gurtCheck.notRequired
                     ? 'Для 1-этажного дома междуэтажный поясной карниз отсутствует (gurt = null).'
-                    : `От высоты этажа H=${formatMeters(params.H)} м (1/12…1/6): ${formatMeters(summary.gurtCheck.range[0])}–${formatMeters(summary.gurtCheck.range[1])} м.`
+                    : `От высоты 1-го этажа ${formatMeters(params.useFloorToFloorForBelt ? summary.derivedGeometry.floor1FloorToFloor : summary.derivedGeometry.H_max)} м (1/12…1/6): ${formatMeters(summary.gurtCheck.range[0])}–${formatMeters(summary.gurtCheck.range[1])} м.`
                 }
                 onChange={(hGurt) => onUpdateParams({ hGurt })}
               />
 
               <WhyBlock
                 status={summary.gurtCheck.status}
+                sourceStatus="explicit-verified"
                 formula={summary.gurtCheck.formula}
                 page={summary.gurtCheck.page}
                 explanation={summary.gurtCheck.explanation}
@@ -1919,15 +2597,43 @@ export function CalculatorModules({
 
             {/* Входные высоты и иерархия */}
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+              <div className="flex flex-wrap gap-4 text-xs text-[#1C1917]">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.useFloorToFloorForBelt}
+                    onChange={(e) => onUpdateParams({ useFloorToFloorForBelt: e.target.checked })}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Высота нижнего этажа от пола до пола (S. 5)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.allowModestFirstFloorForBelt}
+                    onChange={(e) =>
+                      onUpdateParams({ allowModestFirstFloorForBelt: e.target.checked })
+                    }
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Скромный 1-й этаж: мягче порог &lt; h/12 (S. 16)</span>
+                </label>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <MeterControl
-                  id="calc-belt-h-lower"
-                  label="Нижний этаж h_нижн.эт (под лентой)"
-                  value={params.H}
-                  min={2.2}
-                  max={6.5}
-                  onChange={(H) => onUpdateParams({ H })}
-                />
+                <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] font-mono tabular-nums text-xs">
+                  <span className="block text-[10px] text-[#78716C] uppercase">
+                    Нижний этаж ({params.useFloorToFloorForBelt ? 'пол–пол' : 'в свету'})
+                  </span>
+                  <strong>
+                    {formatMeters(
+                      params.useFloorToFloorForBelt
+                        ? summary.derivedGeometry.floor1FloorToFloor
+                        : summary.derivedGeometry.H_max
+                    )}{' '}
+                    м
+                  </strong>
+                </div>
                 <MeterControl
                   id="calc-belt-h-upper"
                   label="Верхний этаж h_верхн.эт (над лентой)"
@@ -1941,7 +2647,14 @@ export function CalculatorModules({
               <div className="grid grid-cols-2 gap-2 font-mono tabular-nums text-xs">
                 <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
                   <span className="block text-[10px] text-[#78716C] uppercase">H_цоколя</span>
-                  <strong>{formatMeters(params.useFullFloorAsSocle ? params.H : params.hSocle)} м</strong>
+                  <strong>
+                    {formatMeters(
+                      params.useFullFloorAsSocle
+                        ? summary.derivedGeometry.floor1FullHeight
+                        : params.hSocle
+                    )}{' '}
+                    м
+                  </strong>
                 </div>
                 <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
                   <span className="block text-[10px] text-[#78716C] uppercase">H_гл. карниза</span>
@@ -1956,9 +2669,14 @@ export function CalculatorModules({
                 <button
                   type="button"
                   onClick={() => {
-                    const effectiveSocleH = params.useFullFloorAsSocle ? params.H : params.hSocle;
+                    const effectiveSocleH = params.useFullFloorAsSocle
+                      ? summary.derivedGeometry.floor1FullHeight
+                      : params.hSocle;
+                    const effectiveLowerH = params.useFloorToFloorForBelt
+                      ? summary.derivedGeometry.floor1FloorToFloor
+                      : summary.derivedGeometry.H_max;
                     const mid = beltHeight({
-                      hLowerFloor: params.H,
+                      hLowerFloor: effectiveLowerH,
                       hUpperFloor: params.beltUpperFloorHeight,
                       H_socle: effectiveSocleH,
                       H_mainCornice: params.hMain,
@@ -1988,6 +2706,7 @@ export function CalculatorModules({
 
               <WhyBlock
                 status={summary.beltHeightCheck.status}
+                sourceStatus="explicit-verified"
                 formula={summary.beltHeightCheck.formula}
                 page={summary.beltHeightCheck.page}
                 explanation={summary.beltHeightCheck.explanation}
@@ -1995,11 +2714,11 @@ export function CalculatorModules({
               />
             </div>
 
-            {/* Режим (связующая / венчающая) и класс 1-4 (B-23) */}
+            {/* Режим (связующая / венчающая) и класс 1-4 (S. 10–11) */}
             <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
               <div>
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
-                  Функция ленты (двойственность, B-1…B-5)
+                  Функция ленты (двойственность, S. 10)
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {(
@@ -2026,7 +2745,7 @@ export function CalculatorModules({
 
               <div className="pt-2 border-t border-[#E5DFD3] space-y-2">
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                  Класс по составу (B-23, S. 11)
+                  Класс по составу профиля (S. 11)
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {BELT_CLASSES.map((cls) => (
@@ -2050,7 +2769,7 @@ export function CalculatorModules({
               </div>
             </div>
 
-            {/* Разбивка венчающей части и консоли (B-15…B-22) */}
+            {/* Разбивка венчающей части и консоли (S. 10–11) */}
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
               <h4 className="font-display text-lg font-medium text-[#1C1917]">
                 Венчающая часть: h_верх : h_низ и консоли (S. 10–11)
@@ -2094,7 +2813,7 @@ export function CalculatorModules({
 
               <div>
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1">
-                  Консоли в венчающей части / фризе (B-21…B-22)
+                  Консоли в венчающей части / фризе (S. 10–11)
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {(
@@ -2133,6 +2852,7 @@ export function CalculatorModules({
 
               <WhyBlock
                 status={summary.beltCrowningCheck.status}
+                sourceStatus="explicit-verified"
                 formula={summary.beltCrowningCheck.formula}
                 page={summary.beltCrowningCheck.page}
                 explanation={summary.beltCrowningCheck.explanation}
@@ -2143,7 +2863,7 @@ export function CalculatorModules({
             {/* Спецслучаи, колоннада, рустовка, ризалиты и 3 схемы 3-этажного */}
             <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
               <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                Опоры, спецслучаи и схемы 3-этажного дома (B-24…B-37)
+                Опоры, спецслучаи и схемы 3-этажного дома (S. 16–17, 22)
               </h4>
 
               <div className="space-y-2 text-xs text-[#1C1917]">
@@ -2154,7 +2874,7 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltHasColumnsBelow: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Колоннада или пилястры в нижнем этаже (B-24…B-26)</span>
+                  <span>Колоннада или пилястры в нижнем этаже (S. 17)</span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -2169,7 +2889,7 @@ export function CalculatorModules({
                     }
                     className="accent-[#9A3412]"
                   />
-                  <span>Лента заменена рустовкой / шовным членением (B-32…B-34)</span>
+                  <span>Лента заменена рустовкой / шовным членением (S. 16)</span>
                 </label>
 
                 {params.beltAsRusticationMode && (
@@ -2210,8 +2930,21 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltIsSillCornice: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Лента = сплошной подоконный карниз (Sohlbankgesimse)</span>
+                  <span>Лента = сплошной подоконный карниз (Sohlbankgesimse, N3)</span>
                 </label>
+
+                {params.beltIsSillCornice && (
+                  <div className="pl-5 pt-1">
+                    <MeterControl
+                      id="calc-belt-sill-h"
+                      label="Высота сплошного подоконного пояса h_подокон (N3 > u)"
+                      value={params.hSillCornice}
+                      min={0.1}
+                      max={0.6}
+                      onChange={(hSillCornice) => onUpdateParams({ hSillCornice })}
+                    />
+                  </div>
+                )}
 
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -2222,7 +2955,7 @@ export function CalculatorModules({
                     }
                     className="accent-[#9A3412]"
                   />
-                  <span>Только подоконный пояс под 2-м этажом (без поясного, S. 22)</span>
+                  <span>Только подоконный пояс под 2-м этажом (редко и проблем., S. 22)</span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-[#E5DFD3]">
@@ -2232,14 +2965,14 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltAlignsWithRecesses: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Совпадает с западающими частями / ризалитами (Rücklagen, B-27)</span>
+                  <span>Совпадает с западающими частями / ризалитами (Rücklagen, S. 22)</span>
                 </label>
               </div>
 
-              {/* Переключатель схем 1–3 для 3-этажного дома (B-37) */}
+              {/* Переключатель схем 1–3 для 3-этажного дома (S. 22) */}
               <div className="pt-2 border-t border-[#E5DFD3] space-y-1.5">
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                  Схемы 1–3 для 3-этажного дома (B-37, S. 22)
+                  Схемы 1–3 для 3-этажного дома (S. 22)
                 </span>
                 <div className="grid grid-cols-1 gap-1.5">
                   {([1, 2, 3] as ThreeStoryBeltSchemeNumber[]).map((num) => {
@@ -2277,6 +3010,7 @@ export function CalculatorModules({
                       ? 'ok'
                       : summary.beltColumnsCheck.status
                   }
+                  sourceStatus="explicit-verified"
                   formula={summary.beltColumnsCheck.formula}
                   page={summary.beltColumnsCheck.page}
                   explanation={summary.beltColumnsCheck.explanation}
@@ -2287,6 +3021,7 @@ export function CalculatorModules({
               {params.beltAsRusticationMode && (
                 <WhyBlock
                   status={summary.beltRusticationCheck.status}
+                  sourceStatus="explicit-verified"
                   formula={summary.beltRusticationCheck.formula}
                   page={summary.beltRusticationCheck.page}
                   explanation={summary.beltRusticationCheck.explanation}
@@ -2294,11 +3029,22 @@ export function CalculatorModules({
                 />
               )}
 
+              {params.beltIsSillCornice && (
+                <WhyBlock
+                  status={summary.sillCorniceCheck.status}
+                  sourceStatus={summary.sillCorniceCheck.sourceStatus}
+                  formula={summary.sillCorniceCheck.formula}
+                  page={summary.sillCorniceCheck.page}
+                  explanation={summary.sillCorniceCheck.explanation}
+                  onOpenBookPage={onOpenBookPage}
+                />
+              )}
+
               <WhyBlock
                 status={summary.beltSpecialCheck.status}
+                sourceStatus="explicit-verified"
                 formula={summary.beltSpecialCheck.formula}
                 page={summary.beltSpecialCheck.page}
-                isHeuristic={params.beltIsSillCornice}
                 explanation={summary.beltSpecialCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
               />
@@ -2311,7 +3057,7 @@ export function CalculatorModules({
                   Чего в источнике нет (межэтажные ленты)
                 </h4>
                 <span className="font-mono text-[11px] text-[#9A3412]">
-                  не из источника / экстраполяция (6)
+                  не из источника / экстраполяция ({BELT_TEXT_GAPS.length})
                 </span>
               </div>
               <div className="divide-y divide-[#E5DFD3] border-t border-[#E5DFD3]">
@@ -2337,7 +3083,7 @@ export function CalculatorModules({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                  4.8. Сводка проверок фасада
+                  4.9. Сводка проверок фасада
                 </h3>
                 <p className="mt-1 text-xs text-[#57534E] font-mono tabular-nums">
                   OK: {summary.okCount} · Приближ.: {summary.approxCount} · Нарушения: {summary.violationCount}
@@ -2373,6 +3119,11 @@ export function CalculatorModules({
                   </div>
                   <p className="font-mono text-[11px] text-[#44403C] tabular-nums">
                     {item.valueText} · <span className="text-[#78716C]">{item.formula}</span>
+                  </p>
+                  <p className="font-mono text-[10px] text-[#78716C]">
+                    {SOURCE_STATUS_LABELS[item.sourceStatus]}
+                    {item.priority ? ` · ${item.priority}` : ''}
+                    {item.isExpertOnly ? ' (Экспертный режим)' : ''}
                   </p>
                   <p className="text-xs text-[#57534E] leading-relaxed">{item.explanation}</p>
                 </div>

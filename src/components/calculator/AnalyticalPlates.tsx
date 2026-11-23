@@ -778,7 +778,9 @@ function SocleHierarchyPlate({
   params: FacadeParameters;
   summary: FacadeSummary;
 }) {
-  const effectiveSocleH = params.useFullFloorAsSocle ? params.H : params.hSocle;
+  const effectiveSocleH = params.useFullFloorAsSocle
+    ? summary.derivedGeometry.floor1FullHeight
+    : params.hSocle;
   const { fuss, rumpf, deck } = summary.threePartSocleResult;
   const totalParts = Math.max(0.01, fuss + rumpf + deck);
   const { n, rowHeight, oddPreferred } = summary.rusticationCheck;
@@ -989,7 +991,7 @@ function SocleHierarchyPlate({
           <div className="py-1.5 flex justify-between">
             <dt className="text-[#78716C]">h_socle / H_total:</dt>
             <dd className="font-medium text-[#1C1917]">
-              {(effectiveSocleH / Math.max(0.01, params.totalHeight) * 100).toFixed(1)} % (1/{formatMeters(params.totalHeight / Math.max(0.01, effectiveSocleH), 1)})
+              {(effectiveSocleH / Math.max(0.01, summary.derivedGeometry.totalHeight) * 100).toFixed(1)} % (1/{formatMeters(summary.derivedGeometry.totalHeight / Math.max(0.01, effectiveSocleH), 1)})
             </dd>
           </div>
           <div className="py-1.5 flex justify-between">
@@ -1013,7 +1015,7 @@ function SocleHierarchyPlate({
   );
 }
 
-// 5.7 Разрез межэтажной ленты (Gurtgesims, B-1…B-37)
+// 5.7 Разрез межэтажной ленты (Gurtgesims, S. 10–11, 16–17, 22)
 function BeltProfilePlate({
   params,
   summary,
@@ -1091,7 +1093,7 @@ function BeltProfilePlate({
             fontFamily="IBM Plex Mono, monospace"
             fill="#57534E"
           >
-            Нижн. этаж ({formatMeters(params.H, 2)}м)
+            Нижн. этаж ({formatMeters(params.useFloorToFloorForBelt ? summary.derivedGeometry.floor1FloorToFloor : summary.derivedGeometry.H_max, 2)}м)
           </text>
 
           {/* Режим замены рустовкой */}
@@ -1176,8 +1178,8 @@ function BeltProfilePlate({
                 fill="#57534E"
               >
                 {params.beltOnlySillUnderSecond
-                  ? '✕ Только подоконник под 2 эт. запрещён (S. 22)'
-                  : 'Допустимо в 3-эт. (схема 3) или схеме B (S. 22–23)'}
+                  ? '▲ Только подоконник под 2 эт. (редко и проблем., S. 22)'
+                  : 'Допустимо в 3-эт. (схема 3) или схеме 5-эт. дома (S. 22–23)'}
               </text>
             </g>
           ) : (
@@ -1402,7 +1404,7 @@ function BeltProfilePlate({
           <div className="py-1.5 flex justify-between gap-2">
             <dt className="text-[#78716C]">Иерархия S. 16:</dt>
             <dd className="font-medium text-[#1C1917]">
-              {formatMeters(params.hGurt, 2)} &lt; min({formatMeters(params.hMain, 2)}, {formatMeters(params.useFullFloorAsSocle ? params.H : params.hSocle, 2)})
+              {formatMeters(params.hGurt, 2)} &lt; min({formatMeters(params.hMain, 2)}, {formatMeters(params.useFullFloorAsSocle ? summary.derivedGeometry.floor1FullHeight : params.hSocle, 2)})
             </dd>
           </div>
         </dl>

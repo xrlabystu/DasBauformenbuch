@@ -9,27 +9,58 @@ import {
   D_from_A,
   H_from_A,
   PHI,
+  RULES_DATA,
   VARIANT_PRESETS,
   VARIANT_TEXT_GAPS,
   abkroepfungPreference,
+  allowedAxisRatio,
   applyBuildingVariantPreset,
   beltAsRustication,
   beltCrowningSplit,
   beltHeight,
   beltWithColumns,
+  buildDefaultLevels,
+  checkAttic,
   checkAxesCount,
+  checkBeltHeight,
   checkBeltSpecialCases,
+  checkCentralRisalitAxes,
+  checkColumnProfileType,
+  checkCornerOffsetVsUpperHeight,
+  checkCornerRusticationRows,
+  checkEqualWidthRisalitWingPediment,
   checkFacadeRectangle,
+  checkFivePartFacade,
+  checkFiveStoryScheme,
+  checkFramingWidth,
   checkGurt,
   checkGurtWithVariant,
   checkMainCornice,
   checkMainCorniceWithVariant,
+  checkMiddleAxesInTwoSideRisalits,
+  checkMiddleVsSideRisalit,
+  checkPairedPilastersGap,
+  checkPedimentChoice,
+  checkPilasterBetweenWindowPairs,
+  checkPilasterNarrowerThanWallPier,
+  checkPilasterRepetition,
+  checkPilastersOnlyUpper,
+  checkRisalitRichness,
+  checkSevenPartFacade,
+  checkSideRisalitWidth,
+  checkSillCorniceHeight,
+  checkSillPlateHeight,
   checkSocleHeight,
   checkVariantAxisRatio,
+  checkWingAxes,
+  checkWingPierWidth,
+  checkWingVsSideRisalit,
+  checkWindowRows,
   check_corner,
   check_offset,
   check_pilaster,
   check_window,
+  computeDerivedGeometry,
   cornice_character,
   cornice_split,
   createDefaultParamsForTypology,
@@ -38,8 +69,12 @@ import {
   framing_from_T,
   framing_from_module,
   fullFloorAsSocle,
+  getAxesGroupingHint,
+  getTypology,
   getVariantPreset,
   h_from_w_ratio,
+  isKnownGoodRatio,
+  mergeStatuses,
   nearest_golden_approx,
   p_corner_from_Dwu,
   p_from_Aw,
@@ -51,6 +86,7 @@ import {
   ratio_from_AH,
   rusticationRows,
   socleHeight,
+  syncLevelsWithH,
   threePartSocle,
   threeStoryBeltScheme,
   w_from_h_ratio,
@@ -473,7 +509,7 @@ describe('Межэтажные карнизы — ленты (Gurtgesims, B-1…
 
   it('beltWithColumns, beltAsRustication, threeStoryBeltScheme, BELT_CLASSES и BELT_TEXT_GAPS', () => {
     assert.equal(BELT_CLASSES.length, 4);
-    assert.equal(BELT_TEXT_GAPS.length, 6);
+    assert.equal(BELT_TEXT_GAPS.length, 4);
 
     assert.equal(beltWithColumns(0.45, 0.9, 1.5, false).status, 'n/a');
     assert.equal(beltWithColumns(0.45, 0.9, 1.5, true).status, 'ok');
@@ -489,11 +525,12 @@ describe('Межэтажные карнизы — ленты (Gurtgesims, B-1…
   });
 
   it('checkBeltSpecialCases и evaluateFacadeSummary: спецслучаи подоконника и отсутствия ленты', () => {
-    const forbiddenSill = checkBeltSpecialCases({
+    const rareSill = checkBeltSpecialCases({
       variant: 'multi-story',
       multiSub: 'three',
       floors: 3,
       floorHeight: 3.6,
+      totalHeight: 12.0,
       isAbsent: true,
       isSillCornice: false,
       onlySillUnderSecond: true,
@@ -502,7 +539,23 @@ describe('Межэтажные карнизы — ленты (Gurtgesims, B-1…
       hasBaseProfile: true,
       threeStoryGurtMode: 'both_gurt',
     });
-    assert.equal(forbiddenSill.status, 'violation');
+    assert.equal(rareSill.status, 'approx');
+
+    const extremeSill = checkBeltSpecialCases({
+      variant: 'two-story',
+      multiSub: 'general',
+      floors: 2,
+      floorHeight: 4.5,
+      totalHeight: 7.5,
+      isAbsent: true,
+      isSillCornice: false,
+      onlySillUnderSecond: true,
+      alignsWithRecesses: true,
+      hasRustication: false,
+      hasBaseProfile: true,
+      threeStoryGurtMode: 'both_gurt',
+    });
+    assert.equal(extremeSill.status, 'violation');
 
     const allowedUnified = checkBeltSpecialCases({
       variant: 'multi-story',
@@ -520,14 +573,231 @@ describe('Межэтажные карнизы — ленты (Gurtgesims, B-1…
     assert.equal(allowedUnified.status, 'ok');
 
     const base = createDefaultParamsForTypology('urban_house');
-    const summaryWithViolation = evaluateFacadeSummary({
+    const summaryWithApproxSill = evaluateFacadeSummary({
       ...base,
       beltOnlySillUnderSecond: true,
     });
-    assert.equal(summaryWithViolation.beltSpecialCheck.status, 'violation');
-    assert.ok(summaryWithViolation.violationCount >= 1);
+    assert.equal(summaryWithApproxSill.beltSpecialCheck.status, 'approx');
+    assert.ok(summaryWithApproxSill.approxCount >= 1);
   });
 });
 
+describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 12–23 (N1–N29)', () => {
+  it('1. P0-1: checkVariantAxisRatio зависит от типологии (rich_columnar 1:2, palace 5:6)', () => {
+    const colRange = allowedAxisRatio('rich_columnar', 'multi-story', 'general');
+    assert.equal(colRange.sourceStatus, 'explicit-verified');
+    assertClose(colRange.range[0], 0.45);
+    assertClose(colRange.range[1], 0.6);
 
+    assert.equal(
+      checkVariantAxisRatio(2.0, 4.0, 'multi-story', 'general', 0.03, 'rich_columnar').status,
+      'ok'
+    );
+    assert.equal(
+      checkVariantAxisRatio(3.4, 4.0, 'multi-story', 'general', 0.03, 'palace').status,
+      'ok'
+    );
+    assert.equal(
+      checkVariantAxisRatio(3.9, 4.0, 'multi-story', 'three', 0.03, 'urban_house').status,
+      'violation'
+    );
+  });
 
+  it('2. P0-2: check_window 5:8 не violation, 3:5 с допуском 7% — approx, 1:2.1 — violation', () => {
+    assert.equal(isKnownGoodRatio(1.0, 1.6), true);
+    const w58 = check_window(1.0, 1.6);
+    assert.notEqual(w58.status, 'violation');
+    assert.equal(w58.status, 'approx');
+
+    const w35 = check_window(1.0, h_from_w_ratio(1.0, 3, 5));
+    assert.equal(w35.status, 'approx');
+
+    const wBad = check_window(1.0, 2.1);
+    assert.equal(wBad.status, 'violation');
+  });
+
+  it('3. P0-3: rich_columnar отменяет правило p >= w (S. 5)', () => {
+    const noFrameCol = p_from_Aw(2.0, 1.2, 'rich_columnar');
+    assert.equal(noFrameCol.status, 'ok');
+    const withFrameCol = pc_from_Awu(2.2, 1.1, 0.2, 'rich_columnar');
+    assert.equal(withFrameCol.status, 'ok');
+
+    // Для обычного городского дома это нарушение
+    assert.equal(p_from_Aw(2.0, 1.2, 'urban_house').status, 'violation');
+  });
+
+  it('4. P0-4: palace в typologies имеет диапазон [5/6, 1.0]', () => {
+    const palace = getTypology('palace');
+    assertClose(palace.minRatioAH, 5 / 6);
+    assertClose(palace.maxRatioAH, 1.0);
+    assert.equal(palace.recommendedAH, '5:6 … 1:1');
+  });
+
+  it('5. P0-5: beltOnlySillUnderSecond — approx (S. 22), violation только при > 0.55 H_total', () => {
+    const resNormal = checkBeltSpecialCases({
+      variant: 'multi-story',
+      multiSub: 'three',
+      floors: 3,
+      floorHeight: 3.6,
+      totalHeight: 12.0,
+      isAbsent: true,
+      isSillCornice: false,
+      onlySillUnderSecond: true,
+      alignsWithRecesses: true,
+      hasRustication: false,
+      hasBaseProfile: true,
+      threeStoryGurtMode: 'both_gurt',
+    });
+    assert.equal(resNormal.status, 'approx');
+
+    const resExtreme = checkBeltSpecialCases({
+      variant: 'two-story',
+      multiSub: 'general',
+      floors: 2,
+      floorHeight: 5.0,
+      totalHeight: 8.5,
+      isAbsent: true,
+      isSillCornice: false,
+      onlySillUnderSecond: true,
+      alignsWithRecesses: true,
+      hasRustication: false,
+      hasBaseProfile: true,
+      threeStoryGurtMode: 'both_gurt',
+    });
+    assert.equal(resExtreme.status, 'violation');
+  });
+
+  it('6. P0-6: поэтажная модель Levels и fullFloorAsSocle без эвристики H * 0.96', () => {
+    const levels = buildDefaultLevels(3, 4.0, 1.35);
+    const dg = computeDerivedGeometry(levels, 3.2, 2.56, 3, 1.0);
+    assertClose(dg.H_max, 4.0);
+    assertClose(dg.floor1FullHeight, 1.35 + 4.35);
+    assertClose(dg.totalHeight, dg.wallTopElevation + 1.0);
+
+    const synced = syncLevelsWithH(levels, 3.6);
+    assertClose(synced.floors[0].clearHeight ?? 0, 3.6);
+
+    const miethaus = createDefaultParamsForTypology('miethaus');
+    const summary = evaluateFacadeSummary(miethaus);
+    assert.equal(summary.derivedGeometry.usesManualTotalHeight, false);
+    assert.ok(summary.socleHeightCheck.h > miethaus.H);
+  });
+
+  it('7. P0-7: согласованность числа правил в RULES_DATA и helper-функций §5', () => {
+    assert.equal(RULES_DATA.rules.length, 41);
+    assert.equal(mergeStatuses('ok', 'approx', 'ok'), 'approx');
+    assert.equal(mergeStatuses('approx', 'violation'), 'violation');
+    const unifiedBelt = checkBeltHeight(0.45, 4.0, 1.8, 0.9, { allowModestLowerFloor: false });
+    assert.equal(unifiedBelt.status, 'ok');
+  });
+
+  it('8. P1-N1: ширина наличника u ∈ [w/6, w/5]', () => {
+    assert.equal(checkFramingWidth(0.22, 1.2).status, 'ok');
+    assert.equal(checkFramingWidth(0.18, 1.2).status, 'approx');
+    assert.equal(checkFramingWidth(0.32, 1.2).status, 'approx');
+  });
+
+  it('9. P1-N2: подоконная плита h_sill ∈ [w/8, w/7], w/6 — approx, вне пределов — violation', () => {
+    assert.equal(checkSillPlateHeight(0.16, 1.2).status, 'ok');
+    assert.equal(checkSillPlateHeight(0.2, 1.2).status, 'approx');
+    assert.equal(checkSillPlateHeight(0.08, 1.2).status, 'violation');
+    assert.equal(checkSillPlateHeight(0.35, 1.2).status, 'violation');
+  });
+
+  it('10. P1-N3: сплошной подоконный пояс > u', () => {
+    assert.equal(checkSillCorniceHeight(0.26, 0.2).status, 'ok');
+    assert.equal(checkSillCorniceHeight(0.18, 0.2).status, 'approx');
+  });
+
+  it('11. P1-N27/N28: 5-этажные схемы standard vs rich_1_2_unified', () => {
+    assert.equal(checkFiveStoryScheme('standard', 5, 1.2, 20.0, 1.0).status, 'ok');
+    assert.equal(checkFiveStoryScheme('rich_1_2_unified', 5, 1.2, 20.0, 1.2).status, 'ok');
+    assert.equal(checkFiveStoryScheme('rich_1_2_unified', 5, 1.6, 20.0, 1.0).status, 'approx');
+  });
+
+  it('12. P2-N4/N5: кратность окна 7–8 рядам руста и нечётность угловой рустовки', () => {
+    assert.equal(checkWindowRows(2.4, 0.32, true).status, 'ok');
+    assert.equal(checkWindowRows(1.8, 0.35, true).status, 'approx');
+    assert.equal(checkCornerRusticationRows(7).status, 'ok');
+    assert.equal(checkCornerRusticationRows(6).status, 'approx');
+  });
+
+  it('13. P2-N6: угловой отступ M ≤ N (рис. 7, UX-эвристика)', () => {
+    assert.equal(checkCornerOffsetVsUpperHeight(2.6, 3.2).status, 'ok');
+    assert.equal(checkCornerOffsetVsUpperHeight(3.6, 3.2).status, 'approx');
+  });
+
+  it('14. P2-N8/N9/N10/N13: крылья и ризалиты (ширина и простенки)', () => {
+    assert.equal(checkWingPierWidth(1.2, 1.5).status, 'ok');
+    assert.equal(checkWingPierWidth(1.7, 1.5).status, 'violation');
+    assert.equal(checkSideRisalitWidth(3.0, 5.0).status, 'ok');
+    assert.equal(checkSideRisalitWidth(4.0, 5.0).status, 'violation');
+    assert.equal(checkWingVsSideRisalit(6.5, 3.0).status, 'ok');
+    assert.equal(checkWingVsSideRisalit(2.5, 3.0).status, 'violation');
+    assert.equal(checkMiddleVsSideRisalit(5.0, 3.0).status, 'ok');
+  });
+
+  it('15. P2-N11/N12: 5-частная и 7-частная композиция 1.5:3:5:3:1.5', () => {
+    assert.equal(checkFivePartFacade(6.0, 3.5, 4.5, 3, 2, 1).status, 'ok');
+    assert.equal(checkFivePartFacade(3.5, 4.0, 4.5, 3, 2, 1).status, 'violation');
+    assert.equal(checkSevenPartFacade([1.5, 3.0, 5.0, 3.0, 1.5]).status, 'ok');
+    assert.equal(checkSevenPartFacade([2.5, 3.0, 4.0, 3.0, 2.5]).status, 'approx');
+  });
+
+  it('16. P2-N14..N17: оси ризалита, запрет пилястра между парой окон и 2 окна середины', () => {
+    assert.equal(checkCentralRisalitAxes(3).status, 'ok');
+    assert.equal(checkCentralRisalitAxes(2).status, 'approx');
+    assert.equal(checkWingAxes(1).status, 'ok');
+    assert.equal(checkPilasterBetweenWindowPairs(false).status, 'ok');
+    assert.equal(checkPilasterBetweenWindowPairs(true).status, 'violation');
+    assert.equal(checkMiddleAxesInTwoSideRisalits(3).status, 'ok');
+    assert.equal(checkMiddleAxesInTwoSideRisalits(2).status, 'violation');
+  });
+
+  it('17. P2-N18/N19: многоярусные пилястры', () => {
+    assert.equal(checkPilasterRepetition(true, 0.2).status, 'ok');
+    assert.equal(checkPilasterRepetition(true, 0.05).status, 'approx');
+    assert.equal(checkPilastersOnlyUpper(false).status, 'ok');
+    assert.equal(checkPilastersOnlyUpper(true).status, 'approx');
+  });
+
+  it('18. P2-N23/N25: аттик и богатство отделки ризалита vs крыла', () => {
+    assert.equal(checkAttic(true, true, true).status, 'ok');
+    assert.equal(checkAttic(true, true, false).status, 'approx');
+    assert.equal(checkAttic(true, false, true).status, 'violation');
+    assert.equal(checkRisalitRichness(4, 2, false).status, 'ok');
+    assert.equal(checkRisalitRichness(1, 3, false).status, 'violation');
+    assert.equal(checkRisalitRichness(1, 3, true).status, 'approx');
+  });
+
+  it('19. N7 и entrancePosition: чётные оси при центральном входе — approx, при боковом во встроенном — ok', () => {
+    const centerEven = checkAxesCount(4, 'multi-story', 'three', true, 'center');
+    assert.equal(centerEven.status, 'approx');
+    const rightEmbedded = checkAxesCount(4, 'multi-story', 'three', true, 'right');
+    assert.equal(rightEmbedded.status, 'ok');
+    assert.ok(checkAxesCount(6, 'two-story', 'general', false, 'center').explanation.includes('2+2+2'));
+    assert.ok(getAxesGroupingHint(6).length >= 10);
+  });
+
+  it('20. P3-N20..N22: экспертные проверки пилястра и колонн', () => {
+    assert.equal(checkPilasterNarrowerThanWallPier(0.45, 0.7).status, 'ok');
+    assert.equal(checkPilasterNarrowerThanWallPier(0.75, 0.7).status, 'violation');
+    assert.equal(checkPairedPilastersGap(0.3, 0.5).status, 'ok');
+    assert.equal(checkPairedPilastersGap(0.05, 0.5).status, 'violation');
+    assert.equal(checkColumnProfileType('three_quarters').status, 'ok');
+    assert.equal(checkColumnProfileType('half').status, 'approx');
+  });
+
+  it('21. P3-N24/N26 и expertMode: фронтон и переключение видимости P3 в evaluateFacadeSummary', () => {
+    assert.equal(checkPedimentChoice('steep', true).status, 'approx');
+    assert.equal(checkPedimentChoice('gentle', true).status, 'ok');
+    assert.equal(checkEqualWidthRisalitWingPediment(4.0, 4.0, false).status, 'approx');
+    assert.equal(checkEqualWidthRisalitWingPediment(4.0, 4.0, true).status, 'ok');
+
+    const base = createDefaultParamsForTypology('urban_house');
+    const stdSummary = evaluateFacadeSummary(base, { expertMode: false });
+    const expSummary = evaluateFacadeSummary(base, { expertMode: true });
+    assert.equal(stdSummary.checks.some((c) => c.isExpertOnly), false);
+    assert.equal(expSummary.checks.some((c) => c.isExpertOnly), true);
+  });
+});
