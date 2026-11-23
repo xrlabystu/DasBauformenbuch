@@ -25,6 +25,7 @@ import {
   projection_console,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveSocleAndPilasterBounds,
   schemeNumberFromGurtMode,
   socleHeight,
   threeStoryBeltScheme,
@@ -2753,6 +2754,26 @@ export function CalculatorModules({
                   {formatMeters(summary.pilasterCheck.v_light_min)}–{formatMeters(summary.pilasterCheck.v_light_max)} м
                 </strong>
               </div>
+            </div>
+
+            <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C] space-y-1">
+              {(() => {
+                const bounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
+                return (
+                  <>
+                    <div className="font-mono text-[11px] text-[#1C1917]">
+                      Отметки пилястр ({params.isMauerpfeiler ? 'без базы' : 'с базой'}):{' '}
+                      {bounds.hasUpperPilasters
+                        ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
+                        : 'скрыты (весь фасад в цоколе)'}
+                    </div>
+                    <p className="text-[11px] text-[#57534E]">
+                      Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
+                      {formatMeters(bounds.socleTopM, 2)} м).
+                    </p>
+                  </>
+                );
+              })()}
             </div>
 
             <WhyBlock

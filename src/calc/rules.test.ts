@@ -86,6 +86,7 @@ import {
   ratio_from_AH,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveSocleAndPilasterBounds,
   rusticationRows,
   socleHeight,
   syncLevelsWithH,
@@ -97,7 +98,7 @@ import {
 import { countLockedParams, filterUnlockedPatch, isParamLocked } from './paramLocks.ts';
 import { RULE_BOOK_EXCERPTS, getExcerptForCheckId } from './ruleBookRefs.ts';
 import { BRAUSEWETTER_PAGES } from '../data/brausewetter_1895.ts';
-import { exportFacadeToDwg } from './dwgExport.ts';
+import { buildFacadeCadDocument, exportFacadeToDwg } from './dwgExport.ts';
 import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
@@ -1017,5 +1018,51 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       (parsedRaised.modelSpace?.entities.count ?? 0) >
         (parsedNoDoor.modelSpace?.entities.count ?? 0)
     );
+  });
+
+  it('26. Весь 1-й этаж в цоколь занимает только 1-й этаж, а низ пилястр (с базой и без) не ниже верха цоколя', () => {
+    const base = createDefaultParamsForTypology('miethaus');
+    const summaryFull = evaluateFacadeSummary(base, { expertMode: true });
+    const fullBounds = resolveSocleAndPilasterBounds(base, summaryFull.derivedGeometry);
+
+    const expectedFloor1Top =
+      Math.max(0.25, base.levels.groundToFloor1) + base.levels.floors[0].floorToFloor;
+    const expectedFloor2Top = expectedFloor1Top + base.levels.floors[1].floorToFloor;
+
+    // 1. При useFullFloorAsSocle=true цоколь заканчивается ровно по верху 1-го этажа, не захватывая 2-й
+    assert.equal(base.useFullFloorAsSocle, true);
+    assertClose(fullBounds.socleTopM, expectedFloor1Top);
+    assert.ok(fullBounds.socleTopM < expectedFloor2Top - 1.0);
+    assert.ok(fullBounds.pilasterBottomM >= fullBounds.socleTopM - 1e-6);
+    assertClose(fullBounds.pilasterBottomM, expectedFloor1Top);
+
+    // 2. С обычным цоколем (hSocle=2.60 > groundToFloor1=0.70), с базой и без базы (Mauerpfeiler)
+    const urban = createDefaultParamsForTypology('urban_house');
+    for (const isMauerpfeiler of [false, true]) {
+      const p = { ...urban, hSocle: 2.6, isMauerpfeiler };
+      const sum = evaluateFacadeSummary(p, { expertMode: true });
+      const bounds = resolveSocleAndPilasterBounds(p, sum.derivedGeometry);
+      assertClose(bounds.socleTopM, 2.6);
+      assert.ok(bounds.pilasterBottomM >= bounds.socleTopM - 1e-6);
+      assertClose(bounds.pilasterBottomM, 2.6);
+
+      // Проверка DWG: все сущности слоя 06_PILASTERS не опускаются ниже верха цоколя (2600 мм)
+      const cad = buildFacadeCadDocument(p, sum);
+      const pilasterEntities = Array.from(cad.modelSpace?.entities ?? []).filter(
+        (ent) => ent.layer?.name === '06_PILASTERS'
+      );
+      assert.ok(pilasterEntities.length > 0);
+      for (const ent of pilasterEntities) {
+        const verts = (ent as { vertices?: Array<{ location: { y: number } }> }).vertices;
+        if (verts) {
+          for (const v of verts) {
+            assert.ok(
+              v.location.y >= 2600 - 1,
+              `Pilaster vertex y=${v.location.y} below socle top 2600mm (isMauerpfeiler=${isMauerpfeiler})`
+            );
+          }
+        }
+      }
+    }
   });
 });

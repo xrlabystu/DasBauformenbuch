@@ -20,6 +20,7 @@ import {
 import {
   formatMeters,
   resolveEntranceGeometry,
+  resolveSocleAndPilasterBounds,
   type FacadeParameters,
   type FacadeSummary,
 } from './rules';
@@ -244,11 +245,8 @@ export function buildFacadeCadDocument(
   const wallHeightM = wallTopM - groundToFloor1;
   const corniceTopM = wallTopM + corniceM;
   const totalHeightM = summary.derivedGeometry.totalHeight;
-  const plinthM = params.useFullFloorAsSocle
-    ? summary.derivedGeometry.floor1FullHeight
-    : Math.min(effectiveSocleH, wallTopM * 0.48);
-
-  const visualSocleTopM = params.useFullFloorAsSocle ? plinthM + floorHeightsM[0] : plinthM;
+  const soclePilasterBounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
+  const visualSocleTopM = soclePilasterBounds.socleTopM;
 
   // 1. Линия земли и основной контур стены фасада
   addLine(doc, layerWalls, -1000, 0, totalWidthM * MM + 1000, 0);
@@ -283,9 +281,13 @@ export function buildFacadeCadDocument(
     }
   }
 
-  // 3. Колоннада нижнего яруса (если включена)
-  if (params.beltHasColumnsBelow && safeFloors >= 2) {
-    const yBot = floorOffsetsM[0] * MM;
+  // 3. Колоннада нижнего яруса (если включена и не ниже верха цоколя)
+  if (
+    params.beltHasColumnsBelow &&
+    safeFloors >= 2 &&
+    floorOffsetsM[1] - Math.max(floorOffsetsM[0], visualSocleTopM) > 0.35
+  ) {
+    const yBot = Math.max(floorOffsetsM[0], visualSocleTopM) * MM;
     const yTop = floorOffsetsM[1] * MM;
     const colH = Math.max(200, yTop - yBot);
     for (let i = 0; i < axesM.length - 1; i++) {
@@ -349,39 +351,44 @@ export function buildFacadeCadDocument(
     });
   }
 
-  // 5. Угловые пилястры / Mauerpfeiler
+  // 5. Угловые пилястры / Mauerpfeiler (низ с базой или без базы не ниже верха цоколя)
   const p_corner = D - safeW / 2 - effectiveU;
   const pilasterW = Math.min(params.Wp, Math.max(0.2, p_corner * 0.72));
-  [0, totalWidthM - pilasterW].forEach((pxStart) => {
-    const capH = params.isMauerpfeiler ? 0 : Math.min(0.45, wallHeightM * 0.08);
-    const baseH = params.isMauerpfeiler ? 0 : Math.min(0.35, wallHeightM * 0.06);
-    addRect(
-      doc,
-      layerPilasters,
-      pxStart * MM,
-      (groundToFloor1 + baseH) * MM,
-      pilasterW * MM,
-      Math.max(0.2, wallHeightM - capH - baseH) * MM
-    );
-    if (!params.isMauerpfeiler) {
+  if (soclePilasterBounds.hasUpperPilasters) {
+    const pilBotM = soclePilasterBounds.pilasterBottomM;
+    const pilTopM = soclePilasterBounds.pilasterTopM;
+    const pilHM = soclePilasterBounds.pilasterHeightM;
+    [0, totalWidthM - pilasterW].forEach((pxStart) => {
+      const capH = params.isMauerpfeiler ? 0 : Math.min(0.45, pilHM * 0.08);
+      const baseH = params.isMauerpfeiler ? 0 : Math.min(0.35, pilHM * 0.06);
       addRect(
         doc,
         layerPilasters,
-        pxStart * MM - 40,
-        (wallTopM - capH) * MM,
-        pilasterW * MM + 80,
-        capH * MM
+        pxStart * MM,
+        (pilBotM + baseH) * MM,
+        pilasterW * MM,
+        Math.max(0.1, pilHM - capH - baseH) * MM
       );
-      addRect(
-        doc,
-        layerPilasters,
-        pxStart * MM - 40,
-        groundToFloor1 * MM,
-        pilasterW * MM + 80,
-        baseH * MM
-      );
-    }
-  });
+      if (!params.isMauerpfeiler) {
+        addRect(
+          doc,
+          layerPilasters,
+          pxStart * MM - 40,
+          (pilTopM - capH) * MM,
+          pilasterW * MM + 80,
+          capH * MM
+        );
+        addRect(
+          doc,
+          layerPilasters,
+          pxStart * MM - 40,
+          pilBotM * MM,
+          pilasterW * MM + 80,
+          baseH * MM
+        );
+      }
+    });
+  }
 
   // 6. Главный карниз (Hauptgesims) — строго от wallTopM до corniceTopM
   const boostMult =

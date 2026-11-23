@@ -2298,6 +2298,59 @@ export function resolveEntranceGeometry(
   };
 }
 
+export interface VerticalSocleAndPilasterBounds {
+  socleTopM: number;
+  pilasterBottomM: number;
+  pilasterTopM: number;
+  pilasterHeightM: number;
+  hasUpperPilasters: boolean;
+}
+
+/**
+ * Единая вертикальная привязка верха цоколя и низа пилястр (S. 12–13, 16, 22):
+ * - при включении всего 1-го этажа в цоколь верх цоколя равен верху 1-го этажа (не захватывая 2-й этаж);
+ * - низ пилястр (с базой или без базы) не может быть ниже верха цоколя.
+ */
+export function resolveSocleAndPilasterBounds(
+  params: FacadeParameters,
+  derivedGeometry: DerivedGeometry
+): VerticalSocleAndPilasterBounds {
+  const groundToFloor1 = Math.max(0.25, params.levels.groundToFloor1);
+  const floorHeights = params.levels.floors
+    .slice(0, 6)
+    .map((fl) => Math.max(1.8, fl.floorToFloor));
+  const floorOffsets: number[] = [];
+  let cursor = groundToFloor1;
+  for (let i = 0; i < floorHeights.length; i++) {
+    floorOffsets.push(cursor);
+    cursor += floorHeights[i];
+  }
+  const wallTopM = cursor;
+  const floor1TopM = floorOffsets.length >= 2 ? floorOffsets[1] : wallTopM;
+  const effectiveSocleH = params.useFullFloorAsSocle
+    ? Math.max(derivedGeometry.floor1FullHeight, floor1TopM)
+    : Math.max(0.25, params.hSocle);
+  const socleTopM = params.useFullFloorAsSocle
+    ? floor1TopM
+    : Math.min(effectiveSocleH, wallTopM * 0.48);
+
+  const upperFloorStart =
+    params.pilastersOnlyOnUpperFloor && floorOffsets.length >= 2
+      ? floorOffsets[floorOffsets.length - 1]
+      : socleTopM;
+  const pilasterBottomM = Math.max(socleTopM, upperFloorStart);
+  const pilasterTopM = wallTopM;
+  const pilasterHeightM = Math.max(0, pilasterTopM - pilasterBottomM);
+
+  return {
+    socleTopM,
+    pilasterBottomM,
+    pilasterTopM,
+    pilasterHeightM,
+    hasUpperPilasters: pilasterHeightM > 0.15,
+  };
+}
+
 // ==================================================
 // 3.12. Межэтажные карнизы / ленты (Gurtgesims, S. 10–11, 16–17, 22)
 // ==================================================

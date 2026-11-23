@@ -23,6 +23,7 @@ import {
   formatMeters,
   mergeStatuses,
   resolveEntranceGeometry,
+  resolveSocleAndPilasterBounds,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
@@ -592,14 +593,15 @@ export function FacadeSvg({
     );
   };
 
-  // Доли трёхчастного цоколя
+  // Доли трёхчастного цоколя и единая привязка низа пилястр к верху цоколя
   const partsSum = Math.max(
     0.01,
     summary.threePartSocleResult.fuss +
       summary.threePartSocleResult.rumpf +
       summary.threePartSocleResult.deck
   );
-  const visualSocleTopM = params.useFullFloorAsSocle ? plinthM + floorHeightsM[0] : plinthM;
+  const soclePilasterBounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
+  const visualSocleTopM = soclePilasterBounds.socleTopM;
   const plinthPxH = visualSocleTopM * scale;
   const deckPxH = Math.max(3, (summary.threePartSocleResult.deck / partsSum) * plinthPxH);
   const fussPxH = Math.max(3, (summary.threePartSocleResult.fuss / partsSum) * plinthPxH);
@@ -921,11 +923,13 @@ export function FacadeSvg({
           )}
 
           {/* Lower-floor colonnade / pilasters hint when beltHasColumnsBelow is enabled (S. 17) */}
-          {params.beltHasColumnsBelow && safeFloors >= 2 && (
+          {params.beltHasColumnsBelow &&
+            safeFloors >= 2 &&
+            floorOffsetsM[1] - Math.max(floorOffsetsM[0], visualSocleTopM) > 0.35 && (
             <g opacity={0.75}>
               {axesM.slice(0, -1).map((axX, idx) => {
                 const colX = xM(axX + safeA / 2);
-                const yBot = yFromGroundM(floorOffsetsM[0]);
+                const yBot = yFromGroundM(Math.max(floorOffsetsM[0], visualSocleTopM));
                 const yTop = yFromGroundM(floorOffsetsM[1]);
                 return (
                   <g key={`col-hint-${idx}`}>
@@ -1187,11 +1191,13 @@ export function FacadeSvg({
               );
             })}
 
-          {/* Corner Pilasters / Mauerpfeiler (hidden only if optional 1-story & user turned Mauerpfeiler off? keep visible by pilaster props) */}
-          {[0, totalWidthM - pilasterW].map((pxStart, idx) => {
+          {/* Corner Pilasters / Mauerpfeiler (низ пилястр не может быть ниже верха цоколя) */}
+          {soclePilasterBounds.hasUpperPilasters &&
+            [0, totalWidthM - pilasterW].map((pxStart, idx) => {
             const xLeft = xM(pxStart);
-            const yTop = yFromGroundM(wallTopM);
-            const hPx = wallHeightM * scale;
+            const yTop = yFromGroundM(soclePilasterBounds.pilasterTopM);
+            const yBot = yFromGroundM(soclePilasterBounds.pilasterBottomM);
+            const hPx = Math.max(4, yBot - yTop);
             const capH = params.isMauerpfeiler ? 0 : Math.min(18, hPx * 0.08);
             const baseH = params.isMauerpfeiler ? 0 : Math.min(14, hPx * 0.06);
             const strokeCol =
