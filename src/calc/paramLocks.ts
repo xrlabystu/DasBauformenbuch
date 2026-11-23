@@ -105,5 +105,33 @@ export function filterUnlockedPatch(
     delete nextPatch.H;
   }
 
+  if (locks['entrancePosition']) {
+    delete nextPatch.hasEntrance;
+    delete nextPatch.entrancePlacement;
+    delete nextPatch.entranceAxisIndex;
+  }
+
+  if (locks['entranceTopM']) {
+    const prevTop = (prev.entranceBottomM ?? 0) + (prev.entranceHeightM ?? 2.4);
+    if (!locks['entranceHeightM'] && nextPatch.entranceBottomM !== undefined) {
+      const clampedBottom = Math.min(
+        Math.max(0, nextPatch.entranceBottomM),
+        Math.max(0, prevTop - 1.2)
+      );
+      nextPatch.entranceBottomM = Number(clampedBottom.toFixed(3));
+      nextPatch.entranceHeightM = Number(Math.max(1.2, prevTop - clampedBottom).toFixed(3));
+    } else if (!locks['entranceBottomM'] && nextPatch.entranceHeightM !== undefined) {
+      const clampedH = Math.min(
+        Math.max(1.2, nextPatch.entranceHeightM),
+        Math.max(1.2, prevTop)
+      );
+      nextPatch.entranceHeightM = Number(clampedH.toFixed(3));
+      nextPatch.entranceBottomM = Number(Math.max(0, prevTop - clampedH).toFixed(3));
+    } else {
+      delete nextPatch.entranceBottomM;
+      delete nextPatch.entranceHeightM;
+    }
+  }
+
   return nextPatch;
 }

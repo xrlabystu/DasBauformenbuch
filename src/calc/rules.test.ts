@@ -84,6 +84,8 @@ import {
   projection_45,
   projection_console,
   ratio_from_AH,
+  resolveEntranceGeometry,
+  resolveEntrancePositionFromSettings,
   rusticationRows,
   socleHeight,
   syncLevelsWithH,
@@ -919,5 +921,101 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.ok(parsedDoc.layers?.tryGetValue('05_WINDOWS_DOORS'));
     assert.ok(parsedDoc.layers?.tryGetValue('08_DIMENSIONS'));
     assert.ok((parsedDoc.modelSpace?.entities.count ?? 0) > 25);
+  });
+
+  it('25. Настройки входа (двери): наличие, отметки низа/верха, ширина, высота, середина vs ось и DWG', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const D = D_from_A(base.A, base.k_D);
+
+    // 1. Нет входа на фасаде
+    const noDoorParams = { ...base, hasEntrance: false };
+    const noDoorAxes = Array.from({ length: noDoorParams.axesCount }, (_, i) => D + i * noDoorParams.A);
+    const noDoorWidth = 2 * D + (noDoorParams.axesCount - 1) * noDoorParams.A;
+    const noDoorGeo = resolveEntranceGeometry(noDoorParams, noDoorWidth, noDoorAxes);
+    assert.equal(noDoorGeo.hasDoor, false);
+    assert.equal(resolveEntrancePositionFromSettings(false, 'facade_center', 0, 5), 'none');
+
+    // 2. По середине фасада: нечётное число осей (5) -> совпадает со средней осью (idx 2)
+    const oddGeo = resolveEntranceGeometry(
+      { ...base, axesCount: 5, entrancePlacement: 'facade_center' },
+      2 * D + 4 * base.A,
+      Array.from({ length: 5 }, (_, i) => D + i * base.A)
+    );
+    assert.equal(oddGeo.hasDoor, true);
+    assert.equal(oddGeo.doorAxisIndex, 2);
+    assertClose(oddGeo.doorCenterX, D + 2 * base.A);
+
+    // 3. По середине фасада: чётное число осей (4) -> строго по центру фасада, окна сохраняются (doorAxisIndex === null)
+    const evenWidth = 2 * D + 3 * base.A;
+    const evenAxes = Array.from({ length: 4 }, (_, i) => D + i * base.A);
+    const evenGeo = resolveEntranceGeometry(
+      { ...base, axesCount: 4, entrancePlacement: 'facade_center' },
+      evenWidth,
+      evenAxes
+    );
+    assert.equal(evenGeo.hasDoor, true);
+    assert.equal(evenGeo.doorAxisIndex, null);
+    assertClose(evenGeo.doorCenterX, evenWidth / 2);
+
+    // 4. По конкретной оси окон (Ось 2 -> index 1)
+    const axisGeo = resolveEntranceGeometry(
+      {
+        ...base,
+        axesCount: 4,
+        entrancePlacement: 'axis',
+        entranceAxisIndex: 1,
+        entranceBottomM: 0.9,
+        entranceHeightM: 2.3,
+        entranceWidthM: 1.4,
+      },
+      evenWidth,
+      evenAxes
+    );
+    assert.equal(axisGeo.hasDoor, true);
+    assert.equal(axisGeo.doorAxisIndex, 1);
+    assertClose(axisGeo.doorCenterX, evenAxes[1]);
+    assertClose(axisGeo.doorBottomM, 0.9);
+    assertClose(axisGeo.doorHeightM, 2.3);
+    assertClose(axisGeo.doorTopM, 3.2);
+    assertClose(axisGeo.doorWidthM, 1.4);
+
+    // 5. Связанный замочек на отметке верха двери (entranceTopM)
+    const topLockedState = { ...base, entranceBottomM: 0.6, entranceHeightM: 2.4 }; // top = 3.0
+    const patchMoveBottom = filterUnlockedPatch(
+      topLockedState,
+      { entranceBottomM: 1.0 },
+      { entranceTopM: true }
+    );
+    assertClose(patchMoveBottom.entranceBottomM ?? -1, 1.0);
+    assertClose(patchMoveBottom.entranceHeightM ?? -1, 2.0);
+
+    const patchMoveHeight = filterUnlockedPatch(
+      topLockedState,
+      { entranceHeightM: 2.0 },
+      { entranceTopM: true }
+    );
+    assertClose(patchMoveHeight.entranceHeightM ?? -1, 2.0);
+    assertClose(patchMoveHeight.entranceBottomM ?? -1, 1.0);
+
+    // 6. DWG-экспорт без двери и с приподнятой дверью (ступени крыльца)
+    const noDoorSummary = evaluateFacadeSummary(noDoorParams, { expertMode: true });
+    const noDoorDwg = exportFacadeToDwg(noDoorParams, noDoorSummary);
+    const parsedNoDoor = DwgReader.readFromStream(new Uint8Array(noDoorDwg).buffer);
+
+    const raisedDoorParams = {
+      ...base,
+      axesCount: 4,
+      entrancePlacement: 'facade_center' as const,
+      entranceBottomM: 1.2,
+      entranceHeightM: 2.5,
+      entranceWidthM: 1.4,
+    };
+    const raisedSummary = evaluateFacadeSummary(raisedDoorParams, { expertMode: true });
+    const raisedDwg = exportFacadeToDwg(raisedDoorParams, raisedSummary);
+    const parsedRaised = DwgReader.readFromStream(new Uint8Array(raisedDwg).buffer);
+    assert.ok(
+      (parsedRaised.modelSpace?.entities.count ?? 0) >
+        (parsedNoDoor.modelSpace?.entities.count ?? 0)
+    );
   });
 });

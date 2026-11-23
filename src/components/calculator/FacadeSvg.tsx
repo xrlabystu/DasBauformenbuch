@@ -22,6 +22,7 @@ import {
 import {
   formatMeters,
   mergeStatuses,
+  resolveEntranceGeometry,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
@@ -36,6 +37,7 @@ interface FacadeSvgProps {
   summary: FacadeSummary;
   highlightedElement: FacadeTargetElement | null;
   onSelectElement?: (el: FacadeTargetElement) => void;
+  onSelectEntrance?: () => void;
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }
 
@@ -75,6 +77,7 @@ export function FacadeSvg({
   summary,
   highlightedElement,
   onSelectElement,
+  onSelectEntrance,
   onOpenBookPage,
 }: FacadeSvgProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -531,15 +534,8 @@ export function FacadeSvg({
   const hlPx = Math.max(3, (hlM / corniceM) * totalCornicePx);
   const friezePx = hasCorniceFrieze ? Math.max(2, totalCornicePx - huPx - hlPx) : 0;
 
-  // Позиция входа (N7)
-  const entranceAxisIdx =
-    params.entrancePosition === 'none'
-      ? -1
-      : params.entrancePosition === 'left'
-        ? 0
-        : params.entrancePosition === 'right'
-          ? safeAxesCount - 1
-          : Math.floor(safeAxesCount / 2);
+  // Позиция и геометрия входа (дверного проёма)
+  const entranceGeo = resolveEntranceGeometry(params, totalWidthM, axesM);
 
   // Позиции пилястров по краям
   const pilasterW = Math.min(params.Wp, Math.max(0.2, p_corner * 0.72));
@@ -1338,7 +1334,11 @@ export function FacadeSvg({
                   />
                 )}
                 {floorOffsetsM.map((floorStartM, flIdx) => {
-                  const isEntranceDoor = flIdx === 0 && axIdx === entranceAxisIdx;
+                  const isDoorReplacedWindow =
+                    entranceGeo.hasDoor && flIdx === 0 && axIdx === entranceGeo.doorAxisIndex;
+                  if (isDoorReplacedWindow) {
+                    return null;
+                  }
                   const flH = floorHeightsM[flIdx];
                   const clearH = levelFloors[flIdx]?.clearHeight ?? Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
                   const isTopSmallest =
@@ -1355,59 +1355,6 @@ export function FacadeSvg({
                   const winY = yFromGroundM(winTopThisM);
                   const winWpx = safeW * scale;
                   const winHpx = winHThisFloor * scale;
-
-                  if (isEntranceDoor) {
-                    const doorWpx = Math.max(10, safeW * 0.95 * scale);
-                    const doorX = cx - doorWpx / 2;
-                    const doorTopY = winY;
-                    const doorBottomY = groundY;
-                    return (
-                      <g
-                        key={`door-${axIdx}-${flIdx}`}
-                        className="cursor-pointer"
-                        onClick={() => onSelectElement?.('axenweite')}
-                      >
-                        <rect
-                          x={doorX - 3}
-                          y={doorTopY - 3}
-                          width={doorWpx + 6}
-                          height={Math.max(8, doorBottomY - doorTopY + 3)}
-                          fill="#D6CEBE"
-                          stroke="#292524"
-                          strokeWidth={1.1}
-                        />
-                        <rect
-                          x={doorX}
-                          y={doorTopY}
-                          width={doorWpx}
-                          height={Math.max(8, doorBottomY - doorTopY)}
-                          fill="#6D4C3D"
-                          fillOpacity={0.82}
-                          stroke="#1C1917"
-                          strokeWidth={1}
-                        />
-                        <line
-                          x1={cx}
-                          y1={doorTopY}
-                          x2={cx}
-                          y2={doorBottomY}
-                          stroke="#FBF9F5"
-                          strokeOpacity={0.6}
-                          strokeWidth={0.8}
-                        />
-                        <text
-                          x={cx}
-                          y={doorBottomY + 11}
-                          textAnchor="middle"
-                          fontSize="8"
-                          fontFamily="IBM Plex Mono, monospace"
-                          fill="#9A3412"
-                        >
-                          вход
-                        </text>
-                      </g>
-                    );
-                  }
 
                   const showRichFraming = params.withFraming && flIdx === activeFramingFloor;
                   const uPx = effectiveU * scale;
@@ -1562,6 +1509,91 @@ export function FacadeSvg({
               </g>
             );
           })}
+
+          {/* ENTRANCE DOOR (standalone so both center-of-facade and axis placement work) */}
+          {entranceGeo.hasDoor &&
+            (() => {
+              const doorCx = xM(entranceGeo.doorCenterX);
+              const doorWpx = Math.max(10, entranceGeo.doorWidthM * scale);
+              const doorX = doorCx - doorWpx / 2;
+              const doorTopY = yFromGroundM(entranceGeo.doorTopM);
+              const doorBottomY = yFromGroundM(entranceGeo.doorBottomM);
+              const doorHpx = Math.max(8, doorBottomY - doorTopY);
+              const hasSteps = entranceGeo.doorBottomM > 0.05;
+              const stepCount = hasSteps
+                ? Math.min(6, Math.max(2, Math.round(entranceGeo.doorBottomM / 0.16)))
+                : 0;
+              return (
+                <g
+                  className="cursor-pointer"
+                  onClick={() =>
+                    onSelectEntrance ? onSelectEntrance() : onSelectElement?.('axenweite')
+                  }
+                >
+                  <rect
+                    x={doorX - 3}
+                    y={doorTopY - 3}
+                    width={doorWpx + 6}
+                    height={doorHpx + 3}
+                    fill="#D6CEBE"
+                    stroke="#292524"
+                    strokeWidth={1.1}
+                  />
+                  <rect
+                    x={doorX}
+                    y={doorTopY}
+                    width={doorWpx}
+                    height={doorHpx}
+                    fill="#6D4C3D"
+                    fillOpacity={0.85}
+                    stroke="#1C1917"
+                    strokeWidth={1}
+                  />
+                  <line
+                    x1={doorCx}
+                    y1={doorTopY}
+                    x2={doorCx}
+                    y2={doorBottomY}
+                    stroke="#FBF9F5"
+                    strokeOpacity={0.6}
+                    strokeWidth={0.8}
+                  />
+                  {hasSteps && (
+                    <g>
+                      {Array.from({ length: stepCount }, (_, sIdx) => {
+                        const t0 = sIdx / stepCount;
+                        const t1 = (sIdx + 1) / stepCount;
+                        const yS0 = doorBottomY + t0 * (groundY - doorBottomY);
+                        const yS1 = doorBottomY + t1 * (groundY - doorBottomY);
+                        const stepGrow = (sIdx + 1) * 3.5;
+                        return (
+                          <rect
+                            key={`door-step-${sIdx}`}
+                            x={doorX - 3 - stepGrow}
+                            y={yS0}
+                            width={doorWpx + 6 + stepGrow * 2}
+                            height={Math.max(1.5, yS1 - yS0)}
+                            fill="#DDD5C5"
+                            stroke="#44403C"
+                            strokeWidth={0.75}
+                          />
+                        );
+                      })}
+                    </g>
+                  )}
+                  <text
+                    x={doorCx}
+                    y={groundY + 11}
+                    textAnchor="middle"
+                    fontSize="8"
+                    fontFamily="IBM Plex Mono, monospace"
+                    fill="#9A3412"
+                  >
+                    вход ({formatMeters(entranceGeo.doorWidthM, 2)}×{formatMeters(entranceGeo.doorHeightM, 2)})
+                  </text>
+                </g>
+              );
+            })()}
 
           {/* LEFT FLOOR TAGS & 5-STORY UNIFIED 1+2 BRACKET */}
           {floorOffsetsM.map((floorStartM, flIdx) => {

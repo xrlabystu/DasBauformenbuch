@@ -19,6 +19,7 @@ import {
 } from '@node-projects/acad-ts';
 import {
   formatMeters,
+  resolveEntranceGeometry,
   type FacadeParameters,
   type FacadeSummary,
 } from './rules';
@@ -429,14 +430,7 @@ export function buildFacadeCadDocument(
   );
 
   // 7. Оси, окна, двери и обрамления (наличники / сандрики)
-  const entranceAxisIdx =
-    params.entrancePosition === 'none'
-      ? -1
-      : params.entrancePosition === 'left'
-        ? 0
-        : params.entrancePosition === 'right'
-          ? safeAxesCount - 1
-          : Math.floor(safeAxesCount / 2);
+  const entranceGeo = resolveEntranceGeometry(params, totalWidthM, axesM);
   const activeFramingFloor = safeFloors >= 2 ? 1 : 0;
 
   axesM.forEach((axisM, axIdx) => {
@@ -444,7 +438,11 @@ export function buildFacadeCadDocument(
     addLine(doc, layerAxes, cxMm, -300, cxMm, corniceTopM * MM + 350);
 
     floorOffsetsM.forEach((floorStartM, flIdx) => {
-      const isEntranceDoor = flIdx === 0 && axIdx === entranceAxisIdx;
+      const isDoorReplacedWindow =
+        entranceGeo.hasDoor && flIdx === 0 && axIdx === entranceGeo.doorAxisIndex;
+      if (isDoorReplacedWindow) {
+        return;
+      }
       const flH = floorHeightsM[flIdx];
       const clearH =
         levelFloors[flIdx]?.clearHeight ??
@@ -458,22 +456,11 @@ export function buildFacadeCadDocument(
         : Math.min(safeWinH, clearH * 0.72);
       const sillM = Math.max(0.22, (clearH - winHThisFloor) * 0.36);
       const winBotM = floorStartM + sillM;
-      const winTopM = winBotM + winHThisFloor;
 
       const winXMm = (axisM - safeW / 2) * MM;
       const winYMm = winBotM * MM;
       const winWMm = safeW * MM;
       const winHMm = winHThisFloor * MM;
-
-      if (isEntranceDoor) {
-        const doorWMm = Math.max(700, safeW * 0.95 * MM);
-        const doorXMm = cxMm - doorWMm / 2;
-        const doorHMm = Math.max(1800, winTopM * MM);
-        addRect(doc, layerOpenings, doorXMm - 70, 0, doorWMm + 140, doorHMm + 70);
-        addRect(doc, layerOpenings, doorXMm, 0, doorWMm, doorHMm);
-        addLine(doc, layerOpenings, cxMm, 0, cxMm, doorHMm);
-        return;
-      }
 
       const showRichFraming = params.withFraming && flIdx === activeFramingFloor;
       const uMm = effectiveU * MM;
@@ -552,6 +539,33 @@ export function buildFacadeCadDocument(
       );
     });
   });
+
+  if (entranceGeo.hasDoor) {
+    const doorCxMm = entranceGeo.doorCenterX * MM;
+    const doorWMm = Math.max(600, entranceGeo.doorWidthM * MM);
+    const doorXMm = doorCxMm - doorWMm / 2;
+    const doorBotMm = Math.max(0, entranceGeo.doorBottomM * MM);
+    const doorHMm = Math.max(1200, entranceGeo.doorHeightM * MM);
+    addRect(doc, layerOpenings, doorXMm - 70, doorBotMm, doorWMm + 140, doorHMm + 70);
+    addRect(doc, layerOpenings, doorXMm, doorBotMm, doorWMm, doorHMm);
+    addLine(doc, layerOpenings, doorCxMm, doorBotMm, doorCxMm, doorBotMm + doorHMm);
+    if (entranceGeo.doorBottomM > 0.05) {
+      const stepCount = Math.min(6, Math.max(2, Math.round(entranceGeo.doorBottomM / 0.16)));
+      for (let sIdx = 0; sIdx < stepCount; sIdx++) {
+        const y0 = doorBotMm * (1 - (sIdx + 1) / stepCount);
+        const stepH = doorBotMm / stepCount;
+        const stepGrowMm = (sIdx + 1) * 180;
+        addRect(
+          doc,
+          layerOpenings,
+          doorXMm - 70 - stepGrowMm,
+          y0,
+          doorWMm + 140 + stepGrowMm * 2,
+          stepH
+        );
+      }
+    }
+  }
 
   // 8. Отметки этажей слева
   floorOffsetsM.forEach((floorStartM, flIdx) => {

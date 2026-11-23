@@ -438,6 +438,10 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 summary={summary}
                 highlightedElement={highlightedElement}
                 onSelectElement={handleSelectElementFromSvg}
+                onSelectEntrance={() => {
+                  setHighlightedElement(null);
+                  setActiveModule('entrance');
+                }}
                 onOpenBookPage={onOpenBookPage}
               />
 

@@ -1567,6 +1567,7 @@ export type FiveStoryScheme = 'standard' | 'rich_1_2_unified';
 export type ThreeStoryGurtMode = 'both_gurt' | 'third_sohlbank' | 'unified_upper';
 export type CorniceVariantMode = 'full_entablature' | 'crowning_only';
 export type EntrancePosition = 'center' | 'left' | 'right' | 'none';
+export type EntrancePlacement = 'facade_center' | 'axis';
 
 export interface VariantRules {
   socle: { min: number; max: number; optimum: number };
@@ -2202,6 +2203,98 @@ export function checkAxesCount(
         ? 'axes % 2 === 1 (при центральном входе нечётное обязательно)'
         : 'встроенный дом + боковой вход ⇒ чётное допустимо (S. 14)',
     page: 'S. 14–16',
+  };
+}
+
+export interface EntranceGeometryResult {
+  hasDoor: boolean;
+  placement: EntrancePlacement;
+  doorCenterX: number;
+  doorAxisIndex: number | null;
+  doorBottomM: number;
+  doorTopM: number;
+  doorHeightM: number;
+  doorWidthM: number;
+}
+
+export function resolveEntrancePositionFromSettings(
+  hasEntrance: boolean,
+  placement: EntrancePlacement,
+  axisIndex: number,
+  axesCount: number
+): EntrancePosition {
+  if (!hasEntrance) return 'none';
+  const safeAxes = Math.max(1, Math.round(axesCount));
+  if (placement === 'facade_center') return 'center';
+  const clamped = Math.min(safeAxes - 1, Math.max(0, Math.round(axisIndex)));
+  if (safeAxes % 2 === 1 && clamped === Math.floor(safeAxes / 2)) {
+    return 'center';
+  }
+  return clamped < safeAxes / 2 ? 'left' : 'right';
+}
+
+export function resolveEntranceGeometry(
+  params: FacadeParameters,
+  totalWidthM: number,
+  axesM: number[]
+): EntranceGeometryResult {
+  const safeAxes = axesM.length;
+  const doorBottomM = Math.max(0, params.entranceBottomM ?? 0);
+  const doorHeightM = Math.max(1.2, params.entranceHeightM ?? 2.4);
+  const doorTopM = doorBottomM + doorHeightM;
+  const doorWidthM = Math.max(0.6, params.entranceWidthM ?? Math.max(0.95, params.w * 1.05));
+  const placement: EntrancePlacement = params.entrancePlacement ?? 'facade_center';
+
+  if (params.hasEntrance === false || params.entrancePosition === 'none') {
+    return {
+      hasDoor: false,
+      placement,
+      doorCenterX: totalWidthM / 2,
+      doorAxisIndex: null,
+      doorBottomM,
+      doorTopM,
+      doorHeightM,
+      doorWidthM,
+    };
+  }
+
+  if (placement === 'facade_center') {
+    if (safeAxes % 2 === 1 && safeAxes > 0) {
+      const centerIdx = Math.floor(safeAxes / 2);
+      return {
+        hasDoor: true,
+        placement,
+        doorCenterX: axesM[centerIdx] ?? totalWidthM / 2,
+        doorAxisIndex: centerIdx,
+        doorBottomM,
+        doorTopM,
+        doorHeightM,
+        doorWidthM,
+      };
+    }
+    return {
+      hasDoor: true,
+      placement,
+      doorCenterX: totalWidthM / 2,
+      doorAxisIndex: null,
+      doorBottomM,
+      doorTopM,
+      doorHeightM,
+      doorWidthM,
+    };
+  }
+
+  const clampedIdx =
+    safeAxes > 0 ? Math.min(safeAxes - 1, Math.max(0, Math.round(params.entranceAxisIndex ?? 0))) : 0;
+  return {
+    hasDoor: true,
+    placement: 'axis',
+    doorCenterX: axesM[clampedIdx] ?? totalWidthM / 2,
+    doorAxisIndex: safeAxes > 0 ? clampedIdx : null,
+    doorBottomM,
+    doorTopM,
+    doorHeightM,
+    doorWidthM,
   };
 }
 
@@ -3340,6 +3433,12 @@ export interface FacadeParameters {
   multiSub: MultiSub;
   axesCount: number;
   entrancePosition: EntrancePosition;
+  hasEntrance: boolean;
+  entrancePlacement: EntrancePlacement;
+  entranceAxisIndex: number;
+  entranceBottomM: number;
+  entranceHeightM: number;
+  entranceWidthM: number;
   corniceVariantMode: CorniceVariantMode;
   fiveStoryScheme: FiveStoryScheme;
   mainCorniceProjectionBoost: number;
@@ -3565,12 +3664,15 @@ export function evaluateFacadeSummary(
     params.buildingVariant,
     params.multiSub
   );
+  const effectiveEntrancePos: EntrancePosition = !params.hasEntrance
+    ? 'none'
+    : params.entrancePosition;
   const axesCountCheck = checkAxesCount(
     safeAxesCount,
     params.buildingVariant,
     params.multiSub,
     params.isEmbeddedInRow,
-    params.entrancePosition
+    effectiveEntrancePos
   );
 
   const windowCheck = check_window(params.w, params.h, params.diagTolerance);
@@ -4507,6 +4609,11 @@ export function applyBuildingVariantPreset(
     axesCount,
     entrancePosition:
       axesCount % 2 === 1 ? 'center' : isEmbeddedInRow ? 'right' : 'center',
+    hasEntrance: true,
+    entrancePlacement:
+      axesCount % 2 === 1 ? 'facade_center' : isEmbeddedInRow ? 'axis' : 'facade_center',
+    entranceAxisIndex:
+      axesCount % 2 === 1 ? Math.floor(axesCount / 2) : Math.max(0, axesCount - 1),
     totalHeight: alignedTotalHeight,
     hSocle: alignedHSocle,
     hMain: alignedHMain,
@@ -4571,12 +4678,19 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
   const effectiveU = d.u > 0 ? d.u : Number(((d.w / 6 + d.w / 5) / 2).toFixed(3));
   const hSill = Number(((d.w / 8 + d.w / 7) / 2).toFixed(3));
 
+  const defaultAxesCount = buildingVariant === 'two-story' ? 5 : 3;
   return {
     buildingType: type,
     buildingVariant,
     multiSub,
-    axesCount: buildingVariant === 'two-story' ? 5 : 3,
+    axesCount: defaultAxesCount,
     entrancePosition: 'center',
+    hasEntrance: true,
+    entrancePlacement: 'facade_center',
+    entranceAxisIndex: Math.floor(defaultAxesCount / 2),
+    entranceBottomM: 0,
+    entranceHeightM: Number(Math.max(2.1, Math.min(3.0, d.H * 0.66)).toFixed(2)),
+    entranceWidthM: Number(Math.max(1.0, d.w * 1.05).toFixed(2)),
     corniceVariantMode: 'full_entablature',
     fiveStoryScheme: type === 'miethaus' ? 'standard' : 'rich_1_2_unified',
     mainCorniceProjectionBoost: type === 'miethaus' ? 1.0 : 1.2,

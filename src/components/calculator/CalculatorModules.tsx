@@ -23,6 +23,8 @@ import {
   h_from_w_ratio,
   projection_45,
   projection_console,
+  resolveEntranceGeometry,
+  resolveEntrancePositionFromSettings,
   schemeNumberFromGurtMode,
   socleHeight,
   threeStoryBeltScheme,
@@ -36,6 +38,7 @@ import {
   type ColumnProfileType,
   type CompositionKind,
   type CorniceVariantMode,
+  type EntrancePlacement,
   type EntrancePosition,
   type FacadeParameters,
   type FacadeSummary,
@@ -53,6 +56,7 @@ import {
 export type CalculatorModuleId =
   | 'axes'
   | 'variants'
+  | 'entrance'
   | 'window'
   | 'corner'
   | 'framing'
@@ -327,6 +331,7 @@ export function CalculatorModules({
   const modules: { id: CalculatorModuleId; label: string }[] = [
     { id: 'axes', label: 'Оси и простенки' },
     { id: 'variants', label: 'Этажность' },
+    { id: 'entrance', label: 'Вход (дверь)' },
     { id: 'window', label: 'Окно' },
     { id: 'corner', label: 'Угол (D)' },
     { id: 'framing', label: 'Обрамление' },
@@ -342,6 +347,17 @@ export function CalculatorModules({
           : 'Сводка',
     },
   ];
+
+  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
+  const doorD = params.isRisalitCentered
+    ? Math.max(0.6, params.risalitWidth / 2)
+    : Math.max(0.5, params.A * params.k_D);
+  const doorAxesM = Array.from({ length: safeAxesCount }, (_, i) => doorD + i * params.A);
+  const entranceGeo = resolveEntranceGeometry(
+    params,
+    summary.derivedGeometry.facadeWidth,
+    doorAxesM
+  );
 
   const getActiveAxRatio = (): [number, number] => {
     if (axesRatioChoice === 'custom') return [customAxN, customAxM];
@@ -1045,16 +1061,28 @@ export function CalculatorModules({
               />
 
               <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                    Положение главного входа (S. 14–16)
-                  </span>
-                  <LockToggleButton
-                    lockKey="entrancePosition"
-                    locked={isParamLocked(lockedParams, 'entrancePosition')}
-                    onToggleLock={onToggleLock}
-                    label="Положение входа"
-                  />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                      Положение главного входа (S. 14–16)
+                    </span>
+                    <LockToggleButton
+                      lockKey="entrancePosition"
+                      locked={isParamLocked(lockedParams, 'entrancePosition')}
+                      onToggleLock={onToggleLock}
+                      label="Положение входа"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectModule('entrance');
+                      onHighlightElement(null);
+                    }}
+                    className="text-[11px] font-mono text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                  >
+                    Размеры и отметки двери →
+                  </button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {(
@@ -1064,21 +1092,52 @@ export function CalculatorModules({
                       { id: 'right', label: 'Справа (сбоку)' },
                       { id: 'none', label: 'Без входа' },
                     ] as { id: EntrancePosition; label: string }[]
-                  ).map((ep) => (
-                    <button
-                      key={ep.id}
-                      type="button"
-                      disabled={isParamLocked(lockedParams, 'entrancePosition')}
-                      onClick={() => onUpdateParams({ entrancePosition: ep.id })}
-                      className={`px-2.5 py-1 text-[11px] border disabled:opacity-50 ${
-                        params.entrancePosition === ep.id
-                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                          : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
-                      }`}
-                    >
-                      {ep.label}
-                    </button>
-                  ))}
+                  ).map((ep) => {
+                    const isSelected =
+                      ep.id === 'none'
+                        ? !params.hasEntrance || params.entrancePosition === 'none'
+                        : params.hasEntrance && params.entrancePosition === ep.id;
+                    return (
+                      <button
+                        key={ep.id}
+                        type="button"
+                        disabled={isParamLocked(lockedParams, 'entrancePosition')}
+                        onClick={() => {
+                          if (ep.id === 'none') {
+                            onUpdateParams({ hasEntrance: false, entrancePosition: 'none' });
+                          } else if (ep.id === 'center') {
+                            const midIdx = Math.floor(safeAxesCount / 2);
+                            onUpdateParams({
+                              hasEntrance: true,
+                              entrancePlacement: 'facade_center',
+                              entranceAxisIndex: midIdx,
+                              entrancePosition: 'center',
+                            });
+                          } else {
+                            const axIdx = ep.id === 'left' ? 0 : safeAxesCount - 1;
+                            onUpdateParams({
+                              hasEntrance: true,
+                              entrancePlacement: 'axis',
+                              entranceAxisIndex: axIdx,
+                              entrancePosition: resolveEntrancePositionFromSettings(
+                                true,
+                                'axis',
+                                axIdx,
+                                safeAxesCount
+                              ),
+                            });
+                          }
+                        }}
+                        className={`px-2.5 py-1 text-[11px] border disabled:opacity-50 ${
+                          isSelected
+                            ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                        }`}
+                      >
+                        {ep.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1597,6 +1656,421 @@ export function CalculatorModules({
             </div>
           </div>
         )}
+
+        {/* 4.2b Вход (дверной проём) */}
+        {activeModule === 'entrance' && (() => {
+          const presenceLocked =
+            isParamLocked(lockedParams, 'hasEntrance') ||
+            isParamLocked(lockedParams, 'entrancePosition');
+          const placementLocked = isParamLocked(lockedParams, 'entrancePosition');
+          const floor1Level = params.levels.floors[0];
+          const floor1ClearH =
+            floor1Level?.clearHeight ?? Math.max(2.2, params.H - (floor1Level?.slabThickness ?? 0.35));
+          const floor1WinH = Math.min(params.h, floor1ClearH * 0.72);
+          const floor1SillM = Math.max(0.22, (floor1ClearH - floor1WinH) * 0.36);
+          const floor1TopM = summary.derivedGeometry.floor1FullHeight;
+          const floor1WinTopM = Number(
+            (params.levels.groundToFloor1 + floor1SillM + floor1WinH).toFixed(3)
+          );
+          const socleTopPresetM = Number(
+            (params.useFullFloorAsSocle ? floor1TopM : params.hSocle).toFixed(3)
+          );
+          const exceedsFloor1 = entranceGeo.hasDoor && entranceGeo.doorTopM > floor1TopM + 0.02;
+
+          return (
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-display text-2xl font-medium text-[#1C1917]">
+                  Вход и дверной проём
+                </h3>
+                <p className="mt-1 text-xs text-[#57534E]">
+                  Наличие входа на главном фасаде, отметки низа и верха, габариты проёма и привязка к середине фасада или оконной оси.
+                </p>
+              </div>
+
+              {/* 1. Наличие входа на фасаде */}
+              <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    1. Наличие входа на фасаде
+                  </span>
+                  <LockToggleButton
+                    lockKey="hasEntrance"
+                    locked={isParamLocked(lockedParams, 'hasEntrance')}
+                    onToggleLock={onToggleLock}
+                    label="Наличие входа"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={presenceLocked}
+                    onClick={() => {
+                      const nextPlacement: EntrancePlacement = params.entrancePlacement ?? 'facade_center';
+                      const nextAxisIdx = Math.min(
+                        safeAxesCount - 1,
+                        Math.max(0, Math.round(params.entranceAxisIndex ?? Math.floor(safeAxesCount / 2)))
+                      );
+                      onUpdateParams({
+                        hasEntrance: true,
+                        entrancePosition: resolveEntrancePositionFromSettings(
+                          true,
+                          nextPlacement,
+                          nextAxisIdx,
+                          safeAxesCount
+                        ),
+                      });
+                    }}
+                    className={`px-3 py-2 text-xs font-medium border disabled:opacity-50 transition-colors ${
+                      params.hasEntrance
+                        ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                        : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                    }`}
+                  >
+                    Есть на фасаде
+                  </button>
+                  <button
+                    type="button"
+                    disabled={presenceLocked}
+                    onClick={() =>
+                      onUpdateParams({
+                        hasEntrance: false,
+                        entrancePosition: 'none',
+                      })
+                    }
+                    className={`px-3 py-2 text-xs font-medium border disabled:opacity-50 transition-colors ${
+                      !params.hasEntrance
+                        ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                        : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                    }`}
+                  >
+                    Нет (без входа)
+                  </button>
+                </div>
+              </div>
+
+              {!params.hasEntrance ? (
+                <div className="p-3.5 border border-[#D6CEBE] bg-[#F3EFE6]/60 text-xs text-[#57534E] leading-relaxed">
+                  Вход на данном фасаде отключён — первый этаж отображается со сплошным рядом окон без дверного проёма. Включите «Есть на фасаде», чтобы задать отметки и габариты двери.
+                </div>
+              ) : (
+                <>
+                  {/* 2. Размещение на фасаде */}
+                  <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                        2. Размещение на фасаде
+                      </span>
+                      <LockToggleButton
+                        lockKey="entrancePosition"
+                        locked={placementLocked}
+                        onToggleLock={onToggleLock}
+                        label="Размещение входа"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={placementLocked}
+                        onClick={() =>
+                          onUpdateParams({
+                            entrancePlacement: 'facade_center',
+                            entrancePosition: resolveEntrancePositionFromSettings(
+                              true,
+                              'facade_center',
+                              params.entranceAxisIndex,
+                              safeAxesCount
+                            ),
+                          })
+                        }
+                        className={`px-3 py-2 text-xs font-medium border disabled:opacity-50 transition-colors ${
+                          params.entrancePlacement === 'facade_center'
+                            ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                        }`}
+                      >
+                        По середине фасада
+                      </button>
+                      <button
+                        type="button"
+                        disabled={placementLocked}
+                        onClick={() => {
+                          const clampedIdx = Math.min(
+                            safeAxesCount - 1,
+                            Math.max(0, Math.round(params.entranceAxisIndex ?? 0))
+                          );
+                          onUpdateParams({
+                            entrancePlacement: 'axis',
+                            entranceAxisIndex: clampedIdx,
+                            entrancePosition: resolveEntrancePositionFromSettings(
+                              true,
+                              'axis',
+                              clampedIdx,
+                              safeAxesCount
+                            ),
+                          });
+                        }}
+                        className={`px-3 py-2 text-xs font-medium border disabled:opacity-50 transition-colors ${
+                          params.entrancePlacement === 'axis'
+                            ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                        }`}
+                      >
+                        По оси окон
+                      </button>
+                    </div>
+
+                    {params.entrancePlacement === 'facade_center' ? (
+                      <p className="text-[11px] text-[#57534E] leading-relaxed">
+                        {safeAxesCount % 2 === 1 ? (
+                          <>
+                            При нечётном числе осей ({safeAxesCount}) середина фасада совпадает со средней осью{' '}
+                            <strong className="font-mono text-[#1C1917]">
+                              №{Math.floor(safeAxesCount / 2) + 1}
+                            </strong>{' '}
+                            (X = {formatMeters(entranceGeo.doorCenterX, 2)} м) — дверь заменяет центральное окно 1-го этажа.
+                          </>
+                        ) : (
+                          <>
+                            При чётном числе осей ({safeAxesCount}) дверь стоит строго по геометрическому центру фасада (
+                            <strong className="font-mono text-[#1C1917]">
+                              X = {formatMeters(entranceGeo.doorCenterX, 2)} м
+                            </strong>
+                            , в простенке между осями {safeAxesCount / 2} и {safeAxesCount / 2 + 1}); все окна 1-го этажа сохраняются.
+                          </>
+                        )}
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        <span className="block text-[11px] text-[#57534E]">
+                          Выберите оконную ось для двери (заменяет окно 1-го этажа на выбранной оси):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {Array.from({ length: safeAxesCount }, (_, axIdx) => {
+                            const isMiddleOdd =
+                              safeAxesCount % 2 === 1 && axIdx === Math.floor(safeAxesCount / 2);
+                            const isSelected = entranceGeo.doorAxisIndex === axIdx;
+                            return (
+                              <button
+                                key={`ent-ax-${axIdx}`}
+                                type="button"
+                                disabled={placementLocked}
+                                onClick={() =>
+                                  onUpdateParams({
+                                    entrancePlacement: 'axis',
+                                    entranceAxisIndex: axIdx,
+                                    entrancePosition: resolveEntrancePositionFromSettings(
+                                      true,
+                                      'axis',
+                                      axIdx,
+                                      safeAxesCount
+                                    ),
+                                  })
+                                }
+                                className={`px-2.5 py-1 text-[11px] font-mono border disabled:opacity-50 ${
+                                  isSelected
+                                    ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                                    : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                                }`}
+                              >
+                                Ось {axIdx + 1}
+                                {isMiddleOdd ? ' (центр)' : ''}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="font-mono text-[11px] text-[#78716C]">
+                          Координата центра двери: X = {formatMeters(entranceGeo.doorCenterX, 3)} м
+                        </p>
+                      </div>
+                    )}
+
+                    {safeAxesCount % 2 === 0 && (
+                      <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-[11px] text-[#57534E]">
+                        <span className="font-mono text-[#9A3412]">S. 14–16:</span>{' '}
+                        {summary.axesCountCheck.explanation}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 3. Отметки и размеры дверного проёма */}
+                  <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+                    <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                      3. Отметки и размеры дверного проёма
+                    </span>
+
+                    <MeterControl
+                      id="entrance-bottom"
+                      label="Отметка низа (от земли)"
+                      value={entranceGeo.doorBottomM}
+                      min={0}
+                      max={2.5}
+                      step={0.05}
+                      lockKey="entranceBottomM"
+                      locked={isParamLocked(lockedParams, 'entranceBottomM')}
+                      onToggleLock={onToggleLock}
+                      note="0.00 м — вход с уровня земли; > 0.05 м — приподнятый вход со ступенями крыльца."
+                      onChange={(val) =>
+                        onUpdateParams({
+                          entranceBottomM: Math.max(0, Number(val.toFixed(3))),
+                        })
+                      }
+                    />
+
+                    <MeterControl
+                      id="entrance-top"
+                      label="Отметка верха дверного проёма"
+                      value={entranceGeo.doorTopM}
+                      min={1.4}
+                      max={Math.max(5.5, Number((floor1TopM + 1).toFixed(2)))}
+                      step={0.05}
+                      disabled={
+                        isParamLocked(lockedParams, 'entranceBottomM') &&
+                        isParamLocked(lockedParams, 'entranceHeightM')
+                      }
+                      lockKey="entranceTopM"
+                      locked={isParamLocked(lockedParams, 'entranceTopM')}
+                      onToggleLock={onToggleLock}
+                      note="Отметка верха = отметка низа + высота двери. При смене корректирует высоту (или низ, если высота под замком)."
+                      onChange={(val) => {
+                        const targetTop = Math.max(1.2, Number(val.toFixed(3)));
+                        const heightLocked = isParamLocked(lockedParams, 'entranceHeightM');
+                        const bottomLocked = isParamLocked(lockedParams, 'entranceBottomM');
+                        if (heightLocked && !bottomLocked) {
+                          const nextBottom = Math.max(
+                            0,
+                            Number((targetTop - entranceGeo.doorHeightM).toFixed(3))
+                          );
+                          onUpdateParams({ entranceBottomM: nextBottom });
+                        } else if (!heightLocked) {
+                          const nextHeight = Math.max(
+                            1.2,
+                            Number((targetTop - entranceGeo.doorBottomM).toFixed(3))
+                          );
+                          onUpdateParams({ entranceHeightM: nextHeight });
+                        }
+                      }}
+                    />
+
+                    <MeterControl
+                      id="entrance-height"
+                      label="Высота дверного проёма"
+                      value={entranceGeo.doorHeightM}
+                      min={1.2}
+                      max={4.5}
+                      step={0.05}
+                      disabled={
+                        isParamLocked(lockedParams, 'entranceTopM') &&
+                        isParamLocked(lockedParams, 'entranceBottomM')
+                      }
+                      lockKey="entranceHeightM"
+                      locked={isParamLocked(lockedParams, 'entranceHeightM')}
+                      onToggleLock={onToggleLock}
+                      note="Чистая высота проёма от отметки низа до перемычки."
+                      onChange={(val) =>
+                        onUpdateParams({
+                          entranceHeightM: Math.max(1.2, Number(val.toFixed(3))),
+                        })
+                      }
+                    />
+
+                    <MeterControl
+                      id="entrance-width"
+                      label="Ширина дверного проёма"
+                      value={entranceGeo.doorWidthM}
+                      min={0.6}
+                      max={3.5}
+                      step={0.05}
+                      lockKey="entranceWidthM"
+                      locked={isParamLocked(lockedParams, 'entranceWidthM')}
+                      onToggleLock={onToggleLock}
+                      note={`Для сравнения: ширина окна w = ${formatMeters(params.w, 2)} м.`}
+                      onChange={(val) =>
+                        onUpdateParams({
+                          entranceWidthM: Math.max(0.6, Number(val.toFixed(3))),
+                        })
+                      }
+                    />
+
+                    {/* Быстрые пресеты отметок */}
+                    <div className="pt-2 border-t border-[#E5DFD3] space-y-1.5">
+                      <span className="block text-[10px] font-mono uppercase tracking-wider text-[#78716C]">
+                        Быстрые привязки отметок
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onUpdateParams({ entranceBottomM: 0 })}
+                          className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5]"
+                        >
+                          От земли (низ = 0.00 м)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateParams({ entranceBottomM: socleTopPresetM })}
+                          className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5]"
+                        >
+                          По верху цоколя ({formatMeters(socleTopPresetM, 2)} м)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const heightLocked = isParamLocked(lockedParams, 'entranceHeightM');
+                            if (heightLocked) {
+                              onUpdateParams({
+                                entranceBottomM: Math.max(
+                                  0,
+                                  Number((floor1WinTopM - entranceGeo.doorHeightM).toFixed(3))
+                                ),
+                              });
+                            } else {
+                              onUpdateParams({
+                                entranceHeightM: Math.max(
+                                  1.2,
+                                  Number((floor1WinTopM - entranceGeo.doorBottomM).toFixed(3))
+                                ),
+                              });
+                            }
+                          }}
+                          className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5]"
+                        >
+                          Верх по окнам 1 эт. ({formatMeters(floor1WinTopM, 2)} м)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Сводная карточка проёма */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs tabular-nums">
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Низ (от земли)</span>
+                      <strong>{formatMeters(entranceGeo.doorBottomM, 2)} м</strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Верх проёма</span>
+                      <strong>{formatMeters(entranceGeo.doorTopM, 2)} м</strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Высота</span>
+                      <strong>{formatMeters(entranceGeo.doorHeightM, 2)} м</strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Ширина</span>
+                      <strong>{formatMeters(entranceGeo.doorWidthM, 2)} м</strong>
+                    </div>
+                  </div>
+
+                  {exceedsFloor1 && (
+                    <div className="p-2.5 border border-[#B45309]/50 bg-[#B45309]/10 text-xs text-[#92400E]">
+                      Внимание: отметка верха двери ({formatMeters(entranceGeo.doorTopM, 2)} м) превышает полную отметку перекрытия 1-го этажа ({formatMeters(floor1TopM, 2)} м).
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* 4.2 Окно */}
         {activeModule === 'window' && (
