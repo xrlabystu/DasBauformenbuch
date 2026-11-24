@@ -308,7 +308,8 @@ export function buildFacadeCadDocument(
   const deckM = (summary.threePartSocleResult.deck / partsSum) * visualSocleTopM;
   const fussM = (summary.threePartSocleResult.fuss / partsSum) * visualSocleTopM;
   const rumpfM = Math.max(0.05, visualSocleTopM - deckM - fussM);
-  const rustCourses = Math.min(12, Math.max(1, summary.rusticationCheck.n));
+  const hasSocleRust = params.hasSocleRustication !== false;
+  const rustCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
   addRect(doc, layerSocle, -30, 0, totalWidthM * MM + 60, visualSocleTopM * MM);
   addRect(doc, layerSocle, -45, 0, totalWidthM * MM + 90, fussM * MM);
@@ -1029,7 +1030,8 @@ export function buildDetailPlateCadDocument(
     const deckMm = (deck / totalParts) * totalMm;
     const rumpfMm = Math.max(50, totalMm - fussMm - deckMm);
     const secW = 900;
-    const nCourses = Math.min(12, Math.max(1, summary.rusticationCheck.n));
+    const hasSocleRust = params.hasSocleRustication !== false;
+    const nCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
     addRect(doc, layerGeom, -60, 0, secW + 120, fussMm);
     addRect(doc, layerGeom, 0, fussMm, secW, rumpfMm);
@@ -1040,7 +1042,15 @@ export function buildDetailPlateCadDocument(
     }
 
     addVerticalDimension(doc, layerDims, 0, fussMm, secW + 280, secW + 60, `Fuß ${formatMeters(fuss, 2)} м`);
-    addVerticalDimension(doc, layerDims, fussMm, fussMm + rumpfMm, secW + 280, secW, `Rumpf (${nCourses} ряд.)`);
+    addVerticalDimension(
+      doc,
+      layerDims,
+      fussMm,
+      fussMm + rumpfMm,
+      secW + 280,
+      secW,
+      hasSocleRust ? `Rumpf (${nCourses} ряд.)` : 'Rumpf (гладкий)'
+    );
     addVerticalDimension(doc, layerDims, fussMm + rumpfMm, totalMm, secW + 280, secW + 45, `Deck ${formatMeters(deck, 2)} м`);
     addVerticalDimension(doc, layerDims, 0, totalMm, -320, -60, `h_s = ${formatMeters(effectiveSocleH, 2)} м`);
   } else {

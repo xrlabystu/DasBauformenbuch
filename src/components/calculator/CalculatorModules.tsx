@@ -3499,9 +3499,11 @@ export function CalculatorModules({
                 locked={isParamLocked(lockedParams, 'hMain')}
                 onToggleLock={onToggleLock}
                 note={
-                  summary.mainCorniceCheck.isExtrapolated
-                    ? `1-эт. экстраполяция ≥ ${formatMeters(summary.mainCorniceCheck.range[0])} м (в тексте не задано) и строго < h_socle.`
-                    : `Диапазон для «${summary.variantInfo.shortLabelRu}»: ${formatMeters(summary.mainCorniceCheck.range[0])}–${formatMeters(summary.mainCorniceCheck.range[1])} м и строго < h_socle.`
+                  summary.mainCorniceCheck.notApplicable
+                    ? 'Весь 1-й этаж включён в цоколь — правило соотношения главного карниза с цоколем и долями 1/8–1/12 (1/12–1/15) не работает (S. 16, 22).'
+                    : summary.mainCorniceCheck.isExtrapolated
+                      ? `1-эт. экстраполяция ≥ ${formatMeters(summary.mainCorniceCheck.range[0])} м (в тексте не задано) и строго < h_socle.`
+                      : `Диапазон для «${summary.variantInfo.shortLabelRu}»: ${formatMeters(summary.mainCorniceCheck.range[0])}–${formatMeters(summary.mainCorniceCheck.range[1])} м и строго < h_socle.`
                 }
                 onChange={(hMain) => onUpdateParams({ hMain })}
               />
@@ -3659,35 +3661,74 @@ export function CalculatorModules({
 
             {/* Рустика, убывание вверх и раскреповки */}
             <CollapsibleSection title="Рустика, убывание вверх и раскреповки (S. 10, 12, 17)">
-
-              <MeterControl
-                id="calc-rust-row"
-                label="Целевая высота ряда руста (норма 0.30–0.40 м)"
-                value={params.rustRowHeight}
-                min={0.22}
-                max={0.48}
-                lockKey="rustRowHeight"
-                locked={isParamLocked(lockedParams, 'rustRowHeight')}
-                onToggleLock={onToggleLock}
-                onChange={(rustRowHeight) => onUpdateParams({ rustRowHeight })}
-              />
-
-              <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C]">Число рядов n</span>
-                  <strong>
-                    {summary.rusticationCheck.n} ({summary.rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'})
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C]">Шаг ряда</span>
-                  <strong>{formatMeters(summary.rusticationCheck.rowHeight)} м</strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C]">Диапазон</span>
-                  <strong>0.300–0.400 м</strong>
-                </div>
+              <div className="flex items-start justify-between gap-2 p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                <label className="flex items-start gap-2.5 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={isParamLocked(lockedParams, 'hasSocleRustication')}
+                    checked={params.hasSocleRustication !== false}
+                    onChange={(e) => onUpdateParams({ hasSocleRustication: e.target.checked })}
+                    className="accent-[#9A3412] mt-0.5"
+                  />
+                  <span className="leading-snug">
+                    <span className="font-medium block">
+                      <TextWithGlossaryLinks
+                        text="Рустовка тулова цоколя (ряды руста)"
+                        onOpenGlossaryTerm={onOpenGlossaryTerm}
+                        insideLabel
+                      />
+                    </span>
+                    <span className="text-[11px] text-[#57534E]">
+                      Можно отключить, чтобы выполнить тулово цоколя гладким без рустовки (S. 10). Трёхчастное деление цоколя при этом сохраняется.
+                    </span>
+                  </span>
+                </label>
+                <LockToggleButton
+                  lockKey="hasSocleRustication"
+                  locked={isParamLocked(lockedParams, 'hasSocleRustication')}
+                  onToggleLock={onToggleLock}
+                  label="Рустовка цоколя"
+                />
               </div>
+
+              {params.hasSocleRustication !== false ? (
+                <>
+                  <MeterControl
+                    id="calc-rust-row"
+                    label="Целевая высота ряда руста (норма 0.30–0.40 м)"
+                    value={params.rustRowHeight}
+                    min={0.22}
+                    max={0.48}
+                    lockKey="rustRowHeight"
+                    locked={isParamLocked(lockedParams, 'rustRowHeight')}
+                    onToggleLock={onToggleLock}
+                    onChange={(rustRowHeight) => onUpdateParams({ rustRowHeight })}
+                  />
+
+                  <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C]">Число рядов n</span>
+                      <strong>
+                        {summary.rusticationCheck.n} ({summary.rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'})
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C]">Шаг ряда</span>
+                      <strong>{formatMeters(summary.rusticationCheck.rowHeight)} м</strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C]">Диапазон</span>
+                      <strong>0.300–0.400 м</strong>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C]">
+                  Тулово цоколя (<span className="font-mono">Rumpf</span>) выполняется{' '}
+                  <strong>гладким без рядов рустовки</strong> (S. 10). Деление на{' '}
+                  <span className="font-mono">Fuß / Rumpf / Deckgesims</span> сохраняется.
+                </div>
+              )}
 
               <WhyBlock
                 ruleId="socle_rustication_rows"
@@ -3698,20 +3739,23 @@ export function CalculatorModules({
                 page={summary.rusticationCheck.page}
                 explanation={summary.rusticationCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E5DFD3]">
-                <MeterControl
-                  id="calc-rust-socle"
-                  label="Высота руста цоколя"
-                  value={params.hSocleRust}
-                  min={0.2}
-                  max={0.55}
-                  lockKey="hSocleRust"
-                  locked={isParamLocked(lockedParams, 'hSocleRust')}
-                  onToggleLock={onToggleLock}
-                  onChange={(hSocleRust) => onUpdateParams({ hSocleRust })}
-                />
+                {params.hasSocleRustication !== false && (
+                  <MeterControl
+                    id="calc-rust-socle"
+                    label="Высота руста цоколя"
+                    value={params.hSocleRust}
+                    min={0.2}
+                    max={0.55}
+                    lockKey="hSocleRust"
+                    locked={isParamLocked(lockedParams, 'hSocleRust')}
+                    onToggleLock={onToggleLock}
+                    onChange={(hSocleRust) => onUpdateParams({ hSocleRust })}
+                  />
+                )}
                 <MeterControl
                   id="calc-rust-eg"
                   label="Высота руста 1-го этажа (EG)"
@@ -3754,6 +3798,7 @@ export function CalculatorModules({
                 page={summary.decreasingCheck.page}
                 explanation={summary.decreasingCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
 
               <div className="space-y-2 pt-2 border-t border-[#E5DFD3]">

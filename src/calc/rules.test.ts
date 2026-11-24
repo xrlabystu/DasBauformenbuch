@@ -960,7 +960,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
 
     // 2. По середине фасада: нечётное число осей (5) -> совпадает со средней осью (idx 2)
     const oddGeo = resolveEntranceGeometry(
-      { ...base, axesCount: 5, entrancePlacement: 'facade_center' },
+      { ...base, hasEntrance: true, axesCount: 5, entrancePlacement: 'facade_center' },
       2 * D + 4 * base.A,
       Array.from({ length: 5 }, (_, i) => D + i * base.A)
     );
@@ -972,7 +972,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     const evenWidth = 2 * D + 3 * base.A;
     const evenAxes = Array.from({ length: 4 }, (_, i) => D + i * base.A);
     const evenGeo = resolveEntranceGeometry(
-      { ...base, axesCount: 4, entrancePlacement: 'facade_center' },
+      { ...base, hasEntrance: true, axesCount: 4, entrancePlacement: 'facade_center' },
       evenWidth,
       evenAxes
     );
@@ -984,6 +984,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     const axisGeo = resolveEntranceGeometry(
       {
         ...base,
+        hasEntrance: true,
         axesCount: 4,
         entrancePlacement: 'axis',
         entranceAxisIndex: 1,
@@ -1003,7 +1004,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assertClose(axisGeo.doorWidthM, 1.4);
 
     // 5. Связанный замочек на отметке верха двери (entranceTopM)
-    const topLockedState = { ...base, entranceBottomM: 0.6, entranceHeightM: 2.4 }; // top = 3.0
+    const topLockedState = { ...base, hasEntrance: true, entranceBottomM: 0.6, entranceHeightM: 2.4 }; // top = 3.0
     const patchMoveBottom = filterUnlockedPatch(
       topLockedState,
       { entranceBottomM: 1.0 },
@@ -1027,6 +1028,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
 
     const raisedDoorParams = {
       ...base,
+      hasEntrance: true,
       axesCount: 4,
       entrancePlacement: 'facade_center' as const,
       entranceBottomM: 1.2,
@@ -1155,7 +1157,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
   });
 
   it('28. Полный 1-й этаж в цоколе сохраняет трёхчастное деление и рустовку в DWG', () => {
-    const base = createDefaultParamsForTypology('miethaus');
+    const base = { ...createDefaultParamsForTypology('miethaus'), hasSocleRustication: true };
     assert.equal(base.useFullFloorAsSocle, true);
     const sum = evaluateFacadeSummary(base, { expertMode: true });
     const cad = buildFacadeCadDocument(base, sum);
@@ -1287,6 +1289,58 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       return topW > botW + 10;
     });
     assert.equal(trapezoids.length, richParams.axesCount);
+  });
+
+  it('34. Гладкий цоколь (hasSocleRustication=false): отключает ряды руста в проверке и DWG, сохраняя 3-частное деление', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const smoothParams = {
+      ...base,
+      hasSocleRustication: false,
+      rustRowHeight: 0.22, // вне диапазона [0.30, 0.40], но при отключённой рустовке нарушений быть не должно
+    };
+    const sum = evaluateFacadeSummary(smoothParams, { expertMode: true });
+    assert.equal(sum.rusticationCheck.enabled, false);
+    assert.equal(sum.rusticationCheck.n, 0);
+    assert.equal(sum.rusticationCheck.status, 'ok');
+    assert.equal(sum.rusticationCheck.sourceStatus, 'explicit-verified');
+    assert.ok(sum.threePartSocleResult.fuss > 0 && sum.threePartSocleResult.rumpf > 0 && sum.threePartSocleResult.deck > 0);
+
+    const cad = buildFacadeCadDocument(smoothParams, sum);
+    const socleEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '02_SOCLE'
+    );
+    // Только 3 замкнутых прямоугольника (контур цоколя, Fuß, Deckgesims) без горизонтальных линий руста
+    assert.equal(socleEnts.length, 3);
+
+    const detailBytes = exportDetailPlateToDwg('socle', smoothParams, sum);
+    assert.ok(detailBytes.byteLength > 1500);
+  });
+
+  it('35. На всех типах зданий по умолчанию вход отключён и рустовка тулова цоколя выключена', () => {
+    const types = ['simple_house', 'urban_house', 'miethaus', 'villa', 'rich_columnar', 'monumental', 'palace'] as const;
+    for (const typeId of types) {
+      const def = createDefaultParamsForTypology(typeId);
+      assert.equal(def.hasEntrance, false, `${typeId} must default to hasEntrance=false`);
+      assert.equal(def.entrancePosition, 'none', `${typeId} must default to entrancePosition=none`);
+      assert.equal(def.hasSocleRustication, false, `${typeId} must default to hasSocleRustication=false`);
+    }
+  });
+
+  it('36. При включении всего 1-го этажа в цоколь правило главного карниза (1/8–1/12, 1/12–1/15 и < цоколя) не работает', () => {
+    const urban = createDefaultParamsForTypology('urban_house');
+    // Заведомо малое и заведомо большое значение hMain при обычном цоколе дают violation,
+    // но при useFullFloorAsSocle=true правило не применяется (status='ok', notApplicable=true).
+    const smallOffSocle = evaluateFacadeSummary({ ...urban, useFullFloorAsSocle: false, hMain: 0.45 }, { expertMode: true });
+    assert.equal(smallOffSocle.mainCorniceCheck.status, 'violation');
+    assert.equal(smallOffSocle.mainCorniceCheck.notApplicable, false);
+
+    const smallFullSocle = evaluateFacadeSummary({ ...urban, useFullFloorAsSocle: true, hMain: 0.45 }, { expertMode: true });
+    assert.equal(smallFullSocle.mainCorniceCheck.status, 'ok');
+    assert.equal(smallFullSocle.mainCorniceCheck.notApplicable, true);
+
+    const largeFullSocle = evaluateFacadeSummary({ ...urban, useFullFloorAsSocle: true, hMain: 2.3 }, { expertMode: true });
+    assert.equal(largeFullSocle.mainCorniceCheck.status, 'ok');
+    assert.equal(largeFullSocle.mainCorniceCheck.notApplicable, true);
   });
 });
 

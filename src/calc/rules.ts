@@ -1209,6 +1209,7 @@ export function checkSocleHeight(
 
 export interface MainCorniceCheckResult {
   ok: boolean;
+  notApplicable?: boolean;
   range: [number, number];
   inRange: boolean;
   belowSocle: boolean;
@@ -1223,10 +1224,26 @@ export function checkMainCornice(
   hSocle: number,
   hMain: number,
   totalHeight: number,
-  floors: number
+  floors: number,
+  useFullFloorAsSocle = false
 ): MainCorniceCheckResult {
   const range: [number, number] =
     floors <= 2 ? [totalHeight / 12, totalHeight / 8] : [totalHeight / 15, totalHeight / 12];
+  if (useFullFloorAsSocle) {
+    return {
+      ok: true,
+      notApplicable: true,
+      range,
+      inRange: true,
+      belowSocle: true,
+      status: 'ok',
+      note: 'При включении всего 1-го этажа в цоколь правило не работает (S. 16, 22).',
+      explanation:
+        'Правило не работает: весь 1-й этаж включён в цоколь (S. 16, 22), поэтому доли главного карниза (1/8–1/12 для 2 эт., 1/12–1/15 для многоэтажных) и сравнение h_main < h_socle с самостоятельным цоколем не применяются.',
+      formula: 'useFullFloorAsSocle = true ⇒ правило не работает (S. 16, 22)',
+      page: 'S. 16, 22',
+    };
+  }
   const inRange = hMain >= range[0] - EPS && hMain <= range[1] + EPS;
   const belowSocle = hMain < hSocle - EPS;
   const ok = inRange && belowSocle;
@@ -1248,6 +1265,7 @@ export function checkMainCornice(
 
   return {
     ok,
+    notApplicable: false,
     range,
     inRange,
     belowSocle,
@@ -1460,15 +1478,18 @@ export function decreasingUpward(
   hSocleRust: number,
   hEgRust: number,
   vSocleProfile: number,
-  vEgProfile: number
+  vEgProfile: number,
+  hasSocleRust = true
 ): DecreasingUpwardResult {
-  const rustOk = hEgRust < hSocleRust - EPS;
+  const rustOk = !hasSocleRust || hEgRust < hSocleRust - EPS;
   const profileOk = vEgProfile < vSocleProfile - EPS;
   const status: ValidationStatus = rustOk && profileOk ? 'ok' : 'violation';
 
   let explanation = '';
   if (rustOk && profileOk) {
-    explanation = `Убывание силы кверху соблюдено (S. 10): руст 1-го этажа (${formatMeters(hEgRust)} м) < цокольного (${formatMeters(hSocleRust)} м), вынос профиля (${formatMeters(vEgProfile)} м) < цокольного (${formatMeters(vSocleProfile)} м).`;
+    explanation = hasSocleRust
+      ? `Убывание силы кверху соблюдено (S. 10): руст 1-го этажа (${formatMeters(hEgRust)} м) < цокольного (${formatMeters(hSocleRust)} м), вынос профиля (${formatMeters(vEgProfile)} м) < цокольного (${formatMeters(vSocleProfile)} м).`
+      : `Убывание силы кверху соблюдено (S. 10): тулово цоколя гладкое (без рустовки), вынос профиля 1-го этажа (${formatMeters(vEgProfile)} м) < цокольного (${formatMeters(vSocleProfile)} м).`;
   } else {
     const issues: string[] = [];
     if (!rustOk) issues.push(`высота руста 1-го этажа (${formatMeters(hEgRust)} м) ≥ цокольного (${formatMeters(hSocleRust)} м)`);
@@ -1481,7 +1502,9 @@ export function decreasingUpward(
     profileOk,
     status,
     explanation,
-    formula: 'h_rust(EG) < h_rust(Sockel); v_profile(EG) < v_profile(Sockel)',
+    formula: hasSocleRust
+      ? 'h_rust(EG) < h_rust(Sockel); v_profile(EG) < v_profile(Sockel)'
+      : 'v_profile(EG) < v_profile(Sockel) (гладкий цоколь)',
     page: 'S. 10',
   };
 }
@@ -1527,6 +1550,7 @@ export function abkroepfungPreference(
 }
 
 export interface RusticationRowsResult {
+  enabled: boolean;
   n: number;
   rowHeight: number;
   oddPreferred: boolean;
@@ -1542,8 +1566,27 @@ export interface RusticationRowsResult {
 
 export function rusticationRows(
   socleHeightVal: number,
-  rowHeight = 0.35
+  rowHeight = 0.35,
+  enabled = true
 ): RusticationRowsResult {
+  if (!enabled) {
+    return {
+      enabled: false,
+      n: 0,
+      rowHeight: 0,
+      oddPreferred: true,
+      rowRange: [0.3, 0.4],
+      inRowRange: true,
+      status: 'ok',
+      sourceStatus: 'explicit-verified',
+      note: 'S. 10: тулово цоколя гладкое (без рустовки)',
+      explanation:
+        'Рустовка цоколя отключена: тулово (Rumpf) выполнено гладким, что прямо допускается текстом Браузеветтера (S. 10: «может быть выполнено гладким или состоять из рядов рустики»).',
+      formula: 'Гладкое тулово цоколя без рядов руста (допустимо по S. 10)',
+      page: 'S. 10, 17',
+    };
+  }
+
   const safeTarget = rowHeight > 0 ? rowHeight : 0.35;
   const n = Math.max(1, Math.round(socleHeightVal / safeTarget));
   const actualRowHeight = socleHeightVal / n;
@@ -1573,6 +1616,7 @@ export function rusticationRows(
       : `При высоте цоколя ${formatMeters(socleHeightVal)} м получается чётное число рядов n = ${n} по ${formatMeters(actualRowHeight)} м — перенос правила нечётности со стеновой кладки (S. 17) на цоколь (ориентир UX).`;
 
   return {
+    enabled: true,
     n,
     rowHeight: actualRowHeight,
     oddPreferred,
@@ -1916,6 +1960,7 @@ export function allowedAxisRatio(
 }
 
 export interface VariantMainCorniceResult extends MainCorniceCheckResult {
+  notApplicable: boolean;
   isExtrapolated: boolean;
   corniceMode: CorniceVariantMode;
 }
@@ -1926,7 +1971,8 @@ export function checkMainCorniceWithVariant(
   totalHeight: number,
   variant: BuildingVariant,
   multiSub: MultiSub = 'three',
-  corniceMode: CorniceVariantMode = 'full_entablature'
+  corniceMode: CorniceVariantMode = 'full_entablature',
+  useFullFloorAsSocle = false
 ): VariantMainCorniceResult {
   const preset = getVariantPreset(variant, multiSub);
   const rawSpec =
@@ -1940,6 +1986,25 @@ export function checkMainCorniceWithVariant(
     : [rawSpec.min, rawSpec.max];
 
   const range: [number, number] = [totalHeight * shareRange[0], totalHeight * shareRange[1]];
+
+  if (useFullFloorAsSocle) {
+    return {
+      ok: true,
+      notApplicable: true,
+      range,
+      inRange: true,
+      belowSocle: true,
+      status: 'ok',
+      note: 'При включении всего 1-го этажа в цоколь правило не работает (S. 16, 22).',
+      isExtrapolated: false,
+      corniceMode,
+      explanation:
+        'Правило не работает: весь 1-й этаж включён в цоколь (S. 16, 22), поэтому доли главного карниза (1/8–1/12 для 2 эт., 1/12–1/15 для многоэтажных) и сравнение h_main < h_socle с самостоятельным цоколем не применяются.',
+      formula: 'useFullFloorAsSocle = true ⇒ правило не работает (S. 16, 22)',
+      page: 'S. 16, 22',
+    };
+  }
+
   const inRange = isExtrapolated
     ? hMain >= range[0] - EPS
     : hMain >= range[0] - EPS && hMain <= range[1] + EPS;
@@ -1974,6 +2039,7 @@ export function checkMainCorniceWithVariant(
 
   return {
     ok,
+    notApplicable: false,
     range,
     inRange,
     belowSocle,
@@ -2313,7 +2379,7 @@ export function resolveEntranceGeometry(
   const doorWidthM = Math.max(0.6, params.entranceWidthM ?? Math.max(0.95, params.w * 1.05));
   const placement: EntrancePlacement = params.entrancePlacement ?? 'facade_center';
 
-  if (params.hasEntrance === false || params.entrancePosition === 'none') {
+  if (!params.hasEntrance) {
     return {
       hasDoor: false,
       placement,
@@ -3833,6 +3899,7 @@ export interface FacadeParameters {
   vEgProfile: number;
   hasKellerfenster: boolean;
   hasLisenen: boolean;
+  hasSocleRustication?: boolean;
   rustRowHeight: number;
   useFullFloorAsSocle: boolean;
   // Межэтажные карнизы / ленты (Gurtgesims)
@@ -4017,7 +4084,14 @@ export function evaluateFacadeSummary(
   );
   const effectiveEntrancePos: EntrancePosition = !params.hasEntrance
     ? 'none'
-    : params.entrancePosition;
+    : params.entrancePosition === 'none'
+      ? resolveEntrancePositionFromSettings(
+          true,
+          params.entrancePlacement ?? 'facade_center',
+          params.entranceAxisIndex ?? Math.floor(safeAxesCount / 2),
+          safeAxesCount
+        )
+      : params.entrancePosition;
   const axesCountCheck = checkAxesCount(
     safeAxesCount,
     params.buildingVariant,
@@ -4065,7 +4139,8 @@ export function evaluateFacadeSummary(
     effectiveTotalHeight,
     params.buildingVariant,
     params.multiSub,
-    params.corniceVariantMode
+    params.corniceVariantMode,
+    params.useFullFloorAsSocle
   );
   const gurtCheckRaw = checkGurtWithVariant(
     params.hGurt,
@@ -4078,17 +4153,23 @@ export function evaluateFacadeSummary(
   );
   const threePartSocleResult = threePartSocle(effectiveSocleH, params.socleParts);
   const plateCheck = plateDominant(params.hPlate, params.hOtherSum, 1.2);
+  const hasSocleRust = params.hasSocleRustication !== false;
   const decreasingCheck = decreasingUpward(
     params.hSocleRust,
     params.hEgRust,
     params.vSocleProfile,
-    params.vEgProfile
+    params.vEgProfile,
+    hasSocleRust
   );
   const abkroepfungCheck = abkroepfungPreference(
     params.hasKellerfenster,
     params.hasLisenen
   );
-  const rusticationCheck = rusticationRows(effectiveSocleH, params.rustRowHeight);
+  const rusticationCheck = rusticationRows(
+    effectiveSocleH,
+    params.rustRowHeight,
+    hasSocleRust
+  );
   const fullFloorSocleCheck = fullFloorAsSocle(
     derivedGeometry.floor1FullHeight,
     effectiveTotalHeight / 10
@@ -4410,9 +4491,11 @@ export function evaluateFacadeSummary(
     {
       id: 'main_cornice_subordination',
       title: 'Подчинённость главного карниза цоколю (h_main < h_socle)',
-      page: 'S. 16',
+      page: mainCorniceCheck.page,
       formula: mainCorniceCheck.formula,
-      valueText: `h_main = ${formatMeters(params.hMain)} м vs h_socle = ${formatMeters(effectiveSocleH)} м`,
+      valueText: mainCorniceCheck.notApplicable
+        ? `Не работает (1-й эт. = цоколь, h_main = ${formatMeters(params.hMain)} м)`
+        : `h_main = ${formatMeters(params.hMain)} м vs h_socle = ${formatMeters(effectiveSocleH)} м`,
       status: mainCorniceCheck.status,
       sourceStatus: mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified',
       priority: 'P0',
@@ -4466,9 +4549,11 @@ export function evaluateFacadeSummary(
     {
       id: 'socle_rustication_rows',
       title: 'Ряды рустики цоколя (нечётность и 0.30–0.40 м)',
-      page: 'S. 17',
+      page: rusticationCheck.page,
       formula: rusticationCheck.formula,
-      valueText: `n = ${rusticationCheck.n} (${rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'}) × ${formatMeters(rusticationCheck.rowHeight)} м`,
+      valueText: rusticationCheck.enabled
+        ? `n = ${rusticationCheck.n} (${rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'}) × ${formatMeters(rusticationCheck.rowHeight)} м`
+        : 'Гладкое тулово (без рустовки)',
       status: rusticationCheck.status,
       sourceStatus: rusticationCheck.sourceStatus,
       priority: 'P0',
@@ -5004,6 +5089,7 @@ export function applyBuildingVariantPreset(
   const isEmbeddedInRow =
     prev.buildingType === 'urban_house' || prev.buildingType === 'miethaus';
 
+  const keepEntranceDisabled = prev.hasEntrance === false;
   return {
     buildingVariant: variant,
     multiSub,
@@ -5011,9 +5097,14 @@ export function applyBuildingVariantPreset(
     levels: alignedLevels,
     A,
     axesCount,
-    entrancePosition:
-      axesCount % 2 === 1 ? 'center' : isEmbeddedInRow ? 'right' : 'center',
-    hasEntrance: true,
+    entrancePosition: keepEntranceDisabled
+      ? 'none'
+      : axesCount % 2 === 1
+        ? 'center'
+        : isEmbeddedInRow
+          ? 'right'
+          : 'center',
+    hasEntrance: !keepEntranceDisabled,
     entrancePlacement:
       axesCount % 2 === 1 ? 'facade_center' : isEmbeddedInRow ? 'axis' : 'facade_center',
     entranceAxisIndex:
@@ -5088,8 +5179,8 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     buildingVariant,
     multiSub,
     axesCount: defaultAxesCount,
-    entrancePosition: 'center',
-    hasEntrance: true,
+    entrancePosition: 'none',
+    hasEntrance: false,
     entrancePlacement: 'facade_center',
     entranceAxisIndex: Math.floor(defaultAxesCount / 2),
     entranceBottomM: 0,
@@ -5143,6 +5234,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     vEgProfile: 0.035,
     hasKellerfenster: false,
     hasLisenen: false,
+    hasSocleRustication: false,
     rustRowHeight,
     useFullFloorAsSocle,
     beltMode: type === 'palace' || type === 'rich_columnar' ? 'crowning' : 'binding',

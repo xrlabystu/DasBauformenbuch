@@ -1206,7 +1206,8 @@ function SocleHierarchyPlate({
   const deckH = Math.max(14, (deck / totalParts) * secH);
   const fussH = Math.max(14, (fuss / totalParts) * secH);
   const rumpfH = Math.max(24, secH - deckH - fussH);
-  const nCourses = Math.min(12, Math.max(1, n));
+  const hasSocleRust = params.hasSocleRustication !== false;
+  const nCourses = hasSocleRust ? Math.min(12, Math.max(1, n)) : 0;
 
   // Правая половина: сравнение шкал h_socle, h_main, h_gurt + [min, max]
   const chartX = 240;
@@ -1313,7 +1314,7 @@ function SocleHierarchyPlate({
             fontFamily="IBM Plex Mono, monospace"
             fill="#1C1917"
           >
-            Rumpf ({n} ряд.)
+            {hasSocleRust ? `Rumpf (${n} ряд.)` : 'Rumpf (гладкий)'}
           </text>
           <text
             x={secX + secW / 2}

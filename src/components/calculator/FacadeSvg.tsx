@@ -614,7 +614,8 @@ export function FacadeSvg({
   const deckPxH = Math.max(3, (summary.threePartSocleResult.deck / partsSum) * plinthPxH);
   const fussPxH = Math.max(3, (summary.threePartSocleResult.fuss / partsSum) * plinthPxH);
   const rumpfPxH = Math.max(4, plinthPxH - deckPxH - fussPxH);
-  const rustCourses = Math.min(12, Math.max(1, summary.rusticationCheck.n));
+  const hasSocleRust = params.hasSocleRustication !== false;
+  const rustCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
   // Главный ярус для подробного показа сандрика
   const activeFramingFloor = safeFloors >= 2 ? 1 : 0;
@@ -891,7 +892,7 @@ export function FacadeSvg({
               fontFamily="IBM Plex Mono, monospace"
               fill={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
             >
-              Цоколь {formatMeters(effectiveSocleH)} м ({summary.rusticationCheck.n} ряд.)
+              Цоколь {formatMeters(effectiveSocleH)} м ({hasSocleRust ? `${summary.rusticationCheck.n} ряд.` : 'гладкий'})
             </text>
           </g>
 
