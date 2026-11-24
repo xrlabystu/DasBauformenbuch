@@ -1397,19 +1397,21 @@ export function FacadeSvg({
                             }
                             strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.05}
                           />
-                          <rect
-                            x={winX - uPx}
-                            y={winY - rPx - fPx}
-                            width={winWpx + 2 * uPx}
-                            height={Math.max(2, fPx)}
-                            fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#EFE8D7'}
-                            stroke={
-                              isHi('entablature') || entablatureStatus === 'violation'
-                                ? STATUS_STROKE[entablatureStatus]
-                                : '#44403C'
-                            }
-                            strokeWidth={entablatureStatus === 'violation' ? 1.4 : 0.95}
-                          />
+                          {fPx > 0.01 && (
+                            <rect
+                              x={winX - uPx}
+                              y={winY - rPx - fPx}
+                              width={winWpx + 2 * uPx}
+                              height={Math.max(2, fPx)}
+                              fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#EFE8D7'}
+                              stroke={
+                                isHi('entablature') || entablatureStatus === 'violation'
+                                  ? STATUS_STROKE[entablatureStatus]
+                                  : '#44403C'
+                              }
+                              strokeWidth={entablatureStatus === 'violation' ? 1.4 : 0.95}
+                            />
+                          )}
                           {params.withConsoles && (
                             <>
                               <rect

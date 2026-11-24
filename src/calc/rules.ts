@@ -621,6 +621,7 @@ export function check_corner(
   }
 
   let status: ValidationStatus = 'ok';
+  let sourceStatus: SourceStatus = 'explicit-verified';
   let explanation = '';
   let recommendation = '';
 
@@ -636,7 +637,21 @@ export function check_corner(
       explanation = `Нарушение для монументального здания: p_corner (${formatMeters(p_corner)} м) должен быть больше промежуточного простенка (${formatMeters(p_intermediate)} м).`;
       recommendation = 'Увеличьте коэффициент k_D (например, до 5/6 ≈ 0.833) или усильте угловой простенок.';
     }
-  } else if (type === 'simple_house' || type === 'villa') {
+  } else if (type === 'villa') {
+    // C4: Для виллы (S. 3: "ungezwungenste Behandlung") мягче, чем для простого дома
+    sourceStatus = 'heuristic';
+    if (p_corner > w + EPS) {
+      status = kDInRange ? 'ok' : 'approx';
+      explanation = `Угловой простенок виллы p_corner = ${formatMeters(p_corner)} м > w (${formatMeters(w)} м).`;
+      recommendation = kDInRange
+        ? 'Стандартный диапазон k_D ∈ [2/3, 5/6] (по умолчанию 4/5) соблюдён.'
+        : `Коэффициент k_D = ${formatMeters(k_D, 3)} выходит за типовой интервал [0.667, 0.833].`;
+    } else {
+      status = 'approx';
+      explanation = `Для загородного дома / виллы (S. 3: «ungezwungenste Behandlung») угловой простенок p_corner = ${formatMeters(p_corner)} м ≤ w (${formatMeters(w)} м) допустим в свободной композиции (UX-смягчение).`;
+      recommendation = 'При желании усилить угол увеличьте k_D ближе к 4/5.';
+    }
+  } else if (type === 'simple_house') {
     if (p_corner > w + EPS) {
       status = kDInRange ? 'ok' : 'approx';
       explanation = `Условие отдельно стоящего жилого дома выполнено: p_corner = ${formatMeters(p_corner)} м > w (${formatMeters(w)} м).`;
@@ -653,6 +668,11 @@ export function check_corner(
       recommendation = 'Увеличьте k_D или уменьшите ширину окна w.';
     }
   } else {
+    // B4: На S. 5 правило p >= w отменено именно для промежуточных простенков (Wandfläche zwischen zwei Fenstern);
+    // перенос ослабления на угол при rich_columnar является экстраполяцией (heuristic)
+    if (type === 'rich_columnar') {
+      sourceStatus = 'heuristic';
+    }
     if (p_corner > w + EPS || p_intermediate >= p_corner - EPS) {
       status = kDInRange ? 'ok' : 'approx';
       explanation =
@@ -675,7 +695,7 @@ export function check_corner(
     k_D,
     kDInRange,
     status,
-    sourceStatus: 'explicit-verified',
+    sourceStatus,
     explanation,
     recommendation,
     formula: 'D = k_D × A; p_corner = D − w/2 − u',
@@ -877,16 +897,26 @@ export function framing_from_T(
   const F = s * f;
   const K = s * k;
   const ratioLabel = `${r}:${f}:${k}`;
-  const requiresIncreasedProjection = f > k;
+  const isDirectCornice = f === 0;
+  const requiresIncreasedProjection = !isDirectCornice && f > k;
+  const directCorniceNeedsStrongerK = isDirectCornice && k <= r + EPS;
   const status: ValidationStatus =
-    T <= 0 || sum <= 0 ? 'violation' : requiresIncreasedProjection ? 'approx' : 'ok';
+    T <= 0 || sum <= 0
+      ? 'violation'
+      : requiresIncreasedProjection || directCorniceNeedsStrongerK
+        ? 'approx'
+        : 'ok';
 
   const explanation =
     T <= 0
       ? 'Общая высота сандрика T должна быть положительной.'
-      : requiresIncreasedProjection
-        ? `Отношение ${ratioLabel} (фриз выше карниза) допустимо по Brausewetter (S. 8) при условии увеличенного выноса венчающего карниза.`
-        : `При T = ${formatMeters(T)} м и отношении ${ratioLabel} (сумма ${sum}, модуль s = ${formatMeters(s, 5)} м): R = ${formatMeters(R)} м, F = ${formatMeters(F)} м, K = ${formatMeters(K)} м.`;
+      : isDirectCornice
+        ? directCorniceNeedsStrongerK
+          ? `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): при узком наличнике карниз должен быть сильнее него (K > R; сейчас K = ${formatMeters(K)} м vs R = ${formatMeters(R)} м).`
+          : `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): R = ${formatMeters(R)} м, K = ${formatMeters(K)} м (> R).`
+        : requiresIncreasedProjection
+          ? `Отношение ${ratioLabel} (фриз выше карниза) допустимо по Brausewetter (S. 8) при условии увеличенного выноса венчающего карниза.`
+          : `При T = ${formatMeters(T)} м и отношении ${ratioLabel} (сумма ${sum}, модуль s = ${formatMeters(s, 5)} м): R = ${formatMeters(R)} м, F = ${formatMeters(F)} м, K = ${formatMeters(K)} м.`;
 
   return {
     R,
@@ -898,7 +928,9 @@ export function framing_from_T(
     requiresIncreasedProjection,
     status,
     explanation,
-    formula: 's = T / (r + f + k); R = s·r, F = s·f, K = s·k',
+    formula: isDirectCornice
+      ? 'F = 0 (карниз прямо по наличнику); K > R при R ≈ w/6 (S. 7–8)'
+      : 's = T / (r + f + k); R = s·r, F = s·f, K = s·k',
     page: 'S. 7–8',
   };
 }
@@ -1287,10 +1319,11 @@ export function checkBeltHeight(
     status = 'violation';
     explanation = `Высота ленты h = ${formatMeters(hGurt)} м превышает h_нижн/6 (${formatMeters(range[1])} м, S. 16).`;
   } else if (hGurt < range[0] - EPS) {
-    status = allowModestLowerFloor ? 'approx' : 'violation';
+    // A3: На S. 16 меньшие высоты чем H_floor/12 оправданы при скромном 1-м этаже ("je nach Umständen berechtigt"), поэтому никогда не дают violation
+    status = allowModestLowerFloor ? 'ok' : 'approx';
     explanation = allowModestLowerFloor
-      ? `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м); по S. 16 при скромном первом этаже допустимы меньшие высоты (порог не задан).`
-      : `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м). Меньшие размеры допустимы лишь при скромном решении 1-го этажа (S. 16).`;
+      ? `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м) — оправдано при скромном и простом решении 1-го этажа (S. 16).`
+      : `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м) — по S. 16 допустимо при скромном первом этаже (approx).`;
   } else {
     status = 'ok';
     explanation = `Поясной карниз (лента) h = ${formatMeters(hGurt)} м входит в диапазон 1/12…1/6 высоты этажа ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м) и подчинён главному карнизу и цоколю (S. 16).`;
@@ -1455,6 +1488,7 @@ export function decreasingUpward(
 
 export interface AbkroepfungResult {
   status: 'ok' | 'approx';
+  sourceStatus: 'explicit-verified' | 'heuristic';
   note: string;
   formula: string;
   page: string;
@@ -1464,16 +1498,28 @@ export function abkroepfungPreference(
   hasKellerfenster: boolean,
   hasLisenen: boolean
 ): AbkroepfungResult {
-  if (hasKellerfenster || hasLisenen) {
+  if (hasKellerfenster) {
     return {
       status: 'approx',
-      note: 'S. 10/12: раскреповка допустима, но без неё лучше',
-      formula: 'hasKellerfenster ∨ hasLisenen ⇒ раскреповка допустима (approx)',
+      sourceStatus: 'explicit-verified',
+      note: 'S. 10: раскреповка допустима при подвальных окнах, но сплошной прогон лучше',
+      formula: 'hasKellerfenster ⇒ раскреповка допустима (approx, S. 10)',
+      page: 'S. 10',
+    };
+  }
+  if (hasLisenen) {
+    // B3: На S. 12 Abkröpfung описана для карниза/антаблемента над пилястрами; перенос на цоколь — экстраполяция
+    return {
+      status: 'approx',
+      sourceStatus: 'heuristic',
+      note: 'S. 12: раскреповка над пилястрами/лопатками перенесена на цоколь (UX-экстраполяция); без неё лучше',
+      formula: 'hasLisenen ⇒ раскреповка допустима (approx, перенос с S. 12)',
       page: 'S. 10, 12',
     };
   }
   return {
     status: 'ok',
+    sourceStatus: 'explicit-verified',
     note: 'S. 10: сплошной прогон без раскреповок',
     formula: '¬hasKellerfenster ∧ ¬hasLisenen ⇒ сплошной прогон (ok)',
     page: 'S. 10',
@@ -1487,6 +1533,7 @@ export interface RusticationRowsResult {
   rowRange: [number, number];
   inRowRange: boolean;
   status: ValidationStatus;
+  sourceStatus: SourceStatus;
   note: string | null;
   explanation: string;
   formula: string;
@@ -1504,7 +1551,9 @@ export function rusticationRows(
   const rowRange: [number, number] = [0.3, 0.4];
   const inRowRange =
     actualRowHeight >= rowRange[0] - EPS && actualRowHeight <= rowRange[1] + EPS;
-  const note = !oddPreferred ? 'S. 17: нечётное число рядов предпочтительнее' : null;
+  const note = !oddPreferred
+    ? 'Нечётное число рядов (S. 17 для кладки стен) применено к цоколю как ориентир'
+    : null;
 
   let status: ValidationStatus = 'ok';
   if (!inRowRange) {
@@ -1513,11 +1562,15 @@ export function rusticationRows(
     status = 'approx';
   }
 
+  // B2: высота ряда 0.30–0.40 м — из S. 17 (explicit-verified), а перенос предпочтения нечётности кладки стен на цоколь — heuristic
+  const sourceStatus: SourceStatus =
+    inRowRange && !oddPreferred ? 'heuristic' : 'explicit-verified';
+
   const explanation = !inRowRange
-    ? `Расчётная высота ряда руста ${formatMeters(actualRowHeight)} м (при n = ${n}) выходит за типовой диапазон 0.300–0.400 м.`
+    ? `Расчётная высота ряда руста ${formatMeters(actualRowHeight)} м (при n = ${n}) выходит за типовой диапазон 0.300–0.400 м (S. 17).`
     : oddPreferred
       ? `При высоте цоколя ${formatMeters(socleHeightVal)} м укладывается n = ${n} (нечётное число) рядов по ${formatMeters(actualRowHeight)} м (S. 17).`
-      : `При высоте цоколя ${formatMeters(socleHeightVal)} м получается чётное число рядов n = ${n} по ${formatMeters(actualRowHeight)} м — допустимо при фиксированном камне, но нечётное предпочтительнее (S. 17).`;
+      : `При высоте цоколя ${formatMeters(socleHeightVal)} м получается чётное число рядов n = ${n} по ${formatMeters(actualRowHeight)} м — перенос правила нечётности со стеновой кладки (S. 17) на цоколь (ориентир UX).`;
 
   return {
     n,
@@ -1526,9 +1579,10 @@ export function rusticationRows(
     rowRange,
     inRowRange,
     status,
+    sourceStatus,
     note,
     explanation,
-    formula: 'n = round(h_socle / rowHeight); rowHeight ∈ [0.30, 0.40] м; нечётное n лучше',
+    formula: 'n = round(h_socle / rowHeight); rowHeight ∈ [0.30, 0.40] м; нечётное n (ориентир со S. 17)',
     page: 'S. 17',
   };
 }
@@ -1826,16 +1880,16 @@ export function allowedAxisRatio(
     case 'villa':
       return {
         range: [0.6, 1.0],
-        sourceStatus: 'explicit-verified',
+        sourceStatus: 'heuristic',
         isTypologyOverride: variant === 'multi-story',
-        note: 'Вилла / загородный дом (S. 3, 5): 0.60…1.00',
+        note: 'Вилла / загородный дом (S. 3, 5): свободный диапазон 0.60…1.00 (UX-оценка)',
       };
     case 'monumental':
       return {
         range: [4 / 5, 1.0],
-        sourceStatus: 'explicit-verified',
+        sourceStatus: 'heuristic',
         isTypologyOverride: variant === 'multi-story',
-        note: 'Монументальное здание (S. 4–5): 4:5…1:1',
+        note: 'Монументальное здание (S. 4–5): 4:5…1:1 (числовые границы — UX-оценка)',
       };
     case 'palace':
       return {
@@ -1847,9 +1901,9 @@ export function allowedAxisRatio(
     case 'rich_columnar':
       return {
         range: [0.45, 0.6],
-        sourceStatus: 'explicit-verified',
+        sourceStatus: 'heuristic',
         isTypologyOverride: true,
-        note: 'Богатая колонно-пилястровая архитектура (S. 5): A:H → 1:2 (0.45…0.60)',
+        note: 'Богатая колонно-пилястровая архитектура (S. 5): точное 1:2 из текста, интервал 0.45…0.60 — UX-оценка',
       };
     default:
       return {
@@ -2028,11 +2082,16 @@ export function checkVariantAxisRatio(
     explanation = `Отношение A:H_max = ${formatMeters(ratio, 3)} выходит за допустимый предел [${formatMeters(min, 2)}, ${formatMeters(max, 3)}] (${resolved.note}).`;
   }
 
+  const effectiveSourceStatus: SourceStatus =
+    buildingType === 'rich_columnar' && Math.abs(ratio - 0.5) <= 1e-3
+      ? 'explicit-verified'
+      : resolved.sourceStatus;
+
   return {
     ratio,
     range: [min, max],
     isWideBayHeuristic,
-    sourceStatus: resolved.sourceStatus,
+    sourceStatus: effectiveSourceStatus,
     status,
     explanation,
     formula: `A / H_max ∈ [${formatMeters(min, 2)}, ${formatMeters(max, 3)}]`,
@@ -2057,7 +2116,8 @@ export function checkFacadeRectangle(
   facadeWidth: number,
   totalHeight: number,
   variant: BuildingVariant,
-  multiSub: MultiSub = 'three'
+  multiSub: MultiSub = 'three',
+  isEmbeddedInRow = true
 ): FacadeRectCheckResult {
   const preset = getVariantPreset(variant, multiSub);
   const expectedOrientation = preset.rules.facadeRect;
@@ -2084,6 +2144,10 @@ export function checkFacadeRectangle(
   } else if (nearSquareWarn) {
     status = 'approx';
     explanation = `Предупреждение: пропорция фасада близка к квадрату (W/H=${formatMeters(aspect, 3)}, отклонение ≤ 5 % — UX-порог). По S. 14 желательно выраженнее отличить длину от высоты.`;
+  } else if (variant === 'multi-story' && !isEmbeddedInRow && actualOrientation === 'lying') {
+    // C9: S. 14 относит стоячий прямоугольник именно ко встроенному многоэтажному дому ("beim eingebauten Stadthause")
+    status = 'ok';
+    explanation = `Отдельно стоящий многоэтажный дом с лежачим прямоугольником (W=${formatMeters(facadeWidth, 2)} м > H_total=${formatMeters(totalHeight, 2)} м): требование стоячего прямоугольника (S. 14) относится к встроенной городской застройке.`;
   } else if (expectedOrientation === 'either' || actualOrientation === expectedOrientation) {
     status = 'ok';
     explanation =
@@ -2110,8 +2174,8 @@ export function checkFacadeRectangle(
     formula:
       expectedOrientation === 'lying'
         ? 'W > H_total (лежачий прямоугольник, |W/H − 1| > 0.02)'
-        : expectedOrientation === 'standing'
-          ? 'H_total > W (стоячий прямоугольник, |W/H − 1| > 0.02)'
+        : expectedOrientation === 'standing' && isEmbeddedInRow
+          ? 'H_total > W (стоячий прямоугольник встроенного дома, |W/H − 1| > 0.02)'
           : '|W/H − 1| > 0.02',
     page: 'S. 14–15',
   };
@@ -2157,38 +2221,42 @@ export function checkAxesCount(
   const n = Math.max(1, Math.round(axesCount));
   const isOdd = n % 2 === 1;
   const resolvedEntrance: EntrancePosition =
-    entrancePosition ?? (isEmbeddedInRow && variant === 'multi-story' ? 'right' : 'center');
-  const effectivePref: 'odd' | 'odd-or-even' =
-    isEmbeddedInRow && variant === 'multi-story' ? 'odd-or-even' : preset.rules.axesPreferred;
+    entrancePosition ?? (isEmbeddedInRow ? 'right' : 'center');
+  // A5: S. 14 формулирует правило для любого встроенного дома ("beim eingebauten Wohnhause"), без ограничения только на multi-story
+  const effectivePref: 'odd' | 'odd-or-even' = isEmbeddedInRow
+    ? 'odd-or-even'
+    : preset.rules.axesPreferred;
 
   let status: ValidationStatus = 'ok';
   let explanation = '';
   const longHint = n >= 9 ? ` ${getAxesGroupingHint(n)}` : '';
 
-  if (isOdd) {
-    if (resolvedEntrance === 'left' || resolvedEntrance === 'right') {
-      status = 'approx';
-      explanation = `При нечётном числе осей (${n}) вход смещён вбок (${resolvedEntrance === 'left' ? 'слева' : 'справа'}) — для симметричного нечётного фасада естественен центральный вход (S. 14).${longHint}`;
-    } else {
+  if (resolvedEntrance === 'left' || resolvedEntrance === 'right') {
+    const sideRu = resolvedEntrance === 'left' ? 'слева' : 'справа';
+    if (isEmbeddedInRow) {
+      // A4 & A5: Для встроенного дома с боковым входом и чётное, и нечётное число осей одинаково приемлемо (S. 14)
       status = 'ok';
-      explanation =
-        (n === 5
-          ? '5 оконных осей — классический идеал симметричного фасада с центральной входной осью (S. 14, 16).'
-          : `Нечётное число осей (${n}) обеспечивает ясную центральную ось симметрии (S. 14).`) + longHint;
+      explanation = `Во встроенном доме при боковом входе (${sideRu}) ${isOdd ? 'нечётное' : 'чётное'} число осей (${n}) полностью допустимо (S. 14).${longHint}`;
+    } else {
+      status = 'approx';
+      explanation = `Для отдельно стоящего дома боковой вход (${sideRu}) нетипичен (S. 14: редкое отступление от центрального входа).${longHint}`;
     }
+  } else if (isOdd) {
+    status = 'ok';
+    explanation =
+      (n === 5
+        ? '5 оконных осей — классический идеал симметричного фасада с центральной входной осью (S. 14, 16).'
+        : `Нечётное число осей (${n}) обеспечивает ясную центральную ось симметрии (S. 14).`) + longHint;
   } else if (resolvedEntrance === 'center') {
     // §5.5: при центральном входе чётное число осей всегда даёт approx (нет центральной оконной оси!)
     status = 'approx';
     explanation = `Чётное число осей (${n}) конфликтует с центральным входом (S. 14): на оси симметрии оказывается простенок вместо проёма. ${getAxesGroupingHint(n)}`;
-  } else if (
-    effectivePref === 'odd-or-even' &&
-    (resolvedEntrance === 'left' || resolvedEntrance === 'right' || resolvedEntrance === 'none')
-  ) {
+  } else if (isEmbeddedInRow) {
     status = 'ok';
-    explanation = `Чётное число осей (${n}) допустимо во встроенном многоэтажном доме при боковом входе/проезде (S. 14).${longHint}`;
+    explanation = `Чётное число осей (${n}) во встроенном доме без центрального входа допустимо (S. 14).${longHint}`;
   } else {
     status = 'approx';
-    explanation = `Для варианта «${preset.shortLabelRu}» предпочтительно нечётное число осей. ${getAxesGroupingHint(n)}`;
+    explanation = `Для отдельно стоящего дома предпочтительно нечётное число осей. ${getAxesGroupingHint(n)}`;
   }
 
   return {
@@ -2201,7 +2269,7 @@ export function checkAxesCount(
     formula:
       effectivePref === 'odd'
         ? 'axes % 2 === 1 (при центральном входе нечётное обязательно)'
-        : 'встроенный дом + боковой вход ⇒ чётное допустимо (S. 14)',
+        : 'встроенный дом + боковой вход ⇒ чётное и нечётное допустимы (S. 14)',
     page: 'S. 14–16',
   };
 }
@@ -2474,6 +2542,7 @@ export interface BeltHeightResult {
   h: number;
   range: [number, number];
   status: ValidationStatus;
+  sourceStatus?: SourceStatus;
   notRequired?: boolean;
   checks: {
     belowSocle: boolean;
@@ -2500,6 +2569,7 @@ export function beltHeight(
     h: res.h,
     range: res.range,
     status: res.status,
+    sourceStatus: 'explicit-verified',
     checks: {
       belowSocle: res.belowSocle,
       belowMain: res.belowMain,
@@ -2844,17 +2914,17 @@ export function checkFramingWidth(u: number, w: number): SimpleRuleCheckResult {
   };
 }
 
-// N2 (S. 17): подоконная плита h_sill ∈ [w/8, w/7], допуск до w/6
+// N2 (S. 17): подоконная плита h_sill ∈ [w/8, w/7], но может доходить до меры наличника w/5 (approx в (w/7, w/5])
 export function checkSillPlateHeight(hSill: number, w: number): SimpleRuleCheckResult {
   const min = w / 8;
   const max = w / 7;
-  const absMax = w / 6;
+  const absMax = w / 5;
   if (!Number.isFinite(hSill) || !Number.isFinite(w) || w <= 0 || hSill <= 0) {
     return {
       status: 'violation',
       sourceStatus: 'explicit-verified',
       explanation: 'Высота подоконной плиты и ширина окна должны быть положительными.',
-      formula: 'h_sill ∈ [w/8, w/7] (допуск до w/6)',
+      formula: 'h_sill ∈ [w/8, w/7] (допуск до w/5)',
       page: 'S. 17',
     };
   }
@@ -2871,16 +2941,16 @@ export function checkSillPlateHeight(hSill: number, w: number): SimpleRuleCheckR
     return {
       status: 'approx',
       sourceStatus: 'explicit-verified',
-      explanation: `Подоконная плита h_sill = ${formatMeters(hSill)} м в повышенном пределе (w/7, w/6] = (${formatMeters(max)}, ${formatMeters(absMax)}] м — допустимо по S. 17 при развитом профиле.`,
-      formula: 'w/7 < h_sill ≤ w/6 (прибл.)',
+      explanation: `Подоконная плита h_sill = ${formatMeters(hSill)} м в повышенном диапазоне (w/7, w/5] = (${formatMeters(max)}, ${formatMeters(absMax)}] м: по S. 17 она может получать меру наличника (до w/5), но чаще делается меньше (1/8…1/7).`,
+      formula: 'w/7 < h_sill ≤ w/5 (прибл.)',
       page: 'S. 17',
     };
   }
   return {
     status: 'violation',
     sourceStatus: 'explicit-verified',
-    explanation: `Нарушение (S. 17): подоконная плита h_sill = ${formatMeters(hSill)} м выходит за пределы [${formatMeters(min)}, ${formatMeters(absMax)}] м.`,
-    formula: 'h_sill ∈ [w/8, w/7] (предел w/6)',
+    explanation: `Нарушение (S. 17): подоконная плита h_sill = ${formatMeters(hSill)} м выходит за пределы [${formatMeters(min)}, ${formatMeters(absMax)}] м (от w/8 до меры наличника w/5).`,
+    formula: 'h_sill ∈ [w/8, w/7] (предел w/5)',
     page: 'S. 17',
   };
 }
@@ -2938,17 +3008,29 @@ export function checkWindowRows(
   };
 }
 
-// N5 (S. 15): нечётное число рядов угловой рустовки
-export function checkCornerRusticationRows(nRows: number): SimpleRuleCheckResult {
+// N5 (S. 15): нечётное число рядов угловой рустовки и длинные крайние камни
+export function checkCornerRusticationRows(
+  nRows: number,
+  firstAndLastAreLong = true
+): SimpleRuleCheckResult {
   const n = Math.max(1, Math.round(nRows));
   const isOdd = n % 2 === 1;
+  if (!firstAndLastAreLong) {
+    return {
+      status: 'approx',
+      sourceStatus: 'explicit-verified',
+      explanation: `Угловая рустовка не начинается и не заканчивается длинными квадрами — по S. 15 («mit langen Quadern begonnen und geschlossen») следует начинать и завершать перевязку длинным камнем.`,
+      formula: 'n_cornerRows % 2 === 1 ∧ начало/конец длинные',
+      page: 'S. 15',
+    };
+  }
   return {
     status: isOdd ? 'ok' : 'approx',
     sourceStatus: 'explicit-verified',
     explanation: isOdd
-      ? `Угловая рустовка имеет нечётное число рядов (${n}) — нижний и верхний камни образуют прочную заделку угла (S. 15).`
-      : `Угловая рустовка имеет чётное число рядов (${n}) — по S. 15 предпочтительно нечётное число (5, 7, 9…).`,
-    formula: 'n_cornerRows % 2 === 1',
+      ? `Угловая рустовка имеет нечётное число рядов (${n}) и начинается/заканчивается длинными квадрами — прочная заделка угла (S. 15).`
+      : `Угловая рустовка имеет чётное число рядов (${n}) — по S. 15 предпочтительно нечётное число (5, 7, 9…), чтобы нижний и верхний камни были длинными.`,
+    formula: 'n_cornerRows % 2 === 1 ∧ начало/конец длинные',
     page: 'S. 15',
   };
 }
@@ -2972,8 +3054,8 @@ export function checkCornerOffsetVsUpperHeight(
     status: ok ? 'ok' : 'approx',
     sourceStatus: ok ? 'explicit-verified' : 'heuristic',
     explanation: ok
-      ? `Отступ угла M = ${formatMeters(M)} м не превышает верхнюю высоту N = ${formatMeters(N)} м (рис. 7, S. 15).`
-      : `Отступ угла M = ${formatMeters(M)} м превосходит верхнюю высоту N = ${formatMeters(N)} м — по рис. 7 (S. 15) рекомендуется пилястровое членение (совет UX).`,
+      ? `Отступ угла M = ${formatMeters(M)} м не превышает верхнюю высоту N = ${formatMeters(N)} м (рис. 7, S. 15; качественное смягчение глухой стены отношением членений a/b на S. 15 численно не формализовано).`
+      : `Отступ угла M = ${formatMeters(M)} м превосходит верхнюю высоту N = ${formatMeters(N)} м — по рис. 7 (S. 15) рекомендуется пилястровое членение (совет UX; качественное отношение a/b численно не задано).`,
     formula: 'M ≤ N (при M > N — ввести пилястры)',
     page: 'S. 15',
   };
@@ -3071,10 +3153,11 @@ export function checkFivePartFacade(
   };
 }
 
-// N12 (S. 20, Fig. 10): 7-частный фасад 1.5 : 3 : 5 : 3 : 1.5 и центр 1 : 2 : 1
+// N12 (S. 20, Fig. 10): 7-частный фасад 1.5 : 3 : 5 : 3 : 1.5 и центр 1 : 2 : 1 (два бок. ризалита предпочтительнее одного среднего)
 export function checkSevenPartFacade(
   parts: [number, number, number, number, number],
-  centralSub?: [number, number, number]
+  centralSub?: [number, number, number],
+  centralSubScheme: 'two_side_risalits' | 'one_middle_risalit' = 'two_side_risalits'
 ): SimpleRuleCheckResult {
   const target = [1.5, 3, 5, 3, 1.5];
   const totalActual = parts.reduce((a, b) => a + b, 0);
@@ -3104,15 +3187,23 @@ export function checkSevenPartFacade(
     );
     centralOk = cMaxDev <= 0.15;
   }
-  const status: ValidationStatus = maxRelDev <= 0.15 && centralOk ? 'ok' : 'approx';
+  const proportionsOk = maxRelDev <= 0.15 && centralOk;
+  const schemePreferred = centralSubScheme === 'two_side_risalits';
+  const status: ValidationStatus = proportionsOk && schemePreferred ? 'ok' : 'approx';
+  const sourceStatus: SourceStatus = proportionsOk ? 'explicit-verified' : 'heuristic';
+
+  const explanation =
+    !proportionsOk
+      ? `Отклонение долей 7-частного фасада от схемы 1.5 : 3 : 5 : 3 : 1.5 составляет ${(maxRelDev * 100).toFixed(0)} % (допуск ±15 % — UX-ориентир).`
+      : !schemePreferred
+        ? 'Схема центра с одним средним ризалитом допустима, но по S. 20 предпочтительна схема с двумя боковыми ризалитами в центре («Das erstere ist vorzuziehen»).'
+        : '7-частный фасад близок к каноническому ритму рис. 10 (1.5 : 3 : 5 : 3 : 1.5; центр 1 : 2 : 1, два боковых ризалита в центре, S. 20).';
+
   return {
     status,
-    sourceStatus: maxRelDev <= 0.15 && centralOk ? 'explicit-verified' : 'heuristic',
-    explanation:
-      status === 'ok'
-        ? '7-частный фасад близок к каноническому ритму рис. 10 (1.5 : 3 : 5 : 3 : 1.5; центр 1 : 2 : 1, S. 20).'
-        : `Отклонение долей 7-частного фасада от схемы 1.5 : 3 : 5 : 3 : 1.5 составляет ${(maxRelDev * 100).toFixed(0)} % (допуск ±15 % — UX-ориентир).`,
-    formula: 'доли 1.5 : 3 : 5 : 3 : 1.5; центр 1 : 2 : 1',
+    sourceStatus,
+    explanation,
+    formula: 'доли 1.5 : 3 : 5 : 3 : 1.5; центр 1 : 2 : 1 (2 бок. ризалита лучше)',
     page: 'S. 20',
   };
 }
@@ -3262,18 +3353,33 @@ export function checkPilasterNarrowerThanWallPier(
   };
 }
 
-// N21 (S. 13, P3): просвет между спаренными пилястрами ∈ (0.2*W_p, W_p)
+// N21 (S. 13, P3): просвет между спаренными пилястрами < W_p (S. 13); нижний порог 0.2·W_p — UX-эвристика
 export function checkPairedPilastersGap(gap: number, wp: number): SimpleRuleCheckResult {
   const min = 0.2 * wp;
   const max = wp;
-  const ok = wp > 0 && gap > min + EPS && gap < max - EPS;
+  if (wp <= 0 || gap <= 0 || gap >= max - EPS) {
+    return {
+      status: 'violation',
+      sourceStatus: 'explicit-verified',
+      explanation: `Нарушение (S. 13): просвет между спаренными пилястрами ${formatMeters(gap)} м должен быть положительным и меньше ширины пилястра W_p (${formatMeters(max)} м).`,
+      formula: '0.2·W_p (UX) < gap < W_p (S. 13)',
+      page: 'S. 13',
+    };
+  }
+  if (gap <= min + EPS) {
+    return {
+      status: 'violation',
+      sourceStatus: 'heuristic',
+      explanation: `Просвет между спаренными пилястрами ${formatMeters(gap)} м ≤ 0.2·W_p (${formatMeters(min)} м) — слишком мал, капители столкнутся (нижний порог 0.2·W_p — UX-эвристика по S. 13).`,
+      formula: '0.2·W_p (UX) < gap < W_p (S. 13)',
+      page: 'S. 13',
+    };
+  }
   return {
-    status: ok ? 'ok' : 'violation',
+    status: 'ok',
     sourceStatus: 'explicit-verified',
-    explanation: ok
-      ? `Просвет между спаренными пилястрами ${formatMeters(gap)} м входит в (0.2·W_p, W_p) = (${formatMeters(min)}, ${formatMeters(max)}) м (S. 13).`
-      : `Нарушение (S. 13): просвет между спаренными пилястрами ${formatMeters(gap)} м должен лежать строго между 0.2·W_p (${formatMeters(min)} м) и W_p (${formatMeters(max)} м).`,
-    formula: '0.2·W_p < gap < W_p',
+    explanation: `Просвет между спаренными пилястрами ${formatMeters(gap)} м меньше W_p (${formatMeters(max)} м, S. 13) и достаточен для капителей (> 0.2·W_p = ${formatMeters(min)} м).`,
+    formula: '0.2·W_p (UX) < gap < W_p (S. 13)',
     page: 'S. 13',
   };
 }
@@ -3307,51 +3413,68 @@ export function checkColumnProfileType(columnType: ColumnProfileType): SimpleRul
 export function checkAttic(
   atticOverRisalit: boolean,
   atticOverWing: boolean,
-  atticRisalitHeavier = true
+  atticRisalitHeavier = true,
+  hAtticRisalit?: number,
+  hAtticWing?: number
 ): SimpleRuleCheckResult {
   if (atticOverRisalit && !atticOverWing) {
-    return {
-      status: 'violation',
-      sourceStatus: 'explicit-verified',
-      explanation: 'Нарушение (S. 19): аттик только над ризалитом без аттика над крыльями не допускается.',
-      formula: 'atticOverRisalit ⇒ atticOverWing',
-      page: 'S. 19',
-    };
-  }
-  if (atticOverRisalit && atticOverWing && !atticRisalitHeavier) {
+    // A1: S. 19 говорит "weniger geeignet" (менее пригодны), а не запрещены -> approx, не violation
     return {
       status: 'approx',
       sourceStatus: 'explicit-verified',
-      explanation: 'Предупреждение (S. 19): аттик над центральным ризалитом должен быть массивнее, чем над крыльями.',
-      formula: 'atticRisalitHeavier === true',
+      explanation:
+        'Аттик только над ризалитом без крыльев по S. 19 менее пригоден («weniger geeignet») для подчёркивания самостоятельности ризалита — предпочтительнее фронтон или единый аттик с усилением над ризалитом.',
+      formula: 'atticOverRisalit ∧ ¬atticOverWing ⇒ approx (S. 19)',
       page: 'S. 19',
     };
+  }
+  if (atticOverRisalit && atticOverWing) {
+    const hasHeights =
+      hAtticRisalit !== undefined &&
+      hAtticWing !== undefined &&
+      hAtticRisalit > 0 &&
+      hAtticWing > 0;
+    const isHeavier = hasHeights
+      ? (hAtticRisalit as number) > (hAtticWing as number) + EPS
+      : atticRisalitHeavier;
+    if (!isHeavier) {
+      return {
+        status: 'approx',
+        sourceStatus: 'explicit-verified',
+        explanation: hasHeights
+          ? `Предупреждение (S. 19): высота/тяжесть аттика над ризалитом (${formatMeters(hAtticRisalit as number)} м) должна превосходить аттик над крыльями (${formatMeters(hAtticWing as number)} м).`
+          : 'Предупреждение (S. 19): если аттик тянется по всему зданию, над ризалитами он должен быть тяжелее («schwerer»), над крыльями — легче.',
+        formula: 'h_attic_risalit > h_attic_wing (S. 19)',
+        page: 'S. 19',
+      };
+    }
   }
   return {
     status: 'ok',
     sourceStatus: 'explicit-verified',
     explanation: atticOverRisalit
-      ? 'Аттик уравновешен и усилен над центральным ризалитом (S. 19).'
+      ? 'Аттик уравновешен и тяжелее над центральным ризалитом, легче над крыльями (S. 19).'
       : 'Композиция без конфликтного аттика (S. 19).',
-    formula: 'atticOverRisalit ⇒ atticOverWing ∧ heavier',
+    formula: 'atticOverRisalit ⇒ atticOverWing ∧ h_attic_risalit > h_attic_wing',
     page: 'S. 19',
   };
 }
 
-// N24 (S. 18–19, P3): фронтон
+// N24 (S. 19, P3): фронтон — Brausewetter называет как пологий, так и крутой фронтон превосходными; ограничение — редакционное допущение
 export type PedimentType = 'none' | 'gentle' | 'steep';
 
 export function checkPedimentChoice(
   pediment: PedimentType,
-  isClassical = true
+  isClassical = false
 ): SimpleRuleCheckResult {
   if (pediment === 'steep' && isClassical) {
     return {
       status: 'approx',
-      sourceStatus: 'explicit-verified',
-      explanation: 'Для классического стиля рекомендуется пологий фронтон вместо крутого (S. 18–19).',
-      formula: 'классика ⇒ пологий фронтон',
-      page: 'S. 18–19',
+      sourceStatus: 'heuristic',
+      explanation:
+        'Редакционное UX-допущение (не из Brausewetter S. 1–23): для классицизирующего фасада отмечен пологий фронтон, тогда как на S. 19 оба («der flache wie der steile Giebel») названы превосходными средствами.',
+      formula: 'UX-стилистика: классика ⇒ пологий (не из S. 1–23)',
+      page: 'S. 19',
     };
   }
   return {
@@ -3360,9 +3483,9 @@ export function checkPedimentChoice(
     explanation:
       pediment === 'none'
         ? 'Ризалит без фронтонного завершения.'
-        : 'Уклон фронтона согласован со стилистическим характером фасада (S. 18–19).',
-    formula: 'Giebel по S. 18–19',
-    page: 'S. 18–19',
+        : 'Как пологий, так и крутой фронтон — превосходное средство выделения ризалита (S. 19).',
+    formula: 'пологий и крутой фронтон равноправны (S. 19)',
+    page: 'S. 19',
   };
 }
 
@@ -3561,10 +3684,12 @@ export interface FacadeParameters {
   // N4–N26 композиция, рустика, ордер и экспертные поля P3
   hasWallRustication: boolean;
   cornerRustRows: number;
+  cornerRustStartsEndsLong?: boolean;
   cornerOffsetM: number;
   upperStoryHeightN: number;
   hasCompositionBreakdown: boolean;
   compKind: CompositionKind;
+  sevenPartCentralScheme?: 'two_side_risalits' | 'one_middle_risalit';
   wCentralRisalit: number;
   wSideRisalit: number;
   wWing: number;
@@ -3581,6 +3706,8 @@ export interface FacadeParameters {
   atticOverRisalit: boolean;
   atticOverWing: boolean;
   atticRisalitHeavier: boolean;
+  hAtticRisalit?: number;
+  hAtticWing?: number;
   // P3 (Экспертный режим)
   wpWallPier: number;
   hasPairedPilasters: boolean;
@@ -3715,7 +3842,8 @@ export function evaluateFacadeSummary(
     derivedGeometry.facadeWidth,
     effectiveTotalHeight,
     params.buildingVariant,
-    params.multiSub
+    params.multiSub,
+    params.isEmbeddedInRow
   );
   const effectiveEntrancePos: EntrancePosition = !params.hasEntrance
     ? 'none'
@@ -3737,7 +3865,10 @@ export function evaluateFacadeSummary(
     params.rustRowHeight,
     params.hasWallRustication
   );
-  const cornerRustRowsCheck = checkCornerRusticationRows(params.cornerRustRows);
+  const cornerRustRowsCheck = checkCornerRusticationRows(
+    params.cornerRustRows,
+    params.cornerRustStartsEndsLong ?? true
+  );
   const cornerOffsetCheck = checkCornerOffsetVsUpperHeight(
     params.cornerOffsetM,
     params.upperStoryHeightN
@@ -3766,7 +3897,7 @@ export function evaluateFacadeSummary(
     params.multiSub,
     params.corniceVariantMode
   );
-  const gurtCheck = checkGurtWithVariant(
+  const gurtCheckRaw = checkGurtWithVariant(
     params.hGurt,
     effectiveBeltFloorH,
     effectiveSocleH,
@@ -3813,30 +3944,55 @@ export function evaluateFacadeSummary(
     hasRustication: params.beltAsRusticationMode,
   };
   const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];
-  const beltHeightCheck: BeltHeightResult =
-    params.buildingVariant === 'one-story' ||
-    params.levels.floors.length <= 1 ||
-    params.beltIsAbsent
+  const beltActiveForHeight =
+    params.buildingVariant !== 'one-story' &&
+    params.levels.floors.length > 1 &&
+    !params.beltIsAbsent;
+
+  const rawBeltHeightCheck: BeltHeightResult = !beltActiveForHeight
+    ? {
+        h: params.hGurt,
+        range: [effectiveBeltFloorH / 12, effectiveBeltFloorH / 6],
+        status: 'ok',
+        notRequired: true,
+        checks: {
+          belowSocle: true,
+          belowMain: true,
+          inRange: true,
+          note: null,
+        },
+        explanation: params.beltIsAbsent
+          ? 'Лента отсутствует: смежные этажи читаются как единое целое.'
+          : 'Для 1-этажного дома межэтажная лента не применяется.',
+        formula: 'не применяется (1 этаж или лента отключена)',
+        page: 'S. 16, 22',
+      }
+    : beltHeight(beltInput, params.hGurt, {
+        allowModestLowerFloor: params.allowModestFirstFloorForBelt,
+      });
+
+  // C5: Если для пояса выбрана высота в свету вместо пол-пол (S. 16: Geschosshöhe) -> approx + heuristic
+  const beltUsesClearHeightHeuristic = !params.useFloorToFloorForBelt && beltActiveForHeight;
+  const beltHeightCheck: BeltHeightResult = beltUsesClearHeightHeuristic
+    ? {
+        ...rawBeltHeightCheck,
+        status: mergeStatuses(rawBeltHeightCheck.status, 'approx'),
+        sourceStatus: 'heuristic',
+        explanation: `${rawBeltHeightCheck.explanation} (Используется высота в свету вместо Geschosshöhe пол–пол, S. 16.)`,
+      }
+    : {
+        ...rawBeltHeightCheck,
+        sourceStatus: 'explicit-verified',
+      };
+
+  const gurtCheck: VariantGurtCheckResult =
+    !gurtCheckRaw.notRequired && !params.useFloorToFloorForBelt
       ? {
-          h: params.hGurt,
-          range: [effectiveBeltFloorH / 12, effectiveBeltFloorH / 6],
-          status: 'ok',
-          notRequired: true,
-          checks: {
-            belowSocle: true,
-            belowMain: true,
-            inRange: true,
-            note: null,
-          },
-          explanation: params.beltIsAbsent
-            ? 'Лента отсутствует: смежные этажи читаются как единое целое.'
-            : 'Для 1-этажного дома межэтажная лента не применяется.',
-          formula: 'не применяется (1 этаж или лента отключена)',
-          page: 'S. 16, 22',
+          ...gurtCheckRaw,
+          status: mergeStatuses(gurtCheckRaw.status, 'approx'),
+          explanation: `${gurtCheckRaw.explanation} (Используется высота в свету вместо Geschosshöhe пол–пол, S. 16.)`,
         }
-      : beltHeight(beltInput, params.hGurt, {
-          allowModestLowerFloor: params.allowModestFirstFloorForBelt,
-        });
+      : gurtCheckRaw;
 
   const beltCrownHeight = Math.max(0.05, params.hGurt * beltMeta.crownShareOfBelt);
   const beltCrowningCheck = beltCrowningSplit(
@@ -3905,7 +4061,7 @@ export function evaluateFacadeSummary(
       sourceStatus: variantAxisCheck.sourceStatus,
       priority: 'P0',
       explanation: variantAxisCheck.explanation,
-      isHeuristic: variantAxisCheck.isWideBayHeuristic,
+      isHeuristic: variantAxisCheck.sourceStatus === 'heuristic',
       targetElement: 'axenweite',
     },
     {
@@ -4103,8 +4259,12 @@ export function evaluateFacadeSummary(
         ? 'Не требуется (1 этаж)'
         : `h_gurt = ${formatMeters(params.hGurt)} м (норма ${formatMeters(gurtCheck.range[0])}…${formatMeters(gurtCheck.range[1])} м)`,
       status: gurtCheck.status,
-      sourceStatus: 'explicit-verified',
+      sourceStatus:
+        !gurtCheck.notRequired && !params.useFloorToFloorForBelt
+          ? 'heuristic'
+          : 'explicit-verified',
       priority: 'P0',
+      isHeuristic: !gurtCheck.notRequired && !params.useFloorToFloorForBelt,
       explanation: gurtCheck.explanation,
       targetElement: 'belt',
     },
@@ -4140,8 +4300,9 @@ export function evaluateFacadeSummary(
       formula: rusticationCheck.formula,
       valueText: `n = ${rusticationCheck.n} (${rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'}) × ${formatMeters(rusticationCheck.rowHeight)} м`,
       status: rusticationCheck.status,
-      sourceStatus: 'explicit-verified',
+      sourceStatus: rusticationCheck.sourceStatus,
       priority: 'P0',
+      isHeuristic: rusticationCheck.sourceStatus === 'heuristic',
       explanation: rusticationCheck.explanation,
       targetElement: 'socle',
     },
@@ -4155,8 +4316,9 @@ export function evaluateFacadeSummary(
           ? 'С подвальными окнами / лопатками'
           : 'Сплошной прогон',
       status: abkroepfungCheck.status,
-      sourceStatus: 'explicit-verified',
+      sourceStatus: abkroepfungCheck.sourceStatus,
       priority: 'P1',
+      isHeuristic: abkroepfungCheck.sourceStatus === 'heuristic',
       explanation: abkroepfungCheck.note,
       targetElement: 'socle',
     },
@@ -4271,7 +4433,9 @@ export function evaluateFacadeSummary(
     const n23 = checkAttic(
       params.atticOverRisalit,
       params.atticOverWing,
-      params.atticRisalitHeavier
+      params.atticRisalitHeavier,
+      params.hAtticRisalit,
+      params.hAtticWing
     );
     const n25 = checkRisalitRichness(
       params.risalitRichness,
@@ -4408,13 +4572,17 @@ export function evaluateFacadeSummary(
         targetElement: 'axenweite',
       });
     } else if (params.compKind === 'seven_part') {
-      const n12 = checkSevenPartFacade([
-        params.wSideRisalit * 0.5,
-        params.wWing,
-        params.wCentralRisalit,
-        params.wWing,
-        params.wSideRisalit * 0.5,
-      ]);
+      const n12 = checkSevenPartFacade(
+        [
+          params.wSideRisalit * 0.5,
+          params.wWing,
+          params.wCentralRisalit,
+          params.wWing,
+          params.wSideRisalit * 0.5,
+        ],
+        undefined,
+        params.sevenPartCentralScheme ?? 'two_side_risalits'
+      );
       checks.push({
         id: 'n12_seven_part',
         title: 'N12: 7-частная композиция 1.5:3:5:3:1.5 (рис. 10)',
@@ -4498,6 +4666,7 @@ export function evaluateFacadeSummary(
         sourceStatus: n21.sourceStatus,
         priority: 'P3',
         isExpertOnly: true,
+        isHeuristic: n21.sourceStatus === 'heuristic',
         explanation: n21.explanation,
         targetElement: 'pilaster',
       });
@@ -4534,9 +4703,10 @@ export function evaluateFacadeSummary(
         formula: n24.formula,
         valueText: `Фронтон: ${params.pedimentType}`,
         status: mergeStatuses(n24.status, params.hasCompositionBreakdown ? n26.status : 'ok'),
-        sourceStatus: 'explicit-verified',
+        sourceStatus: n24.sourceStatus === 'heuristic' ? 'heuristic' : 'explicit-verified',
         priority: 'P3',
         isExpertOnly: true,
+        isHeuristic: n24.sourceStatus === 'heuristic',
         explanation: params.hasCompositionBreakdown ? `${n24.explanation} ${n26.explanation}` : n24.explanation,
         targetElement: 'cornice',
       });
@@ -4814,10 +4984,12 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     beltAlignsWithRecesses: true,
     hasWallRustication: false,
     cornerRustRows: 5,
+    cornerRustStartsEndsLong: true,
     cornerOffsetM: 0.45,
     upperStoryHeightN: d.H,
     hasCompositionBreakdown: false,
     compKind: 'five_part',
+    sevenPartCentralScheme: 'two_side_risalits',
     wCentralRisalit: 7.5,
     wSideRisalit: 4.5,
     wWing: 9.0,
@@ -4839,6 +5011,6 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     pairedPilastersGap: Number((d.Wp * 0.5).toFixed(3)),
     columnProfileType: 'none',
     pedimentType: 'none',
-    pedimentClassical: true,
+    pedimentClassical: false,
   };
 }

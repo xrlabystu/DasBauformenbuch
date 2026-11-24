@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, Download, Search, X } from 'lucide-react';
 import {
   BOOK_METADATA,
   BRAUSEWETTER_PAGES,
@@ -9,7 +9,12 @@ import {
 import { FacsimileViewer } from './components/FacsimileViewer';
 import { CorpusJsonPanel } from './components/CorpusJsonPanel';
 import { FacadeCalculatorPage } from './components/FacadeCalculatorPage';
-import { highlightRuleAndTermsInText, highlightTermsInText } from './utils/termHighlight';
+import {
+  countSearchMatches,
+  highlightPlainTextWithSearch,
+  highlightRuleAndTermsInText,
+  highlightTermsInText,
+} from './utils/termHighlight';
 import type { RuleBookExcerpt } from './calc/ruleBookRefs';
 
 type ActiveSection = 'reader' | 'calculator' | 'glossary' | 'corpus' | 'provenance';
@@ -30,6 +35,10 @@ export default function App() {
     term: ArchitecturalTerm;
   } | null>(null);
   const [selectedRuleExcerpt, setSelectedRuleExcerpt] = useState<RuleBookExcerpt | null>(null);
+  const [readerSearchQuery, setReaderSearchQuery] = useState('');
+  const [readerMatchIndex, setReaderMatchIndex] = useState(0);
+  const [glossarySearchQuery, setGlossarySearchQuery] = useState('');
+  const [glossaryMatchIndex, setGlossaryMatchIndex] = useState(0);
 
   const pages = BRAUSEWETTER_PAGES;
   const page: BookPage = pages[currentPageIndex] ?? pages[0];
@@ -38,6 +47,175 @@ export default function App() {
     selectedRuleExcerpt && Number(page.pageNumber) === selectedRuleExcerpt.pageNumber
       ? selectedRuleExcerpt
       : null;
+
+  const readerMatches = useMemo(() => {
+    const q = readerSearchQuery.trim();
+    if (!q) return [] as Array<{ pageIndex: number; localOffset: number }>;
+
+    const matches: Array<{ pageIndex: number; localOffset: number }> = [];
+    pages.forEach((p, pageIdx) => {
+      let countOnPage = 0;
+      const collect = (txt?: string) => {
+        if (!txt) return;
+        const c = countSearchMatches(txt, q);
+        for (let i = 0; i < c; i += 1) {
+          matches.push({ pageIndex: pageIdx, localOffset: countOnPage + i });
+        }
+        countOnPage += c;
+      };
+
+      if (textMode !== 'ru') collect(p.sectionTitleDe);
+      if (textMode !== 'de') collect(p.sectionTitleRu);
+      for (const para of p.paragraphs) {
+        if (textMode !== 'ru') collect(para.subheadingDe);
+        if (textMode !== 'de') collect(para.subheadingRu);
+        if (textMode !== 'ru') collect(para.subsubheadingDe);
+        if (textMode !== 'de') collect(para.subsubheadingRu);
+        if (textMode !== 'ru') collect(para.de);
+        if (textMode !== 'de') collect(para.ru);
+      }
+      if (p.figures) {
+        for (const fig of p.figures) {
+          if (textMode !== 'ru') collect(fig.captionDe);
+          if (textMode !== 'de') collect(fig.captionRu);
+        }
+      }
+      collect(p.editorialNote);
+    });
+    return matches;
+  }, [pages, readerSearchQuery, textMode]);
+
+  const clampedReaderMatchIndex =
+    readerMatches.length > 0 ? Math.min(readerMatchIndex, readerMatches.length - 1) : 0;
+  const activeReaderMatch = readerMatches[clampedReaderMatchIndex] ?? null;
+  const activePageSearchOffset =
+    activeReaderMatch && activeReaderMatch.pageIndex === currentPageIndex
+      ? activeReaderMatch.localOffset
+      : null;
+
+  const currentPageSearchLayout = useMemo(() => {
+    const q = readerSearchQuery.trim();
+    let offset = 0;
+    const take = (txt?: string) => {
+      const start = offset;
+      if (q && txt) offset += countSearchMatches(txt, q);
+      return start;
+    };
+    const titleDe = textMode !== 'ru' ? take(page.sectionTitleDe) : 0;
+    const titleRu = textMode !== 'de' ? take(page.sectionTitleRu) : 0;
+    const paragraphs = page.paragraphs.map((para) => ({
+      subDe: textMode !== 'ru' && para.subheadingDe ? take(para.subheadingDe) : 0,
+      subRu: textMode !== 'de' && para.subheadingRu ? take(para.subheadingRu) : 0,
+      subsubDe: textMode !== 'ru' && para.subsubheadingDe ? take(para.subsubheadingDe) : 0,
+      subsubRu: textMode !== 'de' && para.subsubheadingRu ? take(para.subsubheadingRu) : 0,
+      de: textMode !== 'ru' ? take(para.de) : 0,
+      ru: textMode !== 'de' ? take(para.ru) : 0,
+    }));
+    const figures = (page.figures ?? []).map((fig) => ({
+      de: textMode !== 'ru' ? take(fig.captionDe) : 0,
+      ru: textMode !== 'de' ? take(fig.captionRu) : 0,
+    }));
+    const editorial = page.editorialNote ? take(page.editorialNote) : 0;
+    return { titleDe, titleRu, paragraphs, figures, editorial };
+  }, [page, readerSearchQuery, textMode]);
+
+  const glossaryEntries = useMemo(
+    () =>
+      pages.flatMap((p, pageIdx) =>
+        p.terms.map((term) => ({
+          key: `${p.id}-${term.de}`,
+          pageIdx,
+          pageId: p.id,
+          pageNumber: p.pageNumber,
+          term,
+        }))
+      ),
+    [pages]
+  );
+
+  const glossarySearchLayout = useMemo(() => {
+    const q = glossarySearchQuery.trim();
+    let total = 0;
+    const offsets = glossaryEntries.map((entry) => {
+      const de = total;
+      if (q) total += countSearchMatches(entry.term.de, q);
+      const ru = total;
+      if (q) total += countSearchMatches(entry.term.ru, q);
+      const context = total;
+      if (q) total += countSearchMatches(entry.term.context, q);
+      return {
+        de,
+        ru,
+        context,
+        hasAny: total > de,
+      };
+    });
+    return { total, offsets };
+  }, [glossaryEntries, glossarySearchQuery]);
+
+  const clampedGlossaryMatchIndex =
+    glossarySearchLayout.total > 0
+      ? Math.min(glossaryMatchIndex, glossarySearchLayout.total - 1)
+      : 0;
+
+  const handleReaderSearchChange = (value: string) => {
+    setReaderSearchQuery(value);
+    setReaderMatchIndex(0);
+    const q = value.trim();
+    if (!q) return;
+    // Переходим сразу к первому найденному фрагменту
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx += 1) {
+      const p = pages[pageIdx];
+      let found = false;
+      const check = (txt?: string) => {
+        if (!found && txt && countSearchMatches(txt, q) > 0) found = true;
+      };
+      if (textMode !== 'ru') check(p.sectionTitleDe);
+      if (textMode !== 'de') check(p.sectionTitleRu);
+      for (const para of p.paragraphs) {
+        if (textMode !== 'ru') check(para.subheadingDe);
+        if (textMode !== 'de') check(para.subheadingRu);
+        if (textMode !== 'ru') check(para.subsubheadingDe);
+        if (textMode !== 'de') check(para.subsubheadingRu);
+        if (textMode !== 'ru') check(para.de);
+        if (textMode !== 'de') check(para.ru);
+      }
+      if (p.figures) {
+        for (const fig of p.figures) {
+          if (textMode !== 'ru') check(fig.captionDe);
+          if (textMode !== 'de') check(fig.captionRu);
+        }
+      }
+      check(p.editorialNote);
+      if (found) {
+        setCurrentPageIndex(pageIdx);
+        break;
+      }
+    }
+  };
+
+  const navigateReaderMatch = (delta: number) => {
+    if (readerMatches.length === 0) return;
+    const nextIdx = (clampedReaderMatchIndex + delta + readerMatches.length) % readerMatches.length;
+    setReaderMatchIndex(nextIdx);
+    const target = readerMatches[nextIdx];
+    if (target) {
+      setCurrentPageIndex(target.pageIndex);
+    }
+  };
+
+  const handleGlossarySearchChange = (value: string) => {
+    setGlossarySearchQuery(value);
+    setGlossaryMatchIndex(0);
+  };
+
+  const navigateGlossaryMatch = (delta: number) => {
+    if (glossarySearchLayout.total === 0) return;
+    setGlossaryMatchIndex(
+      (clampedGlossaryMatchIndex + delta + glossarySearchLayout.total) %
+        glossarySearchLayout.total
+    );
+  };
 
   useEffect(() => {
     if (activeSection !== 'reader' || !activeTerm) return;
@@ -62,6 +240,19 @@ export default function App() {
   }, [activeSection, currentPageIndex, activeRuleExcerpt]);
 
   useEffect(() => {
+    if (activeSection !== 'reader' || !readerSearchQuery.trim() || readerMatches.length === 0) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-search-active="true"]');
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSection, currentPageIndex, readerSearchQuery, clampedReaderMatchIndex, readerMatches.length]);
+
+  useEffect(() => {
     if (activeSection !== 'glossary' || !focusedGlossaryTerm) return;
     const frameId = window.requestAnimationFrame(() => {
       const target = document.querySelector('[data-glossary-term="true"]');
@@ -71,6 +262,28 @@ export default function App() {
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [activeSection, focusedGlossaryTerm]);
+
+  useEffect(() => {
+    if (
+      activeSection !== 'glossary' ||
+      !glossarySearchQuery.trim() ||
+      glossarySearchLayout.total === 0
+    ) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.querySelector('[data-search-active="true"]');
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    activeSection,
+    glossarySearchQuery,
+    clampedGlossaryMatchIndex,
+    glossarySearchLayout.total,
+  ]);
 
   const handleSelectTerm = (pageIndex: number, pageId: string, term: ArchitecturalTerm) => {
     setCurrentPageIndex(pageIndex);
@@ -306,13 +519,73 @@ export default function App() {
                 ))}
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowFacsimile((v) => !v)}
-                className="px-3.5 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors whitespace-nowrap shrink-0"
-              >
-                {showFacsimile ? 'Скрыть скан оригинала' : 'Показать скан оригинала'}
-              </button>
+              <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
+                <div className="flex items-center gap-1.5 border border-[#D6CEBE] bg-[#FBF9F5] px-2.5 py-1.5 min-w-[240px] max-w-md flex-1">
+                  <Search className="w-3.5 h-3.5 text-[#78716C] shrink-0" />
+                  <input
+                    type="search"
+                    value={readerSearchQuery}
+                    onChange={(e) => handleReaderSearchChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        navigateReaderMatch(e.shiftKey ? -1 : 1);
+                      }
+                    }}
+                    placeholder="Поиск по тексту (DE / RU)…"
+                    aria-label="Поиск по тексту читального зала"
+                    className="w-full bg-transparent text-xs text-[#1C1917] placeholder:text-[#78716C] focus:outline-none"
+                  />
+                  {readerSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => handleReaderSearchChange('')}
+                      aria-label="Очистить поиск"
+                      className="text-[#78716C] hover:text-[#1C1917] p-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {readerSearchQuery.trim() && (
+                  <div className="inline-flex items-center gap-1 border border-[#D6CEBE] bg-[#F3EFE6] px-2 py-1 text-xs font-mono tabular-nums text-[#1C1917] shrink-0">
+                    <span>
+                      {readerMatches.length > 0
+                        ? `${clampedReaderMatchIndex + 1} / ${readerMatches.length}`
+                        : 'Найдено: 0'}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={readerMatches.length === 0}
+                      onClick={() => navigateReaderMatch(-1)}
+                      aria-label="Предыдущий найденный фрагмент"
+                      title="Предыдущий фрагмент (Shift+Enter)"
+                      className="p-0.5 border border-[#D6CEBE] bg-[#FBF9F5] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={readerMatches.length === 0}
+                      onClick={() => navigateReaderMatch(1)}
+                      aria-label="Следующий найденный фрагмент"
+                      title="Следующий фрагмент (Enter)"
+                      className="p-0.5 border border-[#D6CEBE] bg-[#FBF9F5] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowFacsimile((v) => !v)}
+                  className="px-3.5 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#F3EFE6] transition-colors whitespace-nowrap shrink-0"
+                >
+                  {showFacsimile ? 'Скрыть скан оригинала' : 'Показать скан оригинала'}
+                </button>
+              </div>
             </div>
 
             {/* Asymmetric Two-Column Reading Canvas */}
@@ -338,7 +611,11 @@ export default function App() {
                     <div>
                       {textMode !== 'ru' && (
                         <h2 className="font-display text-3xl font-medium tracking-wide text-[#1C1917]">
-                          {page.sectionTitleDe}
+                          {highlightPlainTextWithSearch(page.sectionTitleDe, {
+                            query: readerSearchQuery,
+                            startOffset: currentPageSearchLayout.titleDe,
+                            activeOffset: activePageSearchOffset,
+                          })}
                         </h2>
                       )}
                       {textMode !== 'de' && (
@@ -349,7 +626,11 @@ export default function App() {
                               : 'mt-1 font-display text-xl italic text-[#57534E]'
                           }`}
                         >
-                          {page.sectionTitleRu}
+                          {highlightPlainTextWithSearch(page.sectionTitleRu, {
+                            query: readerSearchQuery,
+                            startOffset: currentPageSearchLayout.titleRu,
+                            activeOffset: activePageSearchOffset,
+                          })}
                         </p>
                       )}
                     </div>
@@ -427,14 +708,25 @@ export default function App() {
                       ? 'first-letter:text-5xl first-letter:font-display first-letter:font-semibold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:leading-[0.85] first-letter:text-[#9A3412]'
                       : '';
 
+                    const paraOffsets = currentPageSearchLayout.paragraphs[idx];
+
                     return (
                       <div key={para.index} className="py-6">
                         {(para.subheadingDe || para.subheadingRu || para.subsubheadingDe || para.subsubheadingRu) && (
                           <div className="mb-5 pb-3 border-b border-[#D6CEBE]">
                             {textMode !== 'ru' && para.subheadingDe && (
                               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                                {highlightTermsInText(para.subheadingDe, page.terms, activeTerm, 'de', (t) =>
-                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                {highlightTermsInText(
+                                  para.subheadingDe,
+                                  page.terms,
+                                  activeTerm,
+                                  'de',
+                                  (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                  {
+                                    query: readerSearchQuery,
+                                    startOffset: paraOffsets?.subDe ?? 0,
+                                    activeOffset: activePageSearchOffset,
+                                  }
                                 )}
                               </h3>
                             )}
@@ -446,8 +738,17 @@ export default function App() {
                                     : 'mt-0.5 font-display text-lg italic text-[#57534E]'
                                 }
                               >
-                                {highlightTermsInText(para.subheadingRu, page.terms, activeTerm, 'ru', (t) =>
-                                  handleJumpToGlossary(page.id, page.pageNumber, t)
+                                {highlightTermsInText(
+                                  para.subheadingRu,
+                                  page.terms,
+                                  activeTerm,
+                                  'ru',
+                                  (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                  {
+                                    query: readerSearchQuery,
+                                    startOffset: paraOffsets?.subRu ?? 0,
+                                    activeOffset: activePageSearchOffset,
+                                  }
                                 )}
                               </p>
                             )}
@@ -460,7 +761,12 @@ export default function App() {
                                       page.terms,
                                       activeTerm,
                                       'de',
-                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t)
+                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                      {
+                                        query: readerSearchQuery,
+                                        startOffset: paraOffsets?.subsubDe ?? 0,
+                                        activeOffset: activePageSearchOffset,
+                                      }
                                     )}
                                   </h4>
                                 )}
@@ -477,7 +783,12 @@ export default function App() {
                                       page.terms,
                                       activeTerm,
                                       'ru',
-                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t)
+                                      (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                      {
+                                        query: readerSearchQuery,
+                                        startOffset: paraOffsets?.subsubRu ?? 0,
+                                        activeOffset: activePageSearchOffset,
+                                      }
                                     )}
                                   </p>
                                 )}
@@ -516,7 +827,12 @@ export default function App() {
                                 activeTerm,
                                 'de',
                                 (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
-                                activeRuleExcerpt?.bookQuoteDe
+                                activeRuleExcerpt?.bookQuoteDe,
+                                {
+                                  query: readerSearchQuery,
+                                  startOffset: paraOffsets?.de ?? 0,
+                                  activeOffset: activePageSearchOffset,
+                                }
                               )}
                             </p>
                             <p
@@ -529,7 +845,12 @@ export default function App() {
                                 activeTerm,
                                 'ru',
                                 (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
-                                activeRuleExcerpt?.bookQuoteRu
+                                activeRuleExcerpt?.bookQuoteRu,
+                                {
+                                  query: readerSearchQuery,
+                                  startOffset: paraOffsets?.ru ?? 0,
+                                  activeOffset: activePageSearchOffset,
+                                }
                               )}
                             </p>
                           </div>
@@ -544,7 +865,12 @@ export default function App() {
                               activeTerm,
                               'de',
                               (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
-                              activeRuleExcerpt?.bookQuoteDe
+                              activeRuleExcerpt?.bookQuoteDe,
+                              {
+                                query: readerSearchQuery,
+                                startOffset: paraOffsets?.de ?? 0,
+                                activeOffset: activePageSearchOffset,
+                              }
                             )}
                           </p>
                         ) : (
@@ -558,7 +884,12 @@ export default function App() {
                               activeTerm,
                               'ru',
                               (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
-                              activeRuleExcerpt?.bookQuoteRu
+                              activeRuleExcerpt?.bookQuoteRu,
+                              {
+                                query: readerSearchQuery,
+                                startOffset: paraOffsets?.ru ?? 0,
+                                activeOffset: activePageSearchOffset,
+                              }
                             )}
                           </p>
                         )}
@@ -574,32 +905,53 @@ export default function App() {
                       Чертежи и геометрические схемы на странице
                     </p>
                     <dl className="mt-3 divide-y divide-[#ECE7DC]">
-                      {page.figures.map((fig) => (
-                        <div
-                          key={fig.label}
-                          className="py-3 grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-4 items-baseline"
-                        >
-                          <dt className="sm:col-span-2 font-mono text-xs font-medium text-[#9A3412]">
-                            {fig.label}
-                          </dt>
-                          <dd className="sm:col-span-10 text-sm text-[#292524]">
-                            {textMode !== 'ru' && (
-                              <span lang="de" className="block font-medium text-[#1C1917]">
-                                {highlightTermsInText(fig.captionDe, page.terms, activeTerm, 'de', (t) =>
-                                  handleJumpToGlossary(page.id, page.pageNumber, t)
-                                )}
-                              </span>
-                            )}
-                            {textMode !== 'de' && (
-                              <span className="block text-[#57534E]">
-                                {highlightTermsInText(fig.captionRu, page.terms, activeTerm, 'ru', (t) =>
-                                  handleJumpToGlossary(page.id, page.pageNumber, t)
-                                )}
-                              </span>
-                            )}
-                          </dd>
-                        </div>
-                      ))}
+                      {page.figures.map((fig, figIdx) => {
+                        const figOffsets = currentPageSearchLayout.figures[figIdx];
+                        return (
+                          <div
+                            key={fig.label}
+                            className="py-3 grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-4 items-baseline"
+                          >
+                            <dt className="sm:col-span-2 font-mono text-xs font-medium text-[#9A3412]">
+                              {fig.label}
+                            </dt>
+                            <dd className="sm:col-span-10 text-sm text-[#292524]">
+                              {textMode !== 'ru' && (
+                                <span lang="de" className="block font-medium text-[#1C1917]">
+                                  {highlightTermsInText(
+                                    fig.captionDe,
+                                    page.terms,
+                                    activeTerm,
+                                    'de',
+                                    (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                    {
+                                      query: readerSearchQuery,
+                                      startOffset: figOffsets?.de ?? 0,
+                                      activeOffset: activePageSearchOffset,
+                                    }
+                                  )}
+                                </span>
+                              )}
+                              {textMode !== 'de' && (
+                                <span className="block text-[#57534E]">
+                                  {highlightTermsInText(
+                                    fig.captionRu,
+                                    page.terms,
+                                    activeTerm,
+                                    'ru',
+                                    (t) => handleJumpToGlossary(page.id, page.pageNumber, t),
+                                    {
+                                      query: readerSearchQuery,
+                                      startOffset: figOffsets?.ru ?? 0,
+                                      activeOffset: activePageSearchOffset,
+                                    }
+                                  )}
+                                </span>
+                              )}
+                            </dd>
+                          </div>
+                        );
+                      })}
                     </dl>
                   </div>
                 )}
@@ -611,7 +963,11 @@ export default function App() {
                       Текстологическое примечание
                     </p>
                     <p className="mt-2 text-sm leading-relaxed text-[#57534E] max-w-prose">
-                      {page.editorialNote}
+                      {highlightPlainTextWithSearch(page.editorialNote, {
+                        query: readerSearchQuery,
+                        startOffset: currentPageSearchLayout.editorial,
+                        activeOffset: activePageSearchOffset,
+                      })}
                     </p>
                   </aside>
                 )}
@@ -677,6 +1033,66 @@ export default function App() {
               <p className="mt-2 text-sm text-[#57534E]">
                 Нажмите на немецкий или русский термин, чтобы перейти в читальный зал (параллельно DE / RU) с мягким выделением в тексте.
               </p>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 border border-[#D6CEBE] bg-[#FBF9F5] px-2.5 py-1.5 min-w-[240px] max-w-md flex-1">
+                  <Search className="w-3.5 h-3.5 text-[#78716C] shrink-0" />
+                  <input
+                    type="search"
+                    value={glossarySearchQuery}
+                    onChange={(e) => handleGlossarySearchChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        navigateGlossaryMatch(e.shiftKey ? -1 : 1);
+                      }
+                    }}
+                    placeholder="Поиск по терминам и пояснениям…"
+                    aria-label="Поиск по терминологии"
+                    className="w-full bg-transparent text-xs text-[#1C1917] placeholder:text-[#78716C] focus:outline-none"
+                  />
+                  {glossarySearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => handleGlossarySearchChange('')}
+                      aria-label="Очистить поиск по терминологии"
+                      className="text-[#78716C] hover:text-[#1C1917] p-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {glossarySearchQuery.trim() && (
+                  <div className="inline-flex items-center gap-1 border border-[#D6CEBE] bg-[#F3EFE6] px-2 py-1 text-xs font-mono tabular-nums text-[#1C1917] shrink-0">
+                    <span>
+                      {glossarySearchLayout.total > 0
+                        ? `${clampedGlossaryMatchIndex + 1} / ${glossarySearchLayout.total}`
+                        : 'Найдено: 0'}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={glossarySearchLayout.total === 0}
+                      onClick={() => navigateGlossaryMatch(-1)}
+                      aria-label="Предыдущий найденный фрагмент в терминологии"
+                      title="Предыдущий фрагмент (Shift+Enter)"
+                      className="p-0.5 border border-[#D6CEBE] bg-[#FBF9F5] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={glossarySearchLayout.total === 0}
+                      onClick={() => navigateGlossaryMatch(1)}
+                      aria-label="Следующий найденный фрагмент в терминологии"
+                      title="Следующий фрагмент (Enter)"
+                      className="p-0.5 border border-[#D6CEBE] bg-[#FBF9F5] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {focusedGlossaryTerm && (
@@ -725,52 +1141,68 @@ export default function App() {
             )}
 
             <dl className="divide-y divide-[#E5DFD3]">
-              {pages.flatMap((p, pageIdx) =>
-                p.terms.map((term) => {
-                  const isFocused =
-                    focusedGlossaryTerm?.pageId === p.id &&
-                    focusedGlossaryTerm?.term.de === term.de;
+              {glossaryEntries.map((entry, idx) => {
+                const { pageIdx, pageId, pageNumber, term } = entry;
+                const offsets = glossarySearchLayout.offsets[idx];
+                const isFocused =
+                  focusedGlossaryTerm?.pageId === pageId &&
+                  focusedGlossaryTerm?.term.de === term.de;
+                const activeMatchOffset =
+                  glossarySearchQuery.trim() && glossarySearchLayout.total > 0
+                    ? clampedGlossaryMatchIndex
+                    : null;
 
-                  return (
-                    <div
-                      key={`${p.id}-${term.de}`}
-                      data-glossary-term={isFocused ? 'true' : undefined}
-                      className={`py-5 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-6 items-baseline transition-colors ${
-                        isFocused
-                          ? 'bg-[#9A3412]/[0.08] border-l-2 border-l-[#9A3412] -mx-4 px-4'
-                          : ''
-                      }`}
-                    >
-                      <dt lang="de" className="md:col-span-4 font-display text-xl font-semibold text-[#1C1917]">
-                        <button
-                          type="button"
-                          onClick={() => handleSelectTerm(pageIdx, p.id, term)}
-                          title={`Открыть термин на стр. ${p.pageNumber}`}
-                          className="text-left cursor-pointer hover:text-[#9A3412] underline decoration-transparent hover:decoration-[#9A3412]/50 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
-                        >
-                          {term.de}
-                        </button>
-                        <span className="ml-2 text-xs font-mono font-normal text-[#78716C]">
-                          стр. {p.pageNumber}
-                        </span>
-                      </dt>
-                      <dd className="md:col-span-3 text-sm font-semibold text-[#9A3412]">
-                        <button
-                          type="button"
-                          onClick={() => handleSelectTerm(pageIdx, p.id, term)}
-                          title={`Открыть термин на стр. ${p.pageNumber}`}
-                          className="text-left cursor-pointer hover:text-[#7C2D12] underline decoration-transparent hover:decoration-[#9A3412]/60 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
-                        >
-                          {term.ru}
-                        </button>
-                      </dd>
-                      <dd className="md:col-span-5 text-sm leading-relaxed text-[#57534E]">
-                        {term.context}
-                      </dd>
-                    </div>
-                  );
-                })
-              )}
+                return (
+                  <div
+                    key={entry.key}
+                    data-glossary-term={isFocused ? 'true' : undefined}
+                    className={`py-5 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-6 items-baseline transition-colors ${
+                      isFocused
+                        ? 'bg-[#9A3412]/[0.08] border-l-2 border-l-[#9A3412] -mx-4 px-4'
+                        : ''
+                    }`}
+                  >
+                    <dt lang="de" className="md:col-span-4 font-display text-xl font-semibold text-[#1C1917]">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTerm(pageIdx, pageId, term)}
+                        title={`Открыть термин на стр. ${pageNumber}`}
+                        className="text-left cursor-pointer hover:text-[#9A3412] underline decoration-transparent hover:decoration-[#9A3412]/50 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                      >
+                        {highlightPlainTextWithSearch(term.de, {
+                          query: glossarySearchQuery,
+                          startOffset: offsets?.de ?? 0,
+                          activeOffset: activeMatchOffset,
+                        })}
+                      </button>
+                      <span className="ml-2 text-xs font-mono font-normal text-[#78716C]">
+                        стр. {pageNumber}
+                      </span>
+                    </dt>
+                    <dd className="md:col-span-3 text-sm font-semibold text-[#9A3412]">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTerm(pageIdx, pageId, term)}
+                        title={`Открыть термин на стр. ${pageNumber}`}
+                        className="text-left cursor-pointer hover:text-[#7C2D12] underline decoration-transparent hover:decoration-[#9A3412]/60 underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                      >
+                        {highlightPlainTextWithSearch(term.ru, {
+                          query: glossarySearchQuery,
+                          startOffset: offsets?.ru ?? 0,
+                          activeOffset: activeMatchOffset,
+                        })}
+                      </button>
+                    </dd>
+                    <dd className="md:col-span-5 text-sm leading-relaxed text-[#57534E]">
+                      {highlightPlainTextWithSearch(term.context, {
+                        query: glossarySearchQuery,
+                        startOffset: offsets?.context ?? 0,
+                        activeOffset: activeMatchOffset,
+                      })}
+                    </dd>
+                  </div>
+                );
+              })}
             </dl>
           </section>
         )}

@@ -213,75 +213,215 @@ function findMatchesForTerms(
   return accepted;
 }
 
+export interface SearchHighlightOptions {
+  query: string;
+  startOffset?: number;
+  activeOffset?: number | null;
+}
+
+interface SearchSpan {
+  start: number;
+  end: number;
+  occurrenceIndex: number;
+}
+
+function buildSearchRegex(query: string): RegExp | null {
+  const normalized = query.trim();
+  if (!normalized) return null;
+  const pattern = escapeRegExp(normalized).replace(/\s+/g, '\\s+');
+  return new RegExp(pattern, 'giu');
+}
+
+function findSearchSpans(text: string, query: string): SearchSpan[] {
+  if (!text) return [];
+  const regex = buildSearchRegex(query);
+  if (!regex) return [];
+  const spans: SearchSpan[] = [];
+  let idx = 0;
+  for (const match of text.matchAll(regex)) {
+    if (match.index === undefined || match[0].length === 0) continue;
+    spans.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      occurrenceIndex: idx,
+    });
+    idx += 1;
+  }
+  return spans;
+}
+
+export function countSearchMatches(text: string, query: string): number {
+  return findSearchSpans(text, query).length;
+}
+
+export function highlightPlainTextWithSearch(
+  text: string,
+  search?: SearchHighlightOptions
+): ReactNode {
+  if (!text || !search || !search.query.trim()) return text;
+  const spans = findSearchSpans(text, search.query);
+  if (spans.length === 0) return text;
+
+  const base = search.startOffset ?? 0;
+  const active = search.activeOffset ?? null;
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const span of spans) {
+    if (span.start > lastIndex) {
+      nodes.push(text.slice(lastIndex, span.start));
+    }
+    const globalIdx = base + span.occurrenceIndex;
+    const isActive = active !== null && globalIdx === active;
+    nodes.push(
+      <mark
+        key={`search-${span.start}-${span.end}-${globalIdx}`}
+        data-search-match="true"
+        data-search-active={isActive ? 'true' : undefined}
+        className={
+          isActive
+            ? 'bg-[#EA580C] text-[#FBF9F5] px-0.5 rounded-[2px] ring-2 ring-[#9A3412] font-medium'
+            : 'bg-[#FDE047]/80 text-[#1C1917] px-0.5 rounded-[2px] border-b border-[#CA8A04]'
+        }
+      >
+        {text.slice(span.start, span.end)}
+      </mark>
+    );
+    lastIndex = span.end;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes;
+}
+
+function renderTermSpanNode(
+  matchedText: string,
+  span: TermSpan,
+  key: string,
+  onTermClick?: (term: ArchitecturalTerm) => void
+): ReactNode {
+  const handleKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
+    if (!onTermClick) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onTermClick(span.term);
+    }
+  };
+
+  if (span.isActive) {
+    return (
+      <mark
+        key={key}
+        data-term-highlight="true"
+        role={onTermClick ? 'button' : undefined}
+        tabIndex={onTermClick ? 0 : undefined}
+        onClick={onTermClick ? () => onTermClick(span.term) : undefined}
+        onKeyDown={onTermClick ? handleKeyDown : undefined}
+        title={
+          onTermClick
+            ? `${span.term.de} — ${span.term.ru} (перейти в «Терминологию»)`
+            : undefined
+        }
+        className={`bg-[#9A3412]/16 text-[#1C1917] border-b-2 border-[#9A3412]/70 px-0.5 rounded-[2px] ${
+          onTermClick
+            ? 'cursor-pointer hover:bg-[#9A3412]/22 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]'
+            : ''
+        }`}
+      >
+        {matchedText}
+      </mark>
+    );
+  }
+
+  return (
+    <span
+      key={key}
+      role={onTermClick ? 'button' : undefined}
+      tabIndex={onTermClick ? 0 : undefined}
+      onClick={onTermClick ? () => onTermClick(span.term) : undefined}
+      onKeyDown={onTermClick ? handleKeyDown : undefined}
+      title={`${span.term.de} — ${span.term.ru} (нажмите, чтобы перейти в «Терминологию»)`}
+      className="bg-[#9A3412]/[0.04] hover:bg-[#9A3412]/12 border-b border-dotted border-[#9A3412]/40 hover:border-solid hover:border-[#9A3412]/75 px-[1px] rounded-[1px] cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+    >
+      {matchedText}
+    </span>
+  );
+}
+
 export function highlightTermsInText(
   text: string,
   terms: ArchitecturalTerm[],
   activeTerm: ArchitecturalTerm | null | undefined,
   lang: 'de' | 'ru',
-  onTermClick?: (term: ArchitecturalTerm) => void
+  onTermClick?: (term: ArchitecturalTerm) => void,
+  search?: SearchHighlightOptions
 ): ReactNode {
-  if (!text || terms.length === 0) return text;
+  if (!text) return text;
+  const searchSpans = search?.query?.trim() ? findSearchSpans(text, search.query) : [];
+  if (terms.length === 0 && searchSpans.length === 0) return text;
 
-  const spans = findMatchesForTerms(text, terms, activeTerm, lang);
-  if (spans.length === 0) return text;
+  const rawTermSpans = findMatchesForTerms(text, terms, activeTerm, lang);
+  const termSpans =
+    searchSpans.length === 0
+      ? rawTermSpans
+      : rawTermSpans.filter(
+          (ts) => !searchSpans.some((ss) => ts.start < ss.end && ts.end > ss.start)
+        );
+
+  if (termSpans.length === 0 && searchSpans.length === 0) return text;
+
+  const baseOffset = search?.startOffset ?? 0;
+  const activeOffset = search?.activeOffset ?? null;
+
+  type CombinedItem =
+    | { kind: 'term'; span: TermSpan }
+    | { kind: 'search'; span: SearchSpan };
+
+  const combined: CombinedItem[] = [
+    ...termSpans.map((span): CombinedItem => ({ kind: 'term', span })),
+    ...searchSpans.map((span): CombinedItem => ({ kind: 'search', span })),
+  ].sort((a, b) => a.span.start - b.span.start);
 
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
 
-  spans.forEach((span, idx) => {
-    if (span.start > lastIndex) {
-      nodes.push(text.slice(lastIndex, span.start));
+  combined.forEach((item, idx) => {
+    if (item.span.start > lastIndex) {
+      nodes.push(text.slice(lastIndex, item.span.start));
     }
 
-    const matchedText = text.slice(span.start, span.end);
-    const handleKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
-      if (!onTermClick) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onTermClick(span.term);
-      }
-    };
-
-    if (span.isActive) {
+    const matchedText = text.slice(item.span.start, item.span.end);
+    if (item.kind === 'search') {
+      const globalIdx = baseOffset + item.span.occurrenceIndex;
+      const isActive = activeOffset !== null && globalIdx === activeOffset;
       nodes.push(
         <mark
-          key={`${span.start}-${span.end}-${idx}`}
-          data-term-highlight="true"
-          role={onTermClick ? 'button' : undefined}
-          tabIndex={onTermClick ? 0 : undefined}
-          onClick={onTermClick ? () => onTermClick(span.term) : undefined}
-          onKeyDown={onTermClick ? handleKeyDown : undefined}
-          title={
-            onTermClick
-              ? `${span.term.de} — ${span.term.ru} (перейти в «Терминологию»)`
-              : undefined
+          key={`search-${item.span.start}-${item.span.end}-${globalIdx}`}
+          data-search-match="true"
+          data-search-active={isActive ? 'true' : undefined}
+          className={
+            isActive
+              ? 'bg-[#EA580C] text-[#FBF9F5] px-0.5 rounded-[2px] ring-2 ring-[#9A3412] font-medium'
+              : 'bg-[#FDE047]/80 text-[#1C1917] px-0.5 rounded-[2px] border-b border-[#CA8A04]'
           }
-          className={`bg-[#9A3412]/16 text-[#1C1917] border-b-2 border-[#9A3412]/70 px-0.5 rounded-[2px] ${
-            onTermClick
-              ? 'cursor-pointer hover:bg-[#9A3412]/22 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]'
-              : ''
-          }`}
         >
           {matchedText}
         </mark>
       );
     } else {
       nodes.push(
-        <span
-          key={`${span.start}-${span.end}-${idx}`}
-          role={onTermClick ? 'button' : undefined}
-          tabIndex={onTermClick ? 0 : undefined}
-          onClick={onTermClick ? () => onTermClick(span.term) : undefined}
-          onKeyDown={onTermClick ? handleKeyDown : undefined}
-          title={`${span.term.de} — ${span.term.ru} (нажмите, чтобы перейти в «Терминологию»)`}
-          className="bg-[#9A3412]/[0.04] hover:bg-[#9A3412]/12 border-b border-dotted border-[#9A3412]/40 hover:border-solid hover:border-[#9A3412]/75 px-[1px] rounded-[1px] cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
-        >
-          {matchedText}
-        </span>
+        renderTermSpanNode(
+          matchedText,
+          item.span,
+          `term-${item.span.start}-${item.span.end}-${idx}`,
+          onTermClick
+        )
       );
     }
 
-    lastIndex = span.end;
+    lastIndex = item.span.end;
   });
 
   if (lastIndex < text.length) {
@@ -297,11 +437,12 @@ export function highlightRuleAndTermsInText(
   activeTerm: ArchitecturalTerm | null | undefined,
   lang: 'de' | 'ru',
   onTermClick?: (term: ArchitecturalTerm) => void,
-  activeRuleQuote?: string | null
+  activeRuleQuote?: string | null,
+  search?: SearchHighlightOptions
 ): ReactNode {
   const quote = activeRuleQuote?.trim();
   if (!text || !quote) {
-    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick);
+    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick, search);
   }
 
   const normalizedQuote = quote.replace(/\s+/g, ' ');
@@ -310,7 +451,7 @@ export function highlightRuleAndTermsInText(
   const match = regex.exec(text);
 
   if (!match || match.index === undefined || match[0].length === 0) {
-    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick);
+    return highlightTermsInText(text, terms, activeTerm, lang, onTermClick, search);
   }
 
   const start = match.index;
@@ -319,17 +460,41 @@ export function highlightRuleAndTermsInText(
   const matched = text.slice(start, end);
   const after = text.slice(end);
 
+  const beforeMatches = search?.query?.trim() ? countSearchMatches(before, search.query) : 0;
+  const matchedMatches = search?.query?.trim() ? countSearchMatches(matched, search.query) : 0;
+  const baseOffset = search?.startOffset ?? 0;
+
   return (
     <>
-      {before ? highlightTermsInText(before, terms, activeTerm, lang, onTermClick) : null}
+      {before
+        ? highlightTermsInText(before, terms, activeTerm, lang, onTermClick, search)
+        : null}
       <mark
         data-rule-highlight="true"
         className="bg-[#FDE68A]/85 text-[#1C1917] border-b-2 border-[#B91C1C] px-1 py-0.5 rounded-[2px] font-medium"
       >
-        {matched}
+        {matchedMatches > 0 && search
+          ? highlightPlainTextWithSearch(matched, {
+              ...search,
+              startOffset: baseOffset + beforeMatches,
+            })
+          : matched}
       </mark>
-      {after ? highlightTermsInText(after, terms, activeTerm, lang, onTermClick) : null}
+      {after
+        ? highlightTermsInText(
+            after,
+            terms,
+            activeTerm,
+            lang,
+            onTermClick,
+            search
+              ? {
+                  ...search,
+                  startOffset: baseOffset + beforeMatches + matchedMatches,
+                }
+              : undefined
+          )
+        : null}
     </>
   );
 }
-

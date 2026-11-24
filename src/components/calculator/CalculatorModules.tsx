@@ -1227,6 +1227,38 @@ export function CalculatorModules({
                     ))}
                   </div>
 
+                  {params.compKind === 'seven_part' && (
+                    <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5">
+                      <span className="block text-[11px] font-mono text-[#57534E]">
+                        Схема средней группы 7-частного фасада (N12, S. 19):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(
+                          [
+                            { id: 'two_side_risalits', label: '2 боковых ризалита в центре (предпочтительно)' },
+                            { id: 'one_middle_risalit', label: '1 средний ризалит (вариант)' },
+                          ] as const
+                        ).map((sc) => {
+                          const active = (params.sevenPartCentralScheme ?? 'two_side_risalits') === sc.id;
+                          return (
+                            <button
+                              key={sc.id}
+                              type="button"
+                              onClick={() => onUpdateParams({ sevenPartCentralScheme: sc.id })}
+                              className={`px-2 py-1 text-[11px] border ${
+                                active
+                                  ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                                  : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                              }`}
+                            >
+                              {sc.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <MeterControl
                       id="calc-w-central-ris"
@@ -1435,7 +1467,7 @@ export function CalculatorModules({
                             onChange={(e) => onUpdateParams({ atticRisalitHeavier: e.target.checked })}
                             className="accent-[#9A3412]"
                           />
-                          <span>Над ризалитом массивнее (N23)</span>
+                          <span>Аттик над ризалитом массивнее / выше, чем над крыльями (N23, S. 19)</span>
                         </label>
                       )}
                     </div>
@@ -1475,7 +1507,7 @@ export function CalculatorModules({
                           onChange={(e) => onUpdateParams({ pedimentClassical: e.target.checked })}
                           className="accent-[#9A3412]"
                         />
-                        <span>Классическая композиция (N24: избегать крутого фронтона)</span>
+                        <span>Стилистическое предпочтение классики (N24: редакционное UX-допущение, не из S. 1–23)</span>
                       </label>
                     </div>
                   )}
@@ -1556,7 +1588,10 @@ export function CalculatorModules({
               sourceStatus={summary.variantAxisCheck.sourceStatus}
               formula={summary.variantAxisCheck.formula}
               page={summary.variantAxisCheck.page}
-              isHeuristic={summary.variantAxisCheck.isWideBayHeuristic}
+              isHeuristic={
+                summary.variantAxisCheck.isWideBayHeuristic ||
+                summary.variantAxisCheck.sourceStatus === 'heuristic'
+              }
               explanation={summary.variantAxisCheck.explanation}
               onOpenBookPage={onOpenBookPage}
             />
@@ -1607,7 +1642,12 @@ export function CalculatorModules({
             <WhyBlock
               ruleId="gurt_cornice"
               status={summary.gurtCheck.status}
-              sourceStatus="explicit-verified"
+              sourceStatus={
+                !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
+                  ? 'heuristic'
+                  : 'explicit-verified'
+              }
+              isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
               formula={summary.gurtCheck.formula}
               page={summary.gurtCheck.page}
               explanation={summary.gurtCheck.explanation}
@@ -2259,7 +2299,7 @@ export function CalculatorModules({
               {params.withFraming && (
                 <MeterControl
                   id="calc-win-sill"
-                  label="Высота подоконной плиты h_sill (N2, норма w/8…w/7)"
+                  label="Высота подоконной плиты h_sill (N2, норма w/8…w/7, до w/5 approx)"
                   value={params.hSill}
                   min={0.08}
                   max={0.35}
@@ -2410,6 +2450,7 @@ export function CalculatorModules({
               ruleId="corner_pier"
               status={summary.cornerCheck.status}
               sourceStatus={summary.cornerCheck.sourceStatus}
+              isHeuristic={summary.cornerCheck.sourceStatus === 'heuristic'}
               formula={summary.cornerCheck.formula}
               page={summary.cornerCheck.page}
               explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
@@ -2433,6 +2474,15 @@ export function CalculatorModules({
                 onToggleLock={onToggleLock}
                 onChange={(val) => onUpdateParams({ cornerRustRows: Math.max(1, Math.round(val)) })}
               />
+              <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={params.cornerRustStartsEndsLong ?? true}
+                  onChange={(e) => onUpdateParams({ cornerRustStartsEndsLong: e.target.checked })}
+                  className="accent-[#9A3412]"
+                />
+                <span>Начинается и заканчивается длинными квадрами (S. 15)</span>
+              </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <MeterControl
                   id="calc-corner-m"
@@ -2501,25 +2551,29 @@ export function CalculatorModules({
                   { id: 'by_F', label: 'От модуля F' },
                   { id: 'by_K', label: 'От модуля K' },
                 ] as const
-              ).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => {
-                    setFramingInputMode(m.id);
-                    if (m.id === 'by_R') setModuleValue(summary.framingResult.R);
-                    if (m.id === 'by_F') setModuleValue(summary.framingResult.F);
-                    if (m.id === 'by_K') setModuleValue(summary.framingResult.K);
-                  }}
-                  className={`px-2.5 py-1 text-[11px] font-medium border ${
-                    framingInputMode === m.id
-                      ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
-                      : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
+              ).map((m) => {
+                const isFZeroDisabled = m.id === 'by_F' && params.framingRatio[1] === 0;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={isFZeroDisabled}
+                    onClick={() => {
+                      setFramingInputMode(m.id);
+                      if (m.id === 'by_R') setModuleValue(summary.framingResult.R);
+                      if (m.id === 'by_F') setModuleValue(summary.framingResult.F);
+                      if (m.id === 'by_K') setModuleValue(summary.framingResult.K);
+                    }}
+                    className={`px-2.5 py-1 text-[11px] font-medium border disabled:opacity-45 ${
+                      framingInputMode === m.id
+                        ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                        : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2">
@@ -2547,6 +2601,11 @@ export function CalculatorModules({
                       disabled={isParamLocked(lockedParams, 'framingRatio')}
                       onClick={() => {
                         const nextRatio: [number, number, number] = [fr.r, fr.f, fr.k];
+                        if (framingInputMode === 'by_F' && fr.f === 0) {
+                          setFramingInputMode('by_T');
+                          onUpdateParams({ framingRatio: nextRatio });
+                          return;
+                        }
                         if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
                           const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
                           const res = framing_from_module(moduleValue, part, fr.r, fr.f, fr.k);
@@ -2853,7 +2912,7 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ hasPairedPilasters: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Спаренные пилястры (N21: просвет 0.2·W_p … W_p)</span>
+                  <span>Спаренные пилястры (N21: gap &lt; W_p, &gt; 0.2·W_p — UX-порог)</span>
                 </label>
                 {params.hasPairedPilasters && (
                   <MeterControl
@@ -2876,8 +2935,9 @@ export function CalculatorModules({
                     {(
                       [
                         { id: 'none', label: 'Только пилястр' },
-                        { id: 'half_column', label: 'Полуколонна (0.5d)' },
-                        { id: 'three_quarter_column', label: '3/4-колонна (неудобно)' },
+                        { id: 'half', label: 'Полуколонна (1/2)' },
+                        { id: 'two_thirds', label: '2/3-колонна (S. 13)' },
+                        { id: 'three_quarters', label: '3/4-колонна (S. 13)' },
                       ] as { id: ColumnProfileType; label: string }[]
                     ).map((cp) => (
                       <button
@@ -3198,7 +3258,12 @@ export function CalculatorModules({
               <WhyBlock
                 ruleId="gurt_cornice"
                 status={summary.gurtCheck.status}
-                sourceStatus="explicit-verified"
+                sourceStatus={
+                  !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
+                    ? 'heuristic'
+                    : 'explicit-verified'
+                }
+                isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
                 formula={summary.gurtCheck.formula}
                 page={summary.gurtCheck.page}
                 explanation={summary.gurtCheck.explanation}
@@ -3356,6 +3421,8 @@ export function CalculatorModules({
               <WhyBlock
                 ruleId="socle_rustication_rows"
                 status={summary.rusticationCheck.status}
+                sourceStatus={summary.rusticationCheck.sourceStatus}
+                isHeuristic={summary.rusticationCheck.sourceStatus === 'heuristic'}
                 formula={summary.rusticationCheck.formula}
                 page={summary.rusticationCheck.page}
                 explanation={summary.rusticationCheck.explanation}
@@ -3442,6 +3509,8 @@ export function CalculatorModules({
               <WhyBlock
                 ruleId="socle_abkroepfung"
                 status={summary.abkroepfungCheck.status}
+                sourceStatus={summary.abkroepfungCheck.sourceStatus}
+                isHeuristic={summary.abkroepfungCheck.sourceStatus === 'heuristic'}
                 formula={summary.abkroepfungCheck.formula}
                 page={summary.abkroepfungCheck.page}
                 explanation={summary.abkroepfungCheck.note}
@@ -3582,7 +3651,12 @@ export function CalculatorModules({
               <WhyBlock
                 ruleId="gurt_cornice"
                 status={summary.beltHeightCheck.status}
-                sourceStatus="explicit-verified"
+                sourceStatus={
+                  !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
+                    ? 'heuristic'
+                    : 'explicit-verified'
+                }
+                isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
                 formula={summary.beltHeightCheck.formula}
                 page={summary.beltHeightCheck.page}
                 explanation={summary.beltHeightCheck.explanation}

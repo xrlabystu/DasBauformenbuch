@@ -489,15 +489,17 @@ export function buildFacadeCadDocument(
           winWMm + 2 * uMm,
           winHMm + uMm * 0.5 + rMm
         );
-        // Фриз
-        addRect(
-          doc,
-          layerOpenings,
-          winXMm - uMm,
-          winYMm + winHMm + rMm,
-          winWMm + 2 * uMm,
-          Math.max(40, fMm)
-        );
+        // Фриз (если F > 0; при F = 0 карниз ложится прямо на архитрав R)
+        if (fMm > 0.5) {
+          addRect(
+            doc,
+            layerOpenings,
+            winXMm - uMm,
+            winYMm + winHMm + rMm,
+            winWMm + 2 * uMm,
+            Math.max(40, fMm)
+          );
+        }
         // Консоли
         if (params.withConsoles) {
           const consW = Math.max(70, uMm * 0.7);
