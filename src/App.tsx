@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
 import {
   BOOK_METADATA,
   BRAUSEWETTER_PAGES,
@@ -7,18 +7,34 @@ import {
   type BookPage,
 } from './data/brausewetter_1895';
 import { FacsimileViewer } from './components/FacsimileViewer';
-import { CorpusJsonPanel } from './components/CorpusJsonPanel';
-import { FacadeCalculatorPage } from './components/FacadeCalculatorPage';
+import {
+  FacadeCalculatorPage,
+  type CalculatorSubpage,
+} from './components/FacadeCalculatorPage';
+import {
+  createDefaultParamsForTypology,
+  type FacadeParameters,
+  type FacadeTargetElement,
+} from './calc/rules';
+import type { LockedParamsMap } from './calc/paramLocks';
+import type { CalculatorModuleId } from './components/calculator/CalculatorModules';
+import type { AnalyticalPlateId } from './components/calculator/AnalyticalPlates';
 import {
   countSearchMatches,
   highlightPlainTextWithSearch,
   highlightRuleAndTermsInText,
   highlightTermsInText,
+  type GlossaryLookupEntry,
 } from './utils/termHighlight';
 import type { RuleBookExcerpt } from './calc/ruleBookRefs';
 
-type ActiveSection = 'reader' | 'calculator' | 'glossary' | 'corpus' | 'provenance';
+type ActiveSection = 'reader' | 'calculator' | 'glossary' | 'provenance';
 type TextMode = 'parallel' | 'de' | 'ru';
+
+interface CalcSnapshot {
+  params: FacadeParameters;
+  lockedParams: LockedParamsMap;
+}
 
 export default function App() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('reader');
@@ -34,11 +50,32 @@ export default function App() {
     pageNumber: string;
     term: ArchitecturalTerm;
   } | null>(null);
+  const [glossaryReturnTarget, setGlossaryReturnTarget] = useState<'reader' | 'calculator'>('reader');
   const [selectedRuleExcerpt, setSelectedRuleExcerpt] = useState<RuleBookExcerpt | null>(null);
   const [readerSearchQuery, setReaderSearchQuery] = useState('');
   const [readerMatchIndex, setReaderMatchIndex] = useState(0);
   const [glossarySearchQuery, setGlossarySearchQuery] = useState('');
   const [glossaryMatchIndex, setGlossaryMatchIndex] = useState(0);
+
+  // Сессионное состояние калькулятора (сбрасывается только при обновлении страницы или по «Сбросить к примеру из книги»)
+  const [calcSubpage, setCalcSubpage] = useState<CalculatorSubpage>('workspace');
+  const [calcExpertMode, setCalcExpertMode] = useState<boolean>(false);
+  const [calcActiveModule, setCalcActiveModule] = useState<CalculatorModuleId>('axes');
+  const [calcActivePlate, setCalcActivePlate] = useState<AnalyticalPlateId>('fan');
+  const [calcHighlightedElement, setCalcHighlightedElement] = useState<FacadeTargetElement | null>(null);
+  const [calcHistory, setCalcHistory] = useState<{
+    past: CalcSnapshot[];
+    present: CalcSnapshot;
+    future: CalcSnapshot[];
+  }>(() => ({
+    past: [],
+    present: {
+      params: createDefaultParamsForTypology('urban_house'),
+      lockedParams: {},
+    },
+    future: [],
+  }));
+  const calcBurstRef = useRef<{ time: number; key: string } | null>(null);
 
   const pages = BRAUSEWETTER_PAGES;
   const page: BookPage = pages[currentPageIndex] ?? pages[0];
@@ -296,31 +333,92 @@ export default function App() {
 
   const handleJumpToGlossary = (pageId: string, pageNumber: string, term: ArchitecturalTerm) => {
     setFocusedGlossaryTerm({ pageId, pageNumber, term });
+    setGlossaryReturnTarget('reader');
     setActiveSection('glossary');
   };
 
-  const handleDownloadJson = () => {
-    const payload = {
-      source_slug: BOOK_METADATA.sourceSlug,
-      author: BOOK_METADATA.author,
-      title: BOOK_METADATA.title,
-      volume: BOOK_METADATA.volume,
-      year: BOOK_METADATA.year,
-      language: BOOK_METADATA.languageCode,
-      source_url: BOOK_METADATA.sourceUrl,
-      pages,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json;charset=utf-8',
+  const handleOpenGlossaryFromCalc = (entry: GlossaryLookupEntry) => {
+    setFocusedGlossaryTerm({
+      pageId: entry.pageId,
+      pageNumber: entry.pageNumber,
+      term: entry.term,
     });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${BOOK_METADATA.sourceSlug}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    setGlossaryReturnTarget('calculator');
+    setActiveSection('glossary');
+  };
+
+  const updateCalcSnapshot = (
+    updater: (prev: CalcSnapshot) => CalcSnapshot,
+    burstKey?: string
+  ) => {
+    const now = Date.now();
+    setCalcHistory((prev) => {
+      const nextPresent = updater(prev.present);
+      if (
+        nextPresent.params === prev.present.params &&
+        nextPresent.lockedParams === prev.present.lockedParams
+      ) {
+        return prev;
+      }
+      const isSameBurst = Boolean(
+        burstKey &&
+          calcBurstRef.current &&
+          calcBurstRef.current.key === burstKey &&
+          now - calcBurstRef.current.time < 400
+      );
+      calcBurstRef.current = { time: now, key: burstKey ?? '' };
+      if (isSameBurst && prev.past.length > 0) {
+        return {
+          past: prev.past,
+          present: nextPresent,
+          future: [],
+        };
+      }
+      return {
+        past: [...prev.past.slice(-59), prev.present],
+        present: nextPresent,
+        future: [],
+      };
+    });
+  };
+
+  const handleCalcUndo = () => {
+    calcBurstRef.current = null;
+    setCalcHistory((prev) => {
+      if (prev.past.length === 0) return prev;
+      const previous = prev.past[prev.past.length - 1];
+      return {
+        past: prev.past.slice(0, -1),
+        present: previous,
+        future: [prev.present, ...prev.future.slice(0, 59)],
+      };
+    });
+  };
+
+  const handleCalcRedo = () => {
+    calcBurstRef.current = null;
+    setCalcHistory((prev) => {
+      if (prev.future.length === 0) return prev;
+      const next = prev.future[0];
+      return {
+        past: [...prev.past.slice(-59), prev.present],
+        present: next,
+        future: prev.future.slice(1),
+      };
+    });
+  };
+
+  const handleResetCalcSession = () => {
+    calcBurstRef.current = null;
+    setCalcHistory({
+      past: [],
+      present: {
+        params: createDefaultParamsForTypology('urban_house'),
+        lockedParams: {},
+      },
+      future: [],
+    });
+    setCalcHighlightedElement(null);
   };
 
   const handleOpenBookPageFromCalc = (pageNum: number, excerpt?: RuleBookExcerpt) => {
@@ -339,13 +437,12 @@ export default function App() {
     { id: 'reader', label: 'Читальный зал' },
     { id: 'calculator', label: 'Калькулятор' },
     { id: 'glossary', label: 'Терминология' },
-    { id: 'corpus', label: 'Корпус JSON' },
     { id: 'provenance', label: 'Опись издания' },
   ];
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FBF9F5] text-[#1C1917]">
-      {/* Top Bar: 3-zone contract */}
+      {/* Top Bar */}
       <header className="border-b border-[#E5DFD3] bg-[#FBF9F5]">
         <div className="max-w-[1380px] mx-auto px-6 lg:px-10 py-4 flex items-center justify-between gap-8">
           <a
@@ -382,15 +479,8 @@ export default function App() {
             })}
           </nav>
 
-          <div className="flex items-center shrink-0">
-            <button
-              type="button"
-              onClick={handleDownloadJson}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium bg-[#1C1917] text-[#FBF9F5] hover:bg-[#292524] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Экспорт JSON</span>
-            </button>
+          <div className="hidden md:block text-xs font-mono text-[#78716C] whitespace-nowrap shrink-0">
+            Brausewetter · 1895
           </div>
         </div>
 
@@ -1110,6 +1200,15 @@ export default function App() {
                   <span className="font-medium text-[#9A3412]">{focusedGlossaryTerm.term.ru}</span>
                 </div>
                 <div className="flex items-center gap-4">
+                  {glossaryReturnTarget === 'calculator' && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection('calculator')}
+                      className="text-[#9A3412] hover:text-[#7C2D12] underline underline-offset-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
+                    >
+                      Вернуться в калькулятор
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -1207,12 +1306,29 @@ export default function App() {
           </section>
         )}
 
-        {activeSection === 'corpus' && (
-          <CorpusJsonPanel pages={pages} onDownload={handleDownloadJson} />
-        )}
-
         {activeSection === 'calculator' && (
-          <FacadeCalculatorPage onOpenBookPage={handleOpenBookPageFromCalc} />
+          <FacadeCalculatorPage
+            onOpenBookPage={handleOpenBookPageFromCalc}
+            onOpenGlossaryTerm={handleOpenGlossaryFromCalc}
+            subpage={calcSubpage}
+            onChangeSubpage={setCalcSubpage}
+            expertMode={calcExpertMode}
+            onChangeExpertMode={setCalcExpertMode}
+            activeModule={calcActiveModule}
+            onChangeActiveModule={setCalcActiveModule}
+            activePlate={calcActivePlate}
+            onChangeActivePlate={setCalcActivePlate}
+            highlightedElement={calcHighlightedElement}
+            onChangeHighlightedElement={setCalcHighlightedElement}
+            params={calcHistory.present.params}
+            lockedParams={calcHistory.present.lockedParams}
+            canUndo={calcHistory.past.length > 0}
+            canRedo={calcHistory.future.length > 0}
+            onUndo={handleCalcUndo}
+            onRedo={handleCalcRedo}
+            onResetSession={handleResetCalcSession}
+            onCommitSnapshot={updateCalcSnapshot}
+          />
         )}
 
         {activeSection === 'provenance' && (

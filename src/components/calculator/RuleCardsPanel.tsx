@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react';
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { AlertTriangle, BookOpen, CheckCircle2, XCircle } from 'lucide-react';
+import {
+  getExcerptForCatalogRule,
+  getExcerptForCheckId,
+  type RuleBookExcerpt,
+} from '../../calc/ruleBookRefs';
 import {
   A_from_H,
   D_from_A,
@@ -18,6 +23,7 @@ import {
   projection_45,
   projection_console,
   type FacadeParameters,
+  type FacadeSummary,
   type FacadeTargetElement,
   type RuleRecord,
   type RuleType,
@@ -28,7 +34,7 @@ interface RuleCardsViewProps {
   expertMode?: boolean;
   onToggleExpertMode?: () => void;
   onHighlightRuleOnFacade: (rule: RuleRecord) => void;
-  onOpenBookPage?: (pageNum: number) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }
 
 const RULE_TYPE_LABELS: Record<'all' | RuleType, string> = {
@@ -150,6 +156,8 @@ export function RuleCardsView({
         {filtered.map((rule) => {
           const firstPageMatch = rule.page.match(/\d+/);
           const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
+          const ruleExcerpt = getExcerptForCatalogRule(rule);
+          const targetPage = ruleExcerpt?.pageNumber ?? pageNum;
           const isHeuristicOrGap =
             rule.sourceStatus === 'heuristic' || rule.sourceStatus === 'gap';
           return (
@@ -178,7 +186,7 @@ export function RuleCardsView({
                     {onOpenBookPage ? (
                       <button
                         type="button"
-                        onClick={() => onOpenBookPage(pageNum)}
+                        onClick={() => onOpenBookPage(targetPage, ruleExcerpt)}
                         className="text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
                       >
                         {rule.page}
@@ -214,7 +222,7 @@ export function RuleCardsView({
                 <p className="text-xs leading-relaxed text-[#57534E]">{rule.note}</p>
               </div>
 
-              <div className="pt-3 border-t border-[#ECE7DC] flex items-center justify-between gap-3">
+              <div className="pt-3 border-t border-[#ECE7DC] flex flex-wrap items-center justify-between gap-2">
                 <span
                   className={`font-mono text-[11px] ${
                     isHeuristicOrGap ? 'text-[#B45309]' : 'text-[#78716C]'
@@ -222,13 +230,25 @@ export function RuleCardsView({
                 >
                   {SOURCE_STATUS_LABELS[rule.sourceStatus]}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onHighlightRuleOnFacade(rule)}
-                  className="px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
-                >
-                  Показать на фасаде
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onOpenBookPage && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenBookPage(targetPage, ruleExcerpt)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#9A3412]/40 bg-[#FBF9F5] text-[#9A3412] hover:bg-[#F3EFE6] transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>Показать в тексте</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onHighlightRuleOnFacade(rule)}
+                    className="px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
+                  >
+                    Показать на фасаде
+                  </button>
+                </div>
               </div>
             </article>
           );
@@ -253,9 +273,15 @@ interface LiveTestCase {
 }
 
 export function TestCasesVerificationView({
+  summary,
   onLoadCaseOnFacade,
+  onHighlightElementOnFacade,
+  onOpenBookPage,
 }: {
+  summary?: FacadeSummary;
   onLoadCaseOnFacade: (patch: Partial<FacadeParameters>, el: FacadeTargetElement) => void;
+  onHighlightElementOnFacade?: (el: FacadeTargetElement) => void;
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
 }) {
   const cases: LiveTestCase[] = useMemo(() => {
     const near = (a: number, b: number) => Math.abs(a - b) <= 1e-3;
@@ -396,9 +422,13 @@ export function TestCasesVerificationView({
   }, []);
 
   const passedCount = cases.filter((c) => c.passed).length;
+  const currentViolations = useMemo(
+    () => (summary?.checks ?? []).filter((c) => c.status === 'violation'),
+    [summary]
+  );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#E5DFD3]">
         <div>
           <h3 className="font-display text-2xl font-medium text-[#1C1917]">
@@ -456,6 +486,91 @@ export function TestCasesVerificationView({
           </div>
         ))}
       </div>
+
+      {/* Нарушения на текущем настроенном фасаде */}
+      {summary && (
+        <section className="space-y-3 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#E5DFD3]">
+            <div>
+              <h4 className="font-display text-xl font-medium text-[#1C1917]">
+                Нарушения на текущем фасаде
+              </h4>
+              <p className="text-xs text-[#57534E]">
+                Активные несоответствия по результатам оценки настроенного фасада с переходом к первоисточнику и на чертёж.
+              </p>
+            </div>
+            <span
+              className={`font-mono text-xs font-semibold tabular-nums ${
+                currentViolations.length > 0 ? 'text-[#B91C1C]' : 'text-[#15803D]'
+              }`}
+            >
+              Нарушений: {currentViolations.length}
+            </span>
+          </div>
+
+          {currentViolations.length === 0 ? (
+            <div className="p-4 border border-[#D6CEBE] bg-[#FBF9F5] flex items-center gap-2.5 text-xs text-[#15803D]">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>На текущем настроенном фасаде критических нарушений не обнаружено.</span>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#E5DFD3] border border-[#B91C1C]/40 bg-[#FBF9F5]">
+              {currentViolations.map((item) => {
+                const excerpt = getExcerptForCheckId(item.id, item.page);
+                return (
+                  <div
+                    key={item.id}
+                    className="p-4 border-l-4 border-l-[#B91C1C] bg-[#B91C1C]/[0.03] space-y-2"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-[#B91C1C]">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            <span>НАРУШЕНИЕ</span>
+                          </span>
+                          <span className="text-xs font-semibold text-[#1C1917]">{item.title}</span>
+                          <span className="font-mono text-[11px] text-[#78716C]">{item.page}</span>
+                        </div>
+                        <p className="font-mono text-[11px] text-[#44403C] tabular-nums">
+                          {item.valueText} · <span className="text-[#78716C]">{item.formula}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {onOpenBookPage && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenBookPage(excerpt.pageNumber, excerpt)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium border border-[#B91C1C]/40 bg-[#FEF2F2] text-[#991B1B] hover:bg-[#FEE2E2] whitespace-nowrap"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                            <span>Перейти к тексту (Стр. {excerpt.pageNumber})</span>
+                          </button>
+                        )}
+                        {onHighlightElementOnFacade && (
+                          <button
+                            type="button"
+                            onClick={() => onHighlightElementOnFacade(item.targetElement)}
+                            className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] whitespace-nowrap"
+                          >
+                            На фасад
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <p className="text-xs leading-relaxed text-[#44403C]">
+                      <strong className="font-medium text-[#1C1917]">Причина: </strong>
+                      {item.explanation}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

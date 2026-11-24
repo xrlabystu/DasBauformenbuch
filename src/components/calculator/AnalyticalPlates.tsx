@@ -1,4 +1,22 @@
 import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import {
+  Download,
+  Maximize2,
+  Minimize2,
+  Move,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import {
   BELT_CLASSES,
   PHI,
   RULES_DATA,
@@ -11,8 +29,9 @@ import {
   type FacadeSummary,
 } from '../../calc/rules';
 import { isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
+import { downloadDetailPlateDwg, type DetailPlateId } from '../../calc/dwgExport';
 
-export type AnalyticalPlateId = 'fan' | 'golden' | 'diagonal' | 'cornice' | 'socle' | 'belt';
+export type AnalyticalPlateId = DetailPlateId;
 
 interface AnalyticalPlatesProps {
   activePlate: AnalyticalPlateId;
@@ -21,6 +40,71 @@ interface AnalyticalPlatesProps {
   summary: FacadeSummary;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
   lockedParams?: LockedParamsMap;
+}
+
+const PLATE_SVG_DIMS: Record<AnalyticalPlateId, { w: number; h: number }> = {
+  fan: { w: 560, h: 300 },
+  golden: { w: 420, h: 260 },
+  diagonal: { w: 420, h: 260 },
+  cornice: { w: 540, h: 260 },
+  socle: { w: 540, h: 260 },
+  belt: { w: 540, h: 270 },
+};
+
+const MIN_DETAIL_ZOOM = 0.75;
+const MAX_DETAIL_ZOOM = 8;
+
+interface DetailSvgCanvasProps {
+  containerRef: RefObject<HTMLDivElement | null>;
+  svgRef: RefObject<SVGSVGElement | null>;
+  viewBoxStr: string;
+  isFullscreen: boolean;
+  isPanning: boolean;
+  zoom: number;
+  onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  children: ReactNode;
+}
+
+function DetailSvgCanvas({
+  containerRef,
+  svgRef,
+  viewBoxStr,
+  isFullscreen,
+  isPanning,
+  zoom,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  children,
+}: DetailSvgCanvasProps) {
+  return (
+    <div
+      ref={containerRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className={`relative select-none touch-none ${
+        isPanning
+          ? 'cursor-grabbing'
+          : isFullscreen || Math.abs(zoom - 1) > 0.01
+            ? 'cursor-grab'
+            : 'cursor-default'
+      }`}
+    >
+      <svg
+        ref={svgRef}
+        viewBox={viewBoxStr}
+        className={`border border-[#E5DFD3] bg-[#FBF9F5] ${
+          isFullscreen ? 'w-full h-full max-h-[calc(100vh-14rem)]' : 'w-full h-auto'
+        }`}
+      >
+        {children}
+      </svg>
+    </div>
+  );
 }
 
 export function AnalyticalPlates({
@@ -40,12 +124,302 @@ export function AnalyticalPlates({
     { id: 'belt', label: 'Разрез ленты (Gurt)', ref: 'S. 10–11, 16–17, 22' },
   ];
 
+  const baseDim = PLATE_SVG_DIMS[activePlate];
+  const svgW = baseDim.w;
+  const svgH = baseDim.h;
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [view, setView] = useState<{ zoom: number; pan: { x: number; y: number } }>({
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+  });
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const dragRef = useRef<{
+    active: boolean;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startPanX: number;
+    startPanY: number;
+    moved: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    setView({ zoom: 1, pan: { x: 0, y: 0 } });
+  }, [activePlate]);
+
+  const clampPan = useCallback(
+    (x: number, y: number, targetZoom: number) => {
+      const vbW = svgW / targetZoom;
+      const vbH = svgH / targetZoom;
+      const minX = -vbW * 0.45;
+      const maxX = svgW - vbW * 0.55;
+      const minY = -vbH * 0.45;
+      const maxY = svgH - vbH * 0.55;
+      return {
+        x: Math.min(Math.max(x, minX), maxX),
+        y: Math.min(Math.max(y, minY), maxY),
+      };
+    },
+    [svgW, svgH]
+  );
+
+  const vbW = svgW / view.zoom;
+  const vbH = svgH / view.zoom;
+  const clampedPan = clampPan(view.pan.x, view.pan.y, view.zoom);
+  const vbX = clampedPan.x;
+  const vbY = clampedPan.y;
+  const viewBoxStr = `${vbX.toFixed(2)} ${vbY.toFixed(2)} ${vbW.toFixed(2)} ${vbH.toFixed(2)}`;
+
+  const zoomByFactor = useCallback(
+    (factor: number, clientPt?: { clientX: number; clientY: number }) => {
+      setView((prev) => {
+        const nextZoom = Math.max(
+          MIN_DETAIL_ZOOM,
+          Math.min(MAX_DETAIL_ZOOM, Number((prev.zoom * factor).toFixed(3)))
+        );
+        const prevVbW = svgW / prev.zoom;
+        const prevVbH = svgH / prev.zoom;
+        const curPan = clampPan(prev.pan.x, prev.pan.y, prev.zoom);
+
+        let fx = curPan.x + prevVbW / 2;
+        let fy = curPan.y + prevVbH / 2;
+
+        if (clientPt && svgRef.current) {
+          const rect = svgRef.current.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const scaleSvgPerPx = Math.max(prevVbW / rect.width, prevVbH / rect.height);
+            const renderedW = prevVbW / scaleSvgPerPx;
+            const renderedH = prevVbH / scaleSvgPerPx;
+            const offsetX = rect.left + (rect.width - renderedW) / 2;
+            const offsetY = rect.top + (rect.height - renderedH) / 2;
+            fx = curPan.x + (clientPt.clientX - offsetX) * scaleSvgPerPx;
+            fy = curPan.y + (clientPt.clientY - offsetY) * scaleSvgPerPx;
+          }
+        }
+
+        const relX = (fx - curPan.x) / prevVbW;
+        const relY = (fy - curPan.y) / prevVbH;
+        const newVbW = svgW / nextZoom;
+        const newVbH = svgH / nextZoom;
+        const nextPan = clampPan(fx - relX * newVbW, fy - relY * newVbH, nextZoom);
+        return { zoom: nextZoom, pan: nextPan };
+      });
+    },
+    [clampPan, svgW, svgH]
+  );
+
+  const handleResetView = useCallback(() => {
+    setView({ zoom: 1, pan: { x: 0, y: 0 } });
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullscreen(false);
+      else if (e.key === '+' || e.key === '=') zoomByFactor(1.25);
+      else if (e.key === '-' || e.key === '_') zoomByFactor(0.8);
+      else if (e.key === '0') handleResetView();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isFullscreen, zoomByFactor, handleResetView]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const shouldZoom = isFullscreen || e.ctrlKey || e.metaKey || Math.abs(view.zoom - 1) > 0.01;
+      if (!shouldZoom) return;
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0018);
+      zoomByFactor(factor, { clientX: e.clientX, clientY: e.clientY });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isFullscreen, view.zoom, zoomByFactor, activePlate]);
+
+  const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    dragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startPanX: vbX,
+      startPanY: vbY,
+      moved: false,
+    };
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || !drag.active || drag.pointerId !== e.pointerId) return;
+    const dxPx = e.clientX - drag.startClientX;
+    const dyPx = e.clientY - drag.startClientY;
+    if (!drag.moved && Math.hypot(dxPx, dyPx) < 4) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      setIsPanning(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    }
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const scaleSvgPerPx = Math.max(vbW / rect.width, vbH / rect.height);
+    const nextPan = clampPan(
+      drag.startPanX - dxPx * scaleSvgPerPx,
+      drag.startPanY - dyPx * scaleSvgPerPx,
+      view.zoom
+    );
+    setView((prev) => ({ ...prev, pan: nextPan }));
+  };
+
+  const handlePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    try {
+      if (drag.moved && e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore
+    }
+    dragRef.current = null;
+    setIsPanning(false);
+  };
+
+  const activeMeta = plateTabs.find((t) => t.id === activePlate);
+  const isViewModified =
+    Math.abs(view.zoom - 1) > 0.01 || Math.abs(view.pan.x) > 0.5 || Math.abs(view.pan.y) > 0.5;
+  const zoomPct = Math.round(view.zoom * 100);
+
+  const canvasSharedProps: Omit<DetailSvgCanvasProps, 'children'> = {
+    containerRef,
+    svgRef,
+    viewBoxStr,
+    isFullscreen,
+    isPanning,
+    zoom: view.zoom,
+    onPointerDown: handlePointerDown,
+    onPointerMove: handlePointerMove,
+    onPointerUp: handlePointerUp,
+  };
+
   return (
-    <section className="border border-[#D6CEBE] bg-[#FBF9F5]">
-      <div className="px-4 py-3 border-b border-[#E5DFD3] bg-[#F3EFE6]/60 flex flex-wrap items-center justify-between gap-3">
+    <section
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 bg-[#FBF9F5] flex flex-col'
+          : 'border border-[#D6CEBE] bg-[#FBF9F5]'
+      }
+    >
+      {/* Top Bar: Деталь + Zoom/Pan/Fullscreen + DWG Export */}
+      <div className="px-4 py-2.5 border-b border-[#E5DFD3] bg-[#F3EFE6]/85 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="font-display text-base font-semibold text-[#1C1917]">Деталь</span>
+          <span aria-hidden="true" className="text-[#78716C]">·</span>
+          <span className="text-xs font-medium text-[#44403C]">{activeMeta?.label}</span>
+          <span className="font-mono text-[11px] text-[#78716C]">({activeMeta?.ref})</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] tabular-nums">
+          <button
+            type="button"
+            onClick={() => zoomByFactor(0.8)}
+            disabled={view.zoom <= MIN_DETAIL_ZOOM + 0.001}
+            title="Уменьшить масштаб детали"
+            aria-label="Уменьшить масштаб детали"
+            className="p-1.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleResetView}
+            title="Сбросить масштаб до 100% и центрировать"
+            className="px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors min-w-[52px] text-center"
+          >
+            {zoomPct}%
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomByFactor(1.25)}
+            disabled={view.zoom >= MAX_DETAIL_ZOOM - 0.001}
+            title="Увеличить масштаб детали"
+            aria-label="Увеличить масштаб детали"
+            className="p-1.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          {isViewModified && (
+            <button
+              type="button"
+              onClick={handleResetView}
+              title="Сбросить масштаб и сдвиг детали"
+              aria-label="Сбросить масштаб и сдвиг детали"
+              className="p-1.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((v) => !v)}
+            title={
+              isFullscreen
+                ? 'Вернуться в обычный режим (Esc)'
+                : 'Открыть деталь во весь экран'
+            }
+            aria-label={isFullscreen ? 'Выйти из полноэкранного режима детали' : 'Деталь во весь экран'}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 border transition-colors ${
+              isFullscreen
+                ? 'border-[#1C1917] bg-[#1C1917] text-[#FBF9F5] hover:bg-[#292524]'
+                : 'border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5]'
+            }`}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span>Обычный режим</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Во весь экран</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadDetailPlateDwg(activePlate, params, summary)}
+            title="Скачать активный чертёж детали в формате AutoCAD DWG"
+            aria-label="Экспорт детали в DWG"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 border border-[#9A3412] bg-[#9A3412] text-[#FBF9F5] hover:bg-[#7C2D12] transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>DWG</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Plate tabs */}
+      <div className="px-4 py-2.5 border-b border-[#E5DFD3] bg-[#F3EFE6]/50 flex flex-wrap items-center justify-between gap-2 shrink-0">
         <div
           role="tablist"
-          aria-label="Геометрические номограммы и схемы"
+          aria-label="Геометрические номограммы и схемы детали"
           className="inline-flex flex-wrap items-center gap-1"
         >
           {plateTabs.map((tab) => {
@@ -68,25 +442,37 @@ export function AnalyticalPlates({
             );
           })}
         </div>
-        <span className="font-mono text-[11px] text-[#78716C]">
-          {plateTabs.find((t) => t.id === activePlate)?.ref}
+        <span className="hidden sm:inline-flex items-center gap-1 font-mono text-[10px] text-[#78716C]">
+          <Move className="w-3 h-3" />
+          <span>Перетаскивание · Ctrl+колёсико</span>
         </span>
       </div>
 
-      <div className="p-4">
-        {activePlate === 'fan' && <RatioFanPlate params={params} summary={summary} />}
+      <div className={`p-4 ${isFullscreen ? 'flex-1 min-h-0 overflow-y-auto' : ''}`}>
+        {activePlate === 'fan' && (
+          <RatioFanPlate params={params} summary={summary} canvasProps={canvasSharedProps} />
+        )}
         {activePlate === 'golden' && (
           <GoldenCompassPlate
             params={params}
             summary={summary}
             onUpdateParams={onUpdateParams}
             lockedParams={lockedParams}
+            canvasProps={canvasSharedProps}
           />
         )}
-        {activePlate === 'diagonal' && <DiagonalTestPlate params={params} summary={summary} />}
-        {activePlate === 'cornice' && <CorniceProfilePlate params={params} summary={summary} />}
-        {activePlate === 'socle' && <SocleHierarchyPlate params={params} summary={summary} />}
-        {activePlate === 'belt' && <BeltProfilePlate params={params} summary={summary} />}
+        {activePlate === 'diagonal' && (
+          <DiagonalTestPlate params={params} summary={summary} canvasProps={canvasSharedProps} />
+        )}
+        {activePlate === 'cornice' && (
+          <CorniceProfilePlate params={params} summary={summary} canvasProps={canvasSharedProps} />
+        )}
+        {activePlate === 'socle' && (
+          <SocleHierarchyPlate params={params} summary={summary} canvasProps={canvasSharedProps} />
+        )}
+        {activePlate === 'belt' && (
+          <BeltProfilePlate params={params} summary={summary} canvasProps={canvasSharedProps} />
+        )}
       </div>
     </section>
   );
@@ -96,9 +482,11 @@ export function AnalyticalPlates({
 function RatioFanPlate({
   params,
   summary,
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const rays = [...RULES_DATA.standardAxenRatios, ...RULES_DATA.limitAxenRatios];
   const W = 560;
@@ -123,7 +511,7 @@ function RatioFanPlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-8">
-        <svg viewBox={`0 0 ${W} ${Hsvg}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           {/* Grid */}
           {[1, 2, 3, 4, 5, 6].map((tick) => (
             <g key={tick}>
@@ -248,7 +636,7 @@ function RatioFanPlate({
           >
             Шаг осей A (Axenweite), м
           </text>
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-4 space-y-3 text-xs text-[#44403C]">
@@ -287,11 +675,13 @@ function GoldenCompassPlate({
   summary,
   onUpdateParams,
   lockedParams = {},
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
   lockedParams?: LockedParamsMap;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const hLocked = isParamLocked(lockedParams, 'h');
   const wLocked = isParamLocked(lockedParams, 'w');
@@ -301,8 +691,6 @@ function GoldenCompassPlate({
   const b = h - w; // остаток h - w
 
   // Чертим в SVG пропорционально
-  const svgW = 420;
-  const svgH = 260;
   const maxWinH = 190;
   const scale = maxWinH / Math.max(h, w * 1.8);
   const boxW = w * scale;
@@ -322,7 +710,7 @@ function GoldenCompassPlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-7">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           {/* Window rectangle w x h */}
           <rect
             x={startX}
@@ -422,7 +810,7 @@ function GoldenCompassPlate({
           >
             h = {formatMeters(h)} м
           </text>
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-5 space-y-3 text-xs text-[#44403C]">
@@ -501,17 +889,17 @@ function GoldenCompassPlate({
 function DiagonalTestPlate({
   params,
   summary,
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const w = Math.max(0.4, params.w);
   const h = Math.max(0.5, params.h);
   const { d, halfD, strictPassed, deviationPct, status } = summary.windowCheck.diagCheck;
   const isApprox35 = Math.abs(h / w - 5 / 3) < 0.02;
 
-  const svgW = 420;
-  const svgH = 260;
   const scale = 185 / Math.max(h, w * 1.6);
   const boxW = w * scale;
   const boxH = h * scale;
@@ -527,7 +915,7 @@ function DiagonalTestPlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-7">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           <rect
             x={x0}
             y={y0}
@@ -580,7 +968,7 @@ function DiagonalTestPlate({
           >
             w = {formatMeters(w)} м
           </text>
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-5 space-y-3 text-xs text-[#44403C]">
@@ -622,9 +1010,11 @@ function DiagonalTestPlate({
 function CorniceProfilePlate({
   params,
   summary,
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const { h_u, h_l } = summary.corniceCheck;
   const char = summary.corniceChar;
@@ -632,8 +1022,6 @@ function CorniceProfilePlate({
   const v45 = projection_45(K);
   const vConsole = projection_console(K);
 
-  const svgW = 540;
-  const svgH = 260;
   const wallX = 115;
   const topY = 34;
   const totalPx = 155;
@@ -649,7 +1037,7 @@ function CorniceProfilePlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-8">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           {/* Wall section */}
           <rect x={40} y={topY} width={wallX - 40} height={205} fill="#EAE3D3" stroke="#1C1917" strokeWidth={1.2} />
 
@@ -758,7 +1146,7 @@ function CorniceProfilePlate({
           <text x={14} y={topY + totalPx / 2} fontSize="9.5" fontFamily="IBM Plex Mono, monospace" fill="#44403C">
             T_c={formatMeters(params.Tc)}
           </text>
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">
@@ -795,9 +1183,11 @@ function CorniceProfilePlate({
 function SocleHierarchyPlate({
   params,
   summary,
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const effectiveSocleH = params.useFullFloorAsSocle
     ? summary.derivedGeometry.floor1FullHeight
@@ -806,7 +1196,6 @@ function SocleHierarchyPlate({
   const totalParts = Math.max(0.01, fuss + rumpf + deck);
   const { n, rowHeight, oddPreferred } = summary.rusticationCheck;
 
-  const svgW = 540;
   const svgH = 260;
 
   // Левая половина: 3-частный цоколь с рядами руста
@@ -862,7 +1251,7 @@ function SocleHierarchyPlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-8">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           {/* 3-part socle section */}
           <rect
             x={secX - 8}
@@ -1003,7 +1392,7 @@ function SocleHierarchyPlate({
               </g>
             );
           })}
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">
@@ -1040,9 +1429,11 @@ function SocleHierarchyPlate({
 function BeltProfilePlate({
   params,
   summary,
+  canvasProps,
 }: {
   params: FacadeParameters;
   summary: FacadeSummary;
+  canvasProps: Omit<DetailSvgCanvasProps, 'children'>;
 }) {
   const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];
   const { hUpper, hLower, hCrown, effect } = summary.beltCrowningCheck;
@@ -1064,7 +1455,6 @@ function BeltProfilePlate({
         ? '#B45309'
         : '#1C1917';
 
-  const svgW = 540;
   const svgH = 270;
   const wallX = 72;
   const wallW = 86;
@@ -1082,7 +1472,7 @@ function BeltProfilePlate({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-8">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto border border-[#E5DFD3] bg-[#FBF9F5]">
+        <DetailSvgCanvas {...canvasProps}>
           {/* Заголовок разреза */}
           <text
             x={16}
@@ -1404,7 +1794,7 @@ function BeltProfilePlate({
               </text>
             </g>
           )}
-        </svg>
+        </DetailSvgCanvas>
       </div>
 
       <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">

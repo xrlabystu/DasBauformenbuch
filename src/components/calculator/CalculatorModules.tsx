@@ -1,7 +1,16 @@
-import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Lock, Unlock, XCircle } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  Unlock,
+  XCircle,
+} from 'lucide-react';
 import { isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
 import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
+import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../../utils/termHighlight';
 import {
   A_from_H,
   A_from_pw,
@@ -21,10 +30,12 @@ import {
   getAxesGroupingHint,
   gurtModeFromSchemeNumber,
   h_from_w_ratio,
+  isPilasterEnabledOnFloor,
   projection_45,
   projection_console,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
   schemeNumberFromGurtMode,
   socleHeight,
@@ -47,6 +58,7 @@ import {
   type FiveStoryScheme,
   type MultiSub,
   type PedimentType,
+  type PilasterPlacement,
   type SocleMode,
   type SourceStatus,
   type ThreeStoryBeltSchemeNumber,
@@ -78,6 +90,7 @@ interface CalculatorModulesProps {
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
   onHighlightElement: (el: FacadeTargetElement | null) => void;
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
+  onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
 }
 
 export function StatusBadge({ status, text }: { status: ValidationStatus; text?: string }) {
@@ -139,6 +152,45 @@ function LockToggleButton({
   );
 }
 
+function CollapsibleSection({
+  title,
+  badge,
+  defaultOpen = true,
+  subtle = false,
+  children,
+}: {
+  title: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  subtle?: boolean;
+  children: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  return (
+    <div className={`border border-[#E5DFD3] ${subtle ? 'bg-[#F3EFE6]/45' : 'bg-[#FBF9F5]'}`}>
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((v) => !v)}
+        className="w-full px-3 py-2 flex items-center justify-between gap-2 text-left bg-[#F3EFE6]/60 hover:bg-[#EAE3D5]/75 transition-colors"
+      >
+        <span className="flex items-center gap-1.5 text-xs font-medium text-[#1C1917] min-w-0">
+          {isOpen ? (
+            <ChevronDown className="w-3.5 h-3.5 shrink-0 text-[#78716C]" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[#78716C]" />
+          )}
+          <span className="truncate">{title}</span>
+        </span>
+        {badge && (
+          <span className="font-mono text-[10px] text-[#78716C] shrink-0">{badge}</span>
+        )}
+      </button>
+      {isOpen && <div className="p-3 space-y-3 border-t border-[#E5DFD3]">{children}</div>}
+    </div>
+  );
+}
+
 function MeterControl({
   id,
   label,
@@ -152,6 +204,7 @@ function MeterControl({
   lockKey,
   locked = false,
   onToggleLock,
+  onOpenGlossaryTerm,
   onChange,
 }: {
   id: string;
@@ -166,6 +219,7 @@ function MeterControl({
   lockKey?: string;
   locked?: boolean;
   onToggleLock?: (key: string) => void;
+  onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
   onChange: (val: number) => void;
 }) {
   const isLocked = Boolean(lockKey && locked);
@@ -180,7 +234,11 @@ function MeterControl({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <label htmlFor={id} className="text-xs font-medium text-[#1C1917]">
-            {label}
+            <TextWithGlossaryLinks
+              text={label}
+              onOpenGlossaryTerm={onOpenGlossaryTerm}
+              insideLabel={true}
+            />
           </label>
           {lockKey && (
             <LockToggleButton
@@ -222,7 +280,11 @@ function MeterControl({
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       />
-      {note && <p className="text-[11px] text-[#78716C]">{note}</p>}
+      {note && (
+        <p className="text-[11px] text-[#78716C]">
+          <TextWithGlossaryLinks text={note} onOpenGlossaryTerm={onOpenGlossaryTerm} />
+        </p>
+      )}
     </div>
   );
 }
@@ -236,6 +298,7 @@ function WhyBlock({
   isHeuristic,
   sourceStatus,
   onOpenBookPage,
+  onOpenGlossaryTerm,
 }: {
   ruleId?: string;
   status: ValidationStatus;
@@ -245,6 +308,7 @@ function WhyBlock({
   isHeuristic?: boolean;
   sourceStatus?: SourceStatus;
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
+  onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
 }) {
   const firstPageMatch = page.match(/\d+/);
   const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
@@ -297,7 +361,9 @@ function WhyBlock({
       <p className="font-mono text-[11px] text-[#1C1917] bg-[#FBF9F5] px-2.5 py-1.5 border border-[#E5DFD3]">
         {formula}
       </p>
-      <p className="text-xs leading-relaxed text-[#44403C]">{explanation}</p>
+      <p className="text-xs leading-relaxed text-[#44403C]">
+        <TextWithGlossaryLinks text={explanation} onOpenGlossaryTerm={onOpenGlossaryTerm} />
+      </p>
     </div>
   );
 }
@@ -313,6 +379,7 @@ export function CalculatorModules({
   onUpdateParams,
   onHighlightElement,
   onOpenBookPage,
+  onOpenGlossaryTerm,
 }: CalculatorModulesProps) {
   // Локальные настройки режимов решателя внутри каждого модуля
   const [axesSolveMode, setAxesSolveMode] = useState<'find_A' | 'find_H' | 'find_w' | 'find_p_A' | 'check'>('find_A');
@@ -328,6 +395,23 @@ export function CalculatorModules({
 
   const [framingInputMode, setFramingInputMode] = useState<'by_T' | 'by_R' | 'by_F' | 'by_K'>('by_T');
   const [moduleValue, setModuleValue] = useState(0.4);
+
+  const [isEditingManualHeight, setIsEditingManualHeight] = useState(false);
+  const [manualHeightDraft, setManualHeightDraft] = useState<string>(() =>
+    params.levels.manualTotalHeight !== undefined
+      ? String(Number(params.levels.manualTotalHeight.toFixed(2)))
+      : ''
+  );
+
+  useEffect(() => {
+    if (!isEditingManualHeight) {
+      setManualHeightDraft(
+        params.levels.manualTotalHeight !== undefined
+          ? String(Number(params.levels.manualTotalHeight.toFixed(2)))
+          : ''
+      );
+    }
+  }, [params.levels.manualTotalHeight, isEditingManualHeight]);
 
   const modules: { id: CalculatorModuleId; label: string }[] = [
     { id: 'axes', label: 'Оси и простенки' },
@@ -375,9 +459,9 @@ export function CalculatorModules({
   };
 
   return (
-    <div className="border border-[#D6CEBE] bg-[#FBF9F5]">
+    <div className="border border-[#D6CEBE] bg-[#FBF9F5] flex flex-col min-h-0 flex-1">
       {/* Module tabs */}
-      <div className="p-2 border-b border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap gap-1">
+      <div className="p-2 border-b border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap gap-1 shrink-0">
         {modules.map((m) => {
           const active = activeModule === m.id;
           return (
@@ -408,288 +492,305 @@ export function CalculatorModules({
         })}
       </div>
 
-      <div className="p-4 sm:p-5 space-y-5">
+      <div className="p-4 sm:p-5 space-y-5 overflow-y-auto flex-1 min-h-0">
         {/* 4.1 Оси и простенки */}
         {activeModule === 'axes' && (
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.1. Шаг осей (Axenweite) и простенки
+                <TextWithGlossaryLinks
+                  text="4.1. Шаг осей (Axenweite) и простенки"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
                 Выберите целевую величину для расчёта или проверьте текущие параметры (S. 5–6).
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-1.5">
-              {(
-                [
-                  { id: 'find_A', label: 'Найти A (из H)' },
-                  { id: 'find_H', label: 'Найти H (из A)' },
-                  { id: 'find_w', label: 'Макс. w (из A)' },
-                  { id: 'find_p_A', label: 'Найти A (из p и w)' },
-                  { id: 'check', label: 'Проверить A, H, w, u' },
-                ] as const
-              ).map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  onClick={() => setAxesSolveMode(mode.id)}
-                  className={`px-2.5 py-1 text-[11px] font-medium border transition-colors ${
-                    axesSolveMode === mode.id
-                      ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
-                      : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                  }`}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-
-            {(axesSolveMode === 'find_A' || axesSolveMode === 'find_H') && (
-              <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2.5">
-                <label className="block text-xs font-medium text-[#1C1917]">
-                  Отношение A : H (n : m)
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {[...RULES_DATA.standardAxenRatios, ...RULES_DATA.limitAxenRatios].map((r) => (
-                    <button
-                      key={r.label}
-                      type="button"
-                      onClick={() => {
-                        setAxesRatioChoice(r.label);
-                        if (axesSolveMode === 'find_A') {
-                          if (isParamLocked(lockedParams, 'A') && !isParamLocked(lockedParams, 'H')) {
-                            onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
-                          } else {
-                            onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
-                          }
-                        } else {
-                          if (isParamLocked(lockedParams, 'H') && !isParamLocked(lockedParams, 'A')) {
-                            onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
-                          } else {
-                            onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
-                          }
-                        }
-                      }}
-                      className={`px-2 py-1 text-[11px] font-mono border transition-colors ${
-                        axesRatioChoice === r.label
-                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                          : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                      }`}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
+            <CollapsibleSection title="Режим расчёта и отношение A : H" subtle>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: 'find_A', label: 'Найти A (из H)' },
+                    { id: 'find_H', label: 'Найти H (из A)' },
+                    { id: 'find_w', label: 'Макс. w (из A)' },
+                    { id: 'find_p_A', label: 'Найти A (из p и w)' },
+                    { id: 'check', label: 'Проверить A, H, w, u' },
+                  ] as const
+                ).map((mode) => (
                   <button
+                    key={mode.id}
                     type="button"
-                    onClick={() => setAxesRatioChoice('custom')}
-                    className={`px-2 py-1 text-[11px] font-mono border transition-colors ${
-                      axesRatioChoice === 'custom'
-                        ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                        : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE]'
+                    onClick={() => setAxesSolveMode(mode.id)}
+                    className={`px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+                      axesSolveMode === mode.id
+                        ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                        : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
                     }`}
                   >
-                    n:m
+                    {mode.label}
                   </button>
-                </div>
-
-                {axesRatioChoice === 'custom' && (
-                  <div className="flex items-center gap-2 pt-1 text-xs font-mono">
-                    <span>n =</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={30}
-                      value={customAxN}
-                      aria-label="Числитель отношения A:H"
-                      onChange={(e) => {
-                        const n = Math.max(1, parseFloat(e.target.value) || 1);
-                        setCustomAxN(n);
-                        if (axesSolveMode === 'find_A') {
-                          onUpdateParams({ A: A_from_H(params.H, n, customAxM) });
-                        } else {
-                          onUpdateParams({ H: H_from_A(params.A, n, customAxM) });
-                        }
-                      }}
-                      className="w-16 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5]"
-                    />
-                    <span>: m =</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={30}
-                      value={customAxM}
-                      aria-label="Знаменатель отношения A:H"
-                      onChange={(e) => {
-                        const m = Math.max(1, parseFloat(e.target.value) || 1);
-                        setCustomAxM(m);
-                        if (axesSolveMode === 'find_A') {
-                          onUpdateParams({ A: A_from_H(params.H, customAxN, m) });
-                        } else {
-                          onUpdateParams({ H: H_from_A(params.A, customAxN, m) });
-                        }
-                      }}
-                      className="w-16 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5]"
-                    />
-                  </div>
-                )}
+                ))}
               </div>
-            )}
 
-            <div className="space-y-4">
-              <MeterControl
-                id="calc-H"
-                label="Высота комнаты H_max (Zimmerhöhe)"
-                value={params.H}
-                min={2.2}
-                max={6.5}
-                disabled={axesSolveMode === 'find_H'}
-                lockKey="H"
-                locked={isParamLocked(lockedParams, 'H')}
-                onToggleLock={onToggleLock}
-                note="Для многоэтажного здания расчёт ведётся от наибольшей высоты комнаты (S. 5)."
-                onChange={(H) => {
-                  if (axesSolveMode === 'find_A' && !isParamLocked(lockedParams, 'A')) {
-                    const [n, m] = getActiveAxRatio();
-                    onUpdateParams({ H, A: A_from_H(H, n, m) });
-                  } else {
-                    onUpdateParams({ H });
-                  }
-                }}
-              />
+              {(axesSolveMode === 'find_A' || axesSolveMode === 'find_H') && (
+                <div className="pt-2 border-t border-[#E5DFD3] space-y-2.5">
+                  <label className="block text-xs font-medium text-[#1C1917]">
+                    Отношение A : H (n : m)
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[...RULES_DATA.standardAxenRatios, ...RULES_DATA.limitAxenRatios].map((r) => (
+                      <button
+                        key={r.label}
+                        type="button"
+                        onClick={() => {
+                          setAxesRatioChoice(r.label);
+                          if (axesSolveMode === 'find_A') {
+                            if (isParamLocked(lockedParams, 'A') && !isParamLocked(lockedParams, 'H')) {
+                              onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
+                            } else {
+                              onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
+                            }
+                          } else {
+                            if (isParamLocked(lockedParams, 'H') && !isParamLocked(lockedParams, 'A')) {
+                              onUpdateParams({ A: A_from_H(params.H, r.n, r.m) });
+                            } else {
+                              onUpdateParams({ H: H_from_A(params.A, r.n, r.m) });
+                            }
+                          }
+                        }}
+                        className={`px-2 py-1 text-[11px] font-mono border transition-colors ${
+                          axesRatioChoice === r.label
+                            ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                            : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setAxesRatioChoice('custom')}
+                      className={`px-2 py-1 text-[11px] font-mono border transition-colors ${
+                        axesRatioChoice === 'custom'
+                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                          : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE]'
+                      }`}
+                    >
+                      n:m
+                    </button>
+                  </div>
 
-              <MeterControl
-                id="calc-A"
-                label="Шаг осей A (Axenweite)"
-                value={params.A}
-                min={1.4}
-                max={6.0}
-                disabled={axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A'}
-                lockKey="A"
-                locked={isParamLocked(lockedParams, 'A')}
-                onToggleLock={onToggleLock}
-                onChange={(A) => {
-                  if (axesSolveMode === 'find_H' && !isParamLocked(lockedParams, 'H')) {
-                    const [n, m] = getActiveAxRatio();
-                    onUpdateParams({ A, H: H_from_A(A, n, m) });
-                  } else if (axesSolveMode === 'find_w' && !isParamLocked(lockedParams, 'w')) {
-                    const wMax = params.withFraming ? Math.max(0.4, A / 2 - 2 * params.u) : w_max_from_A(A);
-                    onUpdateParams({ A, w: wMax });
-                  } else {
-                    onUpdateParams({ A });
-                  }
-                }}
-              />
+                  {axesRatioChoice === 'custom' && (
+                    <div className="flex items-center gap-2 pt-1 text-xs font-mono">
+                      <span>n =</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={customAxN}
+                        aria-label="Числитель отношения A:H"
+                        onChange={(e) => {
+                          const n = Math.max(1, parseFloat(e.target.value) || 1);
+                          setCustomAxN(n);
+                          if (axesSolveMode === 'find_A') {
+                            onUpdateParams({ A: A_from_H(params.H, n, customAxM) });
+                          } else {
+                            onUpdateParams({ H: H_from_A(params.A, n, customAxM) });
+                          }
+                        }}
+                        className="w-16 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5]"
+                      />
+                      <span>: m =</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={customAxM}
+                        aria-label="Знаменатель отношения A:H"
+                        onChange={(e) => {
+                          const m = Math.max(1, parseFloat(e.target.value) || 1);
+                          setCustomAxM(m);
+                          if (axesSolveMode === 'find_A') {
+                            onUpdateParams({ A: A_from_H(params.H, customAxN, m) });
+                          } else {
+                            onUpdateParams({ H: H_from_A(params.A, customAxN, m) });
+                          }
+                        }}
+                        className="w-16 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5]"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </CollapsibleSection>
 
-              {axesSolveMode === 'find_p_A' && (
+            <CollapsibleSection title="Параметры осей, окон и обрамления">
+              <div className="space-y-4">
                 <MeterControl
-                  id="calc-target-p"
-                  label="Заданный простенок p (для A = p + w)"
-                  value={targetPierInput}
-                  min={0.6}
-                  max={3.5}
-                  disabled={isParamLocked(lockedParams, 'A')}
-                  onChange={(pVal) => {
-                    setTargetPierInput(pVal);
-                    onUpdateParams({ A: A_from_pw(pVal, params.w) });
+                  id="calc-H"
+                  label="Высота комнаты H_max (Zimmerhöhe)"
+                  value={params.H}
+                  min={2.2}
+                  max={6.5}
+                  disabled={axesSolveMode === 'find_H'}
+                  lockKey="H"
+                  locked={isParamLocked(lockedParams, 'H')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  note="Для многоэтажного здания расчёт ведётся от наибольшей высоты комнаты (S. 5)."
+                  onChange={(H) => {
+                    if (axesSolveMode === 'find_A' && !isParamLocked(lockedParams, 'A')) {
+                      const [n, m] = getActiveAxRatio();
+                      onUpdateParams({ H, A: A_from_H(H, n, m) });
+                    } else {
+                      onUpdateParams({ H });
+                    }
                   }}
                 />
+
+                <MeterControl
+                  id="calc-A"
+                  label="Шаг осей A (Axenweite)"
+                  value={params.A}
+                  min={1.4}
+                  max={6.0}
+                  disabled={axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A'}
+                  lockKey="A"
+                  locked={isParamLocked(lockedParams, 'A')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onChange={(A) => {
+                    if (axesSolveMode === 'find_H' && !isParamLocked(lockedParams, 'H')) {
+                      const [n, m] = getActiveAxRatio();
+                      onUpdateParams({ A, H: H_from_A(A, n, m) });
+                    } else if (axesSolveMode === 'find_w' && !isParamLocked(lockedParams, 'w')) {
+                      const wMax = params.withFraming ? Math.max(0.4, A / 2 - 2 * params.u) : w_max_from_A(A);
+                      onUpdateParams({ A, w: wMax });
+                    } else {
+                      onUpdateParams({ A });
+                    }
+                  }}
+                />
+
+                {axesSolveMode === 'find_p_A' && (
+                  <MeterControl
+                    id="calc-target-p"
+                    label="Заданный простенок p (для A = p + w)"
+                    value={targetPierInput}
+                    min={0.6}
+                    max={3.5}
+                    disabled={isParamLocked(lockedParams, 'A')}
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onChange={(pVal) => {
+                      setTargetPierInput(pVal);
+                      onUpdateParams({ A: A_from_pw(pVal, params.w) });
+                    }}
+                  />
+                )}
+
+                <MeterControl
+                  id="calc-w-axes"
+                  label="Ширина окна в свету w (lichte Fensterbreite)"
+                  value={params.w}
+                  min={0.6}
+                  max={2.4}
+                  disabled={axesSolveMode === 'find_w'}
+                  lockKey="w"
+                  locked={isParamLocked(lockedParams, 'w')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onChange={(w) => {
+                    if (axesSolveMode === 'find_p_A' && !isParamLocked(lockedParams, 'A')) {
+                      onUpdateParams({ w, A: A_from_pw(targetPierInput, w) });
+                    } else {
+                      onUpdateParams({ w });
+                    }
+                  }}
+                />
+
+                {params.withFraming && (
+                  <MeterControl
+                    id="calc-u"
+                    label="Ширина обрамления с одной стороны u (Rahmen)"
+                    value={params.u}
+                    min={0.05}
+                    max={0.45}
+                    lockKey="u"
+                    locked={isParamLocked(lockedParams, 'u')}
+                    onToggleLock={onToggleLock}
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onChange={(u) => onUpdateParams({ u })}
+                  />
+                )}
+              </div>
+
+              {axesSolveMode === 'find_w' && (
+                <div className="p-2.5 border border-[#D6CEBE] bg-[#FBF9F5] font-mono text-xs flex justify-between">
+                  <span>Предельная ширина w_max = A/2{params.withFraming ? ' − 2u' : ''}:</span>
+                  <strong className="text-[#9A3412]">
+                    {formatMeters(params.withFraming ? w_max_from_A(params.A) - 2 * params.u : w_max_from_A(params.A))} м
+                  </strong>
+                </div>
               )}
 
-              <MeterControl
-                id="calc-w-axes"
-                label="Ширина окна в свету w (lichte Fensterbreite)"
-                value={params.w}
-                min={0.6}
-                max={2.4}
-                disabled={axesSolveMode === 'find_w'}
-                lockKey="w"
-                locked={isParamLocked(lockedParams, 'w')}
-                onToggleLock={onToggleLock}
-                onChange={(w) => {
-                  if (axesSolveMode === 'find_p_A' && !isParamLocked(lockedParams, 'A')) {
-                    onUpdateParams({ w, A: A_from_pw(targetPierInput, w) });
-                  } else {
-                    onUpdateParams({ w });
-                  }
-                }}
-              />
+              <div className="grid grid-cols-2 gap-3 pt-1 font-mono tabular-nums text-xs">
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                  <span className="block text-[10px] text-[#78716C] uppercase">
+                    {params.withFraming ? 'Чистый простенок p_c' : 'Простенок p'}
+                  </span>
+                  <strong className="text-sm text-[#1C1917]">
+                    {formatMeters('p_c' in summary.pierResult ? summary.pierResult.p_c : summary.pierResult.p)} м
+                  </strong>
+                </div>
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                  <span className="block text-[10px] text-[#78716C] uppercase">
+                    {params.withFraming ? 'Видимый проём w_v' : 'Мин. шаг A_min'}
+                  </span>
+                  <strong className="text-sm text-[#1C1917]">
+                    {params.withFraming
+                      ? `${formatMeters('w_v' in summary.pierResult ? summary.pierResult.w_v : params.w)} м (A_min=${formatMeters(A_min_from_wu(params.w, params.u))})`
+                      : `${formatMeters(2 * params.w)} м`}
+                  </strong>
+                </div>
+              </div>
+            </CollapsibleSection>
 
+            <CollapsibleSection title="Проверки шага осей и простенков" subtle>
+              <WhyBlock
+                ruleId="axen_ratio"
+                status={summary.ahCheck.status}
+                sourceStatus={summary.ahCheck.sourceStatus}
+                formula="A = H × (n/m)"
+                page="S. 5–6"
+                explanation={summary.ahCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
+              <WhyBlock
+                ruleId="pier_width"
+                status={summary.pierResult.status}
+                sourceStatus={summary.pierResult.sourceStatus}
+                formula={summary.pierResult.formula}
+                page={summary.pierResult.page}
+                explanation={summary.pierResult.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
               {params.withFraming && (
-                <MeterControl
-                  id="calc-u"
-                  label="Ширина обрамления с одной стороны u (Rahmen)"
-                  value={params.u}
-                  min={0.05}
-                  max={0.45}
-                  lockKey="u"
-                  locked={isParamLocked(lockedParams, 'u')}
-                  onToggleLock={onToggleLock}
-                  onChange={(u) => onUpdateParams({ u })}
+                <WhyBlock
+                  ruleId="n1_framing_width"
+                  status={summary.framingWidthCheck.status}
+                  sourceStatus={summary.framingWidthCheck.sourceStatus}
+                  formula={summary.framingWidthCheck.formula}
+                  page={summary.framingWidthCheck.page}
+                  explanation={summary.framingWidthCheck.explanation}
+                  onOpenBookPage={onOpenBookPage}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
                 />
               )}
-            </div>
-
-            {axesSolveMode === 'find_w' && (
-              <div className="p-2.5 border border-[#D6CEBE] bg-[#FBF9F5] font-mono text-xs flex justify-between">
-                <span>Предельная ширина w_max = A/2{params.withFraming ? ' − 2u' : ''}:</span>
-                <strong className="text-[#9A3412]">
-                  {formatMeters(params.withFraming ? w_max_from_A(params.A) - 2 * params.u : w_max_from_A(params.A))} м
-                </strong>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3 pt-1 font-mono tabular-nums text-xs">
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">
-                  {params.withFraming ? 'Чистый простенок p_c' : 'Простенок p'}
-                </span>
-                <strong className="text-sm text-[#1C1917]">
-                  {formatMeters('p_c' in summary.pierResult ? summary.pierResult.p_c : summary.pierResult.p)} м
-                </strong>
-              </div>
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">
-                  {params.withFraming ? 'Видимый проём w_v' : 'Мин. шаг A_min'}
-                </span>
-                <strong className="text-sm text-[#1C1917]">
-                  {params.withFraming
-                    ? `${formatMeters('w_v' in summary.pierResult ? summary.pierResult.w_v : params.w)} м (A_min=${formatMeters(A_min_from_wu(params.w, params.u))})`
-                    : `${formatMeters(2 * params.w)} м`}
-                </strong>
-              </div>
-            </div>
-
-            <WhyBlock
-              ruleId="axen_ratio"
-              status={summary.ahCheck.status}
-              sourceStatus={summary.ahCheck.sourceStatus}
-              formula="A = H × (n/m)"
-              page="S. 5–6"
-              explanation={summary.ahCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
-            <WhyBlock
-              ruleId="pier_width"
-              status={summary.pierResult.status}
-              sourceStatus={summary.pierResult.sourceStatus}
-              formula={summary.pierResult.formula}
-              page={summary.pierResult.page}
-              explanation={summary.pierResult.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
-            {params.withFraming && (
-              <WhyBlock
-                ruleId="n1_framing_width"
-                status={summary.framingWidthCheck.status}
-                sourceStatus={summary.framingWidthCheck.sourceStatus}
-                formula={summary.framingWidthCheck.formula}
-                page={summary.framingWidthCheck.page}
-                explanation={summary.framingWidthCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-              />
-            )}
+            </CollapsibleSection>
           </div>
         )}
 
@@ -706,7 +807,7 @@ export function CalculatorModules({
             </div>
 
             {/* Выбор варианта этажности */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+            <CollapsibleSection title="Этажность и подтип здания" subtle>
               <div>
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
                   Этажность (BuildingVariant)
@@ -848,14 +949,14 @@ export function CalculatorModules({
                   )}
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
 
             {/* Поэтажная модель (Levels: отметки от земли до карниза) */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+            <CollapsibleSection
+              title="Поэтажная модель высот (Levels, S. 5, 16)"
+              badge={`H_зд=${formatMeters(summary.derivedGeometry.totalHeight, 2)} м`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#1C1917]">
-                  Поэтажная модель высот (Levels, S. 5, 16)
-                </span>
                 <span className="font-mono text-[11px] text-[#78716C] tabular-nums">
                   H_max={formatMeters(summary.derivedGeometry.H_max, 2)} м · H_зд={formatMeters(summary.derivedGeometry.totalHeight, 2)} м
                 </span>
@@ -975,16 +1076,21 @@ export function CalculatorModules({
                       type="checkbox"
                       disabled={isParamLocked(lockedParams, 'levels.manualTotalHeight')}
                       checked={params.levels.manualTotalHeight !== undefined}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        const initH = Number(summary.derivedGeometry.totalHeight.toFixed(2));
+                        if (checked) {
+                          setManualHeightDraft(String(initH));
+                        } else {
+                          setManualHeightDraft('');
+                        }
                         onUpdateParams({
                           levels: {
                             ...params.levels,
-                            manualTotalHeight: e.target.checked
-                              ? summary.derivedGeometry.totalHeight
-                              : undefined,
+                            manualTotalHeight: checked ? initH : undefined,
                           },
-                        })
-                      }
+                        });
+                      }}
                       className="accent-[#9A3412]"
                     />
                     <span>Задать H_зд вручную</span>
@@ -999,25 +1105,52 @@ export function CalculatorModules({
                 {params.levels.manualTotalHeight !== undefined && (
                   <input
                     type="number"
-                    min={4.0}
-                    max={30.0}
+                    min={3.0}
+                    max={40.0}
                     step={0.1}
+                    aria-label="Общая высота здания H_зд вручную, м"
                     disabled={isParamLocked(lockedParams, 'levels.manualTotalHeight')}
-                    value={Number(params.levels.manualTotalHeight.toFixed(2))}
+                    value={manualHeightDraft}
+                    onFocus={() => setIsEditingManualHeight(true)}
                     onChange={(e) => {
-                      const val = Math.max(3.0, parseFloat(e.target.value) || 8.0);
-                      onUpdateParams({
-                        levels: { ...params.levels, manualTotalHeight: val },
-                      });
+                      const raw = e.target.value;
+                      setManualHeightDraft(raw);
+                      const normalized = raw.replace(',', '.').trim();
+                      if (normalized === '') return;
+                      const parsed = parseFloat(normalized);
+                      if (Number.isFinite(parsed) && parsed >= 3.0) {
+                        onUpdateParams({
+                          levels: {
+                            ...params.levels,
+                            manualTotalHeight: Math.min(40.0, parsed),
+                          },
+                        });
+                      }
+                    }}
+                    onBlur={() => {
+                      setIsEditingManualHeight(false);
+                      const normalized = manualHeightDraft.replace(',', '.').trim();
+                      const parsed = parseFloat(normalized);
+                      if (Number.isFinite(parsed)) {
+                        const clamped = Math.min(40.0, Math.max(3.0, parsed));
+                        setManualHeightDraft(String(Number(clamped.toFixed(2))));
+                        onUpdateParams({
+                          levels: { ...params.levels, manualTotalHeight: clamped },
+                        });
+                      } else if (params.levels.manualTotalHeight !== undefined) {
+                        setManualHeightDraft(
+                          String(Number(params.levels.manualTotalHeight.toFixed(2)))
+                        );
+                      }
                     }}
                     className="w-24 px-2 py-1 text-xs font-mono border border-[#D6CEBE] bg-[#FBF9F5] text-right disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
                   />
                 )}
               </div>
-            </div>
+            </CollapsibleSection>
 
             {/* Параметры осей, положения входа (N7) и режима карниза */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+            <CollapsibleSection title="Оси фасада, положение входа и режим карниза">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1C1917]">
                   <span>Число оконных осей фасада (S. 14–16)</span>
@@ -1187,10 +1320,14 @@ export function CalculatorModules({
                   ))}
                 </div>
               </div>
-            </div>
+            </CollapsibleSection>
 
             {/* Композиция фасада: ризалиты, крылья, аттик, фронтон (N8–N17, N23–N26) */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+            <CollapsibleSection
+              title="Композиция крыльев, ризалитов, аттика и фронтона"
+              defaultOpen={params.hasCompositionBreakdown}
+              subtle
+            >
               <label className="flex items-center gap-2 text-xs font-medium text-[#1C1917] cursor-pointer">
                 <input
                   type="checkbox"
@@ -1513,158 +1650,161 @@ export function CalculatorModules({
                   )}
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
 
             {/* Паспорт норм выбранного варианта */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Прямоугольник</span>
-                <strong>
-                  {summary.variantInfo.rules.facadeRect === 'lying'
-                    ? 'Лежачий (W > H)'
-                    : summary.variantInfo.rules.facadeRect === 'standing'
-                      ? 'Стоячий (H > W)'
-                      : 'Любой (≉ квадрату)'}
-                </strong>
+            <CollapsibleSection title="Паспорт норм и проверки варианта" subtle>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Прямоугольник</span>
+                  <strong>
+                    {summary.variantInfo.rules.facadeRect === 'lying'
+                      ? 'Лежачий (W > H)'
+                      : summary.variantInfo.rules.facadeRect === 'standing'
+                        ? 'Стоячий (H > W)'
+                        : 'Любой (≉ квадрату)'}
+                  </strong>
+                </div>
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Членение</span>
+                  <strong>
+                    {summary.variantInfo.rules.articulation === 'horizontal'
+                      ? 'Горизонтальное'
+                      : summary.variantInfo.rules.articulation === 'vertical'
+                        ? 'Вертикальное'
+                        : 'Смешанное'}
+                  </strong>
+                </div>
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Предел A/H_max</span>
+                  <strong>
+                    {formatMeters(summary.variantAxisCheck.range[0], 2)}…
+                    {formatMeters(summary.variantAxisCheck.range[1], 3)}
+                  </strong>
+                </div>
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Колонны / пилястры</span>
+                  <strong>
+                    {summary.variantInfo.rules.columnsOptional ? 'Необязательны' : 'Обычно нужны'}
+                  </strong>
+                </div>
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Главный ярус</span>
+                  <strong>
+                    {summary.variantInfo.rules.mainTierFloor
+                      ? `${summary.variantInfo.rules.mainTierFloor}-й этаж`
+                      : '1-й (основной)'}
+                  </strong>
+                </div>
+                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Верхний этаж</span>
+                  <strong>
+                    {summary.variantInfo.rules.upperFloorSmallest ? 'Наименьший' : 'Стандартный'}
+                  </strong>
+                </div>
               </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Членение</span>
-                <strong>
-                  {summary.variantInfo.rules.articulation === 'horizontal'
-                    ? 'Горизонтальное'
-                    : summary.variantInfo.rules.articulation === 'vertical'
-                      ? 'Вертикальное'
-                      : 'Смешанное'}
-                </strong>
-              </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Предел A/H_max</span>
-                <strong>
-                  {formatMeters(summary.variantAxisCheck.range[0], 2)}…
-                  {formatMeters(summary.variantAxisCheck.range[1], 3)}
-                </strong>
-              </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Колонны / пилястры</span>
-                <strong>
-                  {summary.variantInfo.rules.columnsOptional ? 'Необязательны' : 'Обычно нужны'}
-                </strong>
-              </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Главный ярус</span>
-                <strong>
-                  {summary.variantInfo.rules.mainTierFloor
-                    ? `${summary.variantInfo.rules.mainTierFloor}-й этаж`
-                    : '1-й (основной)'}
-                </strong>
-              </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                <span className="block text-[10px] text-[#78716C] uppercase">Верхний этаж</span>
-                <strong>
-                  {summary.variantInfo.rules.upperFloorSmallest ? 'Наименьший' : 'Стандартный'}
-                </strong>
-              </div>
-            </div>
 
-            {/* Примечания из источника */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5 text-xs text-[#44403C]">
-              <div className="flex items-center justify-between gap-2">
-                <strong className="text-[#1C1917]">{summary.variantInfo.labelRu}</strong>
-                <span className="font-mono text-[11px] text-[#78716C]">
-                  {summary.variantInfo.pages}
-                </span>
+              <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5 text-xs text-[#44403C]">
+                <div className="flex items-center justify-between gap-2">
+                  <strong className="text-[#1C1917]">{summary.variantInfo.labelRu}</strong>
+                  <span className="font-mono text-[11px] text-[#78716C]">
+                    {summary.variantInfo.pages}
+                  </span>
+                </div>
+                {summary.variantInfo.notesRu.map((n, i) => (
+                  <p key={i} className="leading-relaxed">
+                    • <TextWithGlossaryLinks text={n} onOpenGlossaryTerm={onOpenGlossaryTerm} />
+                  </p>
+                ))}
               </div>
-              {summary.variantInfo.notesRu.map((n, i) => (
-                <p key={i} className="leading-relaxed">
-                  • {n}
-                </p>
-              ))}
-            </div>
 
-            {/* Автоматические проверки варианта */}
-            <WhyBlock
-              ruleId="variant_axis_ratio"
-              status={summary.variantAxisCheck.status}
-              sourceStatus={summary.variantAxisCheck.sourceStatus}
-              formula={summary.variantAxisCheck.formula}
-              page={summary.variantAxisCheck.page}
-              isHeuristic={
-                summary.variantAxisCheck.isWideBayHeuristic ||
-                summary.variantAxisCheck.sourceStatus === 'heuristic'
-              }
-              explanation={summary.variantAxisCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
-
-            <WhyBlock
-              ruleId="facade_rectangle"
-              status={summary.facadeRectCheck.status}
-              sourceStatus={summary.facadeRectCheck.sourceStatus}
-              formula={summary.facadeRectCheck.formula}
-              page={summary.facadeRectCheck.page}
-              explanation={summary.facadeRectCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
-
-            <WhyBlock
-              ruleId="axes_count"
-              status={summary.axesCountCheck.status}
-              sourceStatus="explicit-verified"
-              formula={summary.axesCountCheck.formula}
-              page={summary.axesCountCheck.page}
-              explanation={summary.axesCountCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
-
-            {params.levels.floors.length === 5 && (
               <WhyBlock
-                ruleId="n27_five_story_scheme"
-                status={summary.fiveStorySchemeCheck.status}
-                sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
-                formula={summary.fiveStorySchemeCheck.formula}
-                page={summary.fiveStorySchemeCheck.page}
-                explanation={summary.fiveStorySchemeCheck.explanation}
+                ruleId="variant_axis_ratio"
+                status={summary.variantAxisCheck.status}
+                sourceStatus={summary.variantAxisCheck.sourceStatus}
+                formula={summary.variantAxisCheck.formula}
+                page={summary.variantAxisCheck.page}
+                isHeuristic={
+                  summary.variantAxisCheck.isWideBayHeuristic ||
+                  summary.variantAxisCheck.sourceStatus === 'heuristic'
+                }
+                explanation={summary.variantAxisCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            )}
 
-            <WhyBlock
-              ruleId="main_cornice_subordination"
-              status={summary.mainCorniceCheck.status}
-              sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
-              formula={summary.mainCorniceCheck.formula}
-              page={summary.mainCorniceCheck.page}
-              isHeuristic={summary.mainCorniceCheck.isExtrapolated}
-              explanation={summary.mainCorniceCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
+              <WhyBlock
+                ruleId="facade_rectangle"
+                status={summary.facadeRectCheck.status}
+                sourceStatus={summary.facadeRectCheck.sourceStatus}
+                formula={summary.facadeRectCheck.formula}
+                page={summary.facadeRectCheck.page}
+                explanation={summary.facadeRectCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
 
-            <WhyBlock
-              ruleId="gurt_cornice"
-              status={summary.gurtCheck.status}
-              sourceStatus={
-                !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
-                  ? 'heuristic'
-                  : 'explicit-verified'
-              }
-              isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
-              formula={summary.gurtCheck.formula}
-              page={summary.gurtCheck.page}
-              explanation={summary.gurtCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-            />
+              <WhyBlock
+                ruleId="axes_count"
+                status={summary.axesCountCheck.status}
+                sourceStatus="explicit-verified"
+                formula={summary.axesCountCheck.formula}
+                page={summary.axesCountCheck.page}
+                explanation={summary.axesCountCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
+
+              {params.levels.floors.length === 5 && (
+                <WhyBlock
+                  ruleId="n27_five_story_scheme"
+                  status={summary.fiveStorySchemeCheck.status}
+                  sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
+                  formula={summary.fiveStorySchemeCheck.formula}
+                  page={summary.fiveStorySchemeCheck.page}
+                  explanation={summary.fiveStorySchemeCheck.explanation}
+                  onOpenBookPage={onOpenBookPage}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
+              )}
+
+              <WhyBlock
+                ruleId="main_cornice_subordination"
+                status={summary.mainCorniceCheck.status}
+                sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
+                formula={summary.mainCorniceCheck.formula}
+                page={summary.mainCorniceCheck.page}
+                isHeuristic={summary.mainCorniceCheck.isExtrapolated}
+                explanation={summary.mainCorniceCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
+
+              <WhyBlock
+                ruleId="gurt_cornice"
+                status={summary.gurtCheck.status}
+                sourceStatus={
+                  !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
+                    ? 'heuristic'
+                    : 'explicit-verified'
+                }
+                isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
+                formula={summary.gurtCheck.formula}
+                page={summary.gurtCheck.page}
+                explanation={summary.gurtCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
+            </CollapsibleSection>
 
             {/* Явное сообщение: чего в тексте нет */}
-            <div className="p-3.5 border border-[#D6CEBE] bg-[#F3EFE6]/70 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                  Чего в тексте Brausewetter (1895) нет
-                </h4>
-                <span className="font-mono text-[11px] text-[#9A3412]">
-                  явные пробелы и экстраполяции ({VARIANT_TEXT_GAPS.length})
-                </span>
-              </div>
-              <div className="divide-y divide-[#E5DFD3] border-t border-[#E5DFD3]">
+            <CollapsibleSection
+              title="Чего в тексте Brausewetter (1895) нет"
+              badge={`${VARIANT_TEXT_GAPS.length} пробела`}
+              defaultOpen={false}
+              subtle
+            >
+              <div className="divide-y divide-[#E5DFD3]">
                 {VARIANT_TEXT_GAPS.map((gap) => {
                   const relevant = gap.appliesTo.includes(params.buildingVariant);
                   return (
@@ -1694,7 +1834,7 @@ export function CalculatorModules({
               <p className="font-mono text-[10px] text-[#78716C]">
                 Доля пересчитанных проверок в текущей сводке: OK {formatPercent(summary.okCount / Math.max(1, summary.checks.length), 0)}.
               </p>
-            </div>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -2118,7 +2258,10 @@ export function CalculatorModules({
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.2. Пропорции окна (Fensterproportionen)
+                <TextWithGlossaryLinks
+                  text="4.2. Пропорции окна (Fensterproportionen)"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
                 Пределы 1.5w ≤ h ≤ 2w, золотое сечение φ и правило половины диагонали (S. 6–7).
@@ -2370,10 +2513,16 @@ export function CalculatorModules({
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.3. Угловой простенок (Eckpfeiler)
+                <TextWithGlossaryLinks
+                  text="4.3. Угловой простенок (Eckpfeiler)"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
-                Расстояние от угла дома до первой оси D = k_D × A и чистая ширина угла p_corner (S. 4–5).
+                <TextWithGlossaryLinks
+                  text="Расстояние от угла дома до первой оси D = k_D × A и чистая ширина угла p_corner (S. 4–5)."
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </p>
             </div>
 
@@ -2536,10 +2685,16 @@ export function CalculatorModules({
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.4. Обрамление и сандрик окна (R : F : K)
+                <TextWithGlossaryLinks
+                  text="4.4. Обрамление и сандрик окна (R : F : K)"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
-                Деление наличника (Rahmen), фриза (Fries) и венчающего карниза (Kranz), вынос по 45° и на консолях (S. 7–8).
+                <TextWithGlossaryLinks
+                  text="Деление наличника (Rahmen), фриза (Fries) и венчающего карниза (Kranz), вынос по 45° и на консолях (S. 7–8)."
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </p>
             </div>
 
@@ -2736,281 +2891,400 @@ export function CalculatorModules({
         )}
 
         {/* 4.5 Пилястр */}
-        {activeModule === 'pilaster' && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.5. Пилястры и лопатки (Pilaster / Mauerpfeiler)
-              </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                Предельный выступ v_max = W_p / 4; лёгкий декоративный диапазон — W_p / 6 … W_p / 5 (S. 11–12).
-              </p>
-            </div>
+        {activeModule === 'pilaster' && (() => {
+          const floorCount = Math.max(1, params.levels.floors.length);
+          const bounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
+          const scaledGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+          const activePlacement: PilasterPlacement = params.pilasterPlacement ?? 'edges';
 
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  { id: 'massive', label: 'Массивный характер (до W_p/4)' },
-                  { id: 'light', label: 'Лёгкий характер (W_p/6…W_p/5)' },
-                ] as const
-              ).map((ch) => (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => onUpdateParams({ pilasterCharacter: ch.id })}
-                  className={`px-2.5 py-1 text-[11px] font-medium border ${
-                    params.pilasterCharacter === ch.id
-                      ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                      : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
-                  }`}
-                >
-                  {ch.label}
-                </button>
-              ))}
-            </div>
-
-            <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={params.isMauerpfeiler}
-                onChange={(e) => onUpdateParams({ isMauerpfeiler: e.target.checked })}
-                className="accent-[#9A3412]"
-              />
-              <span>Гладкая лопатка / стенной пилон (Mauerpfeiler) — без базы и капители</span>
-            </label>
-
-            <MeterControl
-              id="calc-Wp"
-              label="Ширина пилястра / лопатки W_p"
-              value={params.Wp}
-              min={0.25}
-              max={1.4}
-              lockKey="Wp"
-              locked={isParamLocked(lockedParams, 'Wp')}
-              onToggleLock={onToggleLock}
-              onChange={(Wp) => onUpdateParams({ Wp })}
-            />
-            <MeterControl
-              id="calc-v"
-              label="Выступ пилястра v"
-              value={params.v}
-              min={0.02}
-              max={0.45}
-              lockKey="v"
-              locked={isParamLocked(lockedParams, 'v')}
-              onToggleLock={onToggleLock}
-              onChange={(v) => onUpdateParams({ v })}
-            />
-
-            <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">Макс. выступ v_max = W_p/4</span>
-                <strong>{formatMeters(summary.pilasterCheck.v_max)} м</strong>
-              </div>
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">Лёгкий диапазон (1/6…1/5)</span>
-                <strong>
-                  {formatMeters(summary.pilasterCheck.v_light_min)}–{formatMeters(summary.pilasterCheck.v_light_max)} м
-                </strong>
-              </div>
-            </div>
-
-            <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C] space-y-1">
-              {(() => {
-                const bounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
-                return (
-                  <>
-                    <div className="font-mono text-[11px] text-[#1C1917]">
-                      Отметки пилястр ({params.isMauerpfeiler ? 'без базы' : 'с базой'}):{' '}
-                      {bounds.hasUpperPilasters
-                        ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
-                        : 'скрыты (весь фасад в цоколе)'}
-                    </div>
-                    <p className="text-[11px] text-[#57534E]">
-                      Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
-                      {formatMeters(bounds.socleTopM, 2)} м).
-                    </p>
-                  </>
-                );
-              })()}
-            </div>
-
-            <WhyBlock
-              ruleId="pilaster_check"
-              status={summary.pilasterCheck.status}
-              sourceStatus="explicit-verified"
-              formula={summary.pilasterCheck.formula}
-              page={summary.pilasterCheck.page}
-              explanation={`${summary.pilasterCheck.explanation} ${summary.pilasterCheck.baseCapitalNote}`}
-              onOpenBookPage={onOpenBookPage}
-            />
-
-            {/* N18–N19 Многоярусное применение пилястр (P2) */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2.5 text-xs">
-              <span className="block font-mono text-[11px] uppercase tracking-wider text-[#78716C]">
-                Многоярусное применение пилястр (N18–N19, S. 12–13)
-              </span>
-              <label className="flex items-center gap-2 text-[#1C1917] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={params.pilasterAdjacentSameHeight}
-                  onChange={(e) =>
-                    onUpdateParams({ pilasterAdjacentSameHeight: e.target.checked })
-                  }
-                  className="accent-[#9A3412]"
-                />
-                <span>Повторение ордера в смежных этажах близкой высоты (N18)</span>
-              </label>
-              {params.pilasterAdjacentSameHeight && (
-                <MeterControl
-                  id="calc-pil-diff-pct"
-                  label="Разница высот смежных этажей ΔH (UX-порог ≤10%)"
-                  value={params.pilasterHeightDiffPct * 100}
-                  min={0}
-                  max={35}
-                  step={1}
-                  unit="%"
-                  lockKey="pilasterHeightDiffPct"
-                  locked={isParamLocked(lockedParams, 'pilasterHeightDiffPct')}
-                  onToggleLock={onToggleLock}
-                  onChange={(pct) => onUpdateParams({ pilasterHeightDiffPct: pct / 100 })}
-                />
-              )}
-              <label className="flex items-center gap-2 text-[#1C1917] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={params.pilastersOnlyOnUpperFloor}
-                  onChange={(e) =>
-                    onUpdateParams({ pilastersOnlyOnUpperFloor: e.target.checked })
-                  }
-                  className="accent-[#9A3412]"
-                />
-                <span>Пилястры применены только на верхнем этаже (N19, нежелательно)</span>
-              </label>
-            </div>
-
-            {expertMode ? (
-              <div className="p-3 border border-[#D6CEBE] bg-[#FBF9F5] space-y-3">
-                <span className="block font-mono text-[11px] uppercase tracking-wider text-[#9A3412]">
-                  Экспертные проверки ордера P3 (N20–N22, S. 12–13)
-                </span>
-                <MeterControl
-                  id="calc-wp-wall-pier"
-                  label="Ширина стенового простенка W_стены (N20: W_p < W_стены)"
-                  value={params.wpWallPier}
-                  min={0.3}
-                  max={2.4}
-                  lockKey="wpWallPier"
-                  locked={isParamLocked(lockedParams, 'wpWallPier')}
-                  onToggleLock={onToggleLock}
-                  onChange={(wpWallPier) => onUpdateParams({ wpWallPier })}
-                />
-                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={params.hasPairedPilasters}
-                    onChange={(e) => onUpdateParams({ hasPairedPilasters: e.target.checked })}
-                    className="accent-[#9A3412]"
+          return (
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-display text-2xl font-medium text-[#1C1917]">
+                  <TextWithGlossaryLinks
+                    text="4.5. Пилястры и лопатки (Pilaster / Mauerpfeiler)"
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
                   />
-                  <span>Спаренные пилястры (N21: gap &lt; W_p, &gt; 0.2·W_p — UX-порог)</span>
-                </label>
-                {params.hasPairedPilasters && (
-                  <MeterControl
-                    id="calc-paired-gap"
-                    label="Просвет между спаренными пилястрами"
-                    value={params.pairedPilastersGap}
-                    min={0.05}
-                    max={1.2}
-                    lockKey="pairedPilastersGap"
-                    locked={isParamLocked(lockedParams, 'pairedPilastersGap')}
-                    onToggleLock={onToggleLock}
-                    onChange={(pairedPilastersGap) => onUpdateParams({ pairedPilastersGap })}
+                </h3>
+                <p className="mt-1 text-xs text-[#57534E]">
+                  <TextWithGlossaryLinks
+                    text="Предельный выступ v_max = W_p / 4; лёгкий декоративный диапазон — W_p / 6 … W_p / 5 (S. 11–12)."
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
                   />
-                )}
-                <div className="space-y-1">
-                  <span className="block text-[11px] font-mono text-[#78716C]">
-                    Тип пристенной колонны (N22, S. 12):
+                </p>
+              </div>
+
+              <CollapsibleSection title="Размещение пилястр / лопаток по этажам и в плане">
+                <div className="space-y-2">
+                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    Горизонтальное размещение на фасаде
                   </span>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                     {(
                       [
-                        { id: 'none', label: 'Только пилястр' },
-                        { id: 'half', label: 'Полуколонна (1/2)' },
-                        { id: 'two_thirds', label: '2/3-колонна (S. 13)' },
-                        { id: 'three_quarters', label: '3/4-колонна (S. 13)' },
-                      ] as { id: ColumnProfileType; label: string }[]
-                    ).map((cp) => (
+                        { id: 'edges', label: 'а) По краям здания' },
+                        { id: 'every_pier', label: 'б) В каждом простенке' },
+                      ] as { id: PilasterPlacement; label: string }[]
+                    ).map((pl) => (
                       <button
-                        key={cp.id}
+                        key={pl.id}
                         type="button"
-                        onClick={() => onUpdateParams({ columnProfileType: cp.id })}
-                        className={`px-2 py-1 text-[11px] border ${
-                          params.columnProfileType === cp.id
+                        onClick={() => onUpdateParams({ pilasterPlacement: pl.id })}
+                        className={`px-2.5 py-1.5 text-xs font-medium border text-left transition-colors ${
+                          activePlacement === pl.id
                             ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                            : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
                         }`}
                       >
-                        {cp.label}
+                        {pl.label}
                       </button>
                     ))}
                   </div>
                 </div>
-              </div>
-            ) : (
-              <p className="font-mono text-[11px] text-[#78716C]">
-                Доп. проверки ордера N20–N22 доступны при включении «Эксперт P3».
-              </p>
-            )}
-          </div>
-        )}
+
+                <div className="pt-2 border-t border-[#E5DFD3] space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                      Включение по этажам (низ ≥ верха цоколя)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateParams({
+                          pilasterFloors: Array.from({ length: floorCount }, () => true),
+                          pilastersOnlyOnUpperFloor: false,
+                        })
+                      }
+                      className="text-[11px] font-mono text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                    >
+                      Все этажи
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {Array.from({ length: floorCount }, (_, flIdx) => {
+                      const enabled = isPilasterEnabledOnFloor(params, flIdx, floorCount);
+                      const floorBase = scaledGeo.floorOffsetsM[flIdx];
+                      const floorH = scaledGeo.floorHeightsM[flIdx];
+                      const floorTopM =
+                        floorBase !== undefined && floorH !== undefined
+                          ? floorBase + floorH
+                          : bounds.socleTopM + 1;
+                      const hiddenBySocle = floorTopM <= bounds.socleTopM + 1e-4;
+                      return (
+                        <label
+                          key={`pil-fl-${flIdx}`}
+                          className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs border cursor-pointer transition-colors ${
+                            enabled
+                              ? 'border-[#1C1917]/40 bg-[#F3EFE6]/80 text-[#1C1917]'
+                              : 'border-[#E5DFD3] bg-[#FBF9F5] text-[#78716C]'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              onChange={() => {
+                                const nextMask = Array.from({ length: floorCount }, (__, idx) =>
+                                  idx === flIdx
+                                    ? !enabled
+                                    : isPilasterEnabledOnFloor(params, idx, floorCount)
+                                );
+                                const onlyTop =
+                                  floorCount >= 2 &&
+                                  nextMask.slice(0, floorCount - 1).every((v) => !v) &&
+                                  nextMask[floorCount - 1];
+                                onUpdateParams({
+                                  pilasterFloors: nextMask,
+                                  pilastersOnlyOnUpperFloor: onlyTop,
+                                });
+                              }}
+                              className="accent-[#9A3412]"
+                            />
+                            <span>{flIdx + 1}-й этаж</span>
+                          </span>
+                          {hiddenBySocle && (
+                            <span className="font-mono text-[10px] text-[#9A3412]">в цоколе</span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Характер, ширина W_p и выступ v">
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { id: 'massive', label: 'Массивный характер (до W_p/4)' },
+                      { id: 'light', label: 'Лёгкий характер (W_p/6…W_p/5)' },
+                    ] as const
+                  ).map((ch) => (
+                    <button
+                      key={ch.id}
+                      type="button"
+                      onClick={() => onUpdateParams({ pilasterCharacter: ch.id })}
+                      className={`px-2.5 py-1 text-[11px] font-medium border ${
+                        params.pilasterCharacter === ch.id
+                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                          : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                      }`}
+                    >
+                      {ch.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.isMauerpfeiler}
+                    onChange={(e) => onUpdateParams({ isMauerpfeiler: e.target.checked })}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>
+                    <TextWithGlossaryLinks
+                      text="Гладкая лопатка / стенной пилон (Mauerpfeiler) — без базы и капители"
+                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      insideLabel={true}
+                    />
+                  </span>
+                </label>
+
+                <MeterControl
+                  id="calc-Wp"
+                  label="Ширина пилястра / лопатки W_p"
+                  value={params.Wp}
+                  min={0.25}
+                  max={1.4}
+                  lockKey="Wp"
+                  locked={isParamLocked(lockedParams, 'Wp')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onChange={(Wp) => onUpdateParams({ Wp })}
+                />
+                <MeterControl
+                  id="calc-v"
+                  label="Выступ пилястра v"
+                  value={params.v}
+                  min={0.02}
+                  max={0.45}
+                  lockKey="v"
+                  locked={isParamLocked(lockedParams, 'v')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onChange={(v) => onUpdateParams({ v })}
+                />
+
+                <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
+                  <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Макс. выступ v_max = W_p/4</span>
+                    <strong>{formatMeters(summary.pilasterCheck.v_max)} м</strong>
+                  </div>
+                  <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Лёгкий диапазон (1/6…1/5)</span>
+                    <strong>
+                      {formatMeters(summary.pilasterCheck.v_light_min)}–{formatMeters(summary.pilasterCheck.v_light_max)} м
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C] space-y-1">
+                  <div className="font-mono text-[11px] text-[#1C1917]">
+                    Отметки пилястр ({params.isMauerpfeiler ? 'без базы' : 'с базой'}):{' '}
+                    {bounds.hasUpperPilasters
+                      ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
+                      : 'скрыты (цоколь или все этажи отключены)'}
+                  </div>
+                  <p className="text-[11px] text-[#57534E]">
+                    Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
+                    {formatMeters(bounds.socleTopM, 2)} м).
+                  </p>
+                </div>
+
+                <WhyBlock
+                  ruleId="pilaster_check"
+                  status={summary.pilasterCheck.status}
+                  sourceStatus="explicit-verified"
+                  formula={summary.pilasterCheck.formula}
+                  page={summary.pilasterCheck.page}
+                  explanation={`${summary.pilasterCheck.explanation} ${summary.pilasterCheck.baseCapitalNote}`}
+                  onOpenBookPage={onOpenBookPage}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
+              </CollapsibleSection>
+
+              {/* N18–N19 Многоярусное применение пилястр (P2) */}
+              <CollapsibleSection title="Многоярусное применение пилястр (N18–N19, S. 12–13)" subtle>
+                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.pilasterAdjacentSameHeight}
+                    onChange={(e) =>
+                      onUpdateParams({ pilasterAdjacentSameHeight: e.target.checked })
+                    }
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Повторение ордера в смежных этажах близкой высоты (N18)</span>
+                </label>
+                {params.pilasterAdjacentSameHeight && (
+                  <MeterControl
+                    id="calc-pil-diff-pct"
+                    label="Разница высот смежных этажей ΔH (UX-порог ≤10%)"
+                    value={params.pilasterHeightDiffPct * 100}
+                    min={0}
+                    max={35}
+                    step={1}
+                    unit="%"
+                    lockKey="pilasterHeightDiffPct"
+                    locked={isParamLocked(lockedParams, 'pilasterHeightDiffPct')}
+                    onToggleLock={onToggleLock}
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onChange={(pct) => onUpdateParams({ pilasterHeightDiffPct: pct / 100 })}
+                  />
+                )}
+                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.pilastersOnlyOnUpperFloor}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      const nextMask = Array.from({ length: floorCount }, (_, idx) =>
+                        checked ? idx === floorCount - 1 : true
+                      );
+                      onUpdateParams({
+                        pilastersOnlyOnUpperFloor: checked,
+                        pilasterFloors: nextMask,
+                      });
+                    }}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Пилястры применены только на верхнем этаже (N19, нежелательно)</span>
+                </label>
+              </CollapsibleSection>
+
+              {expertMode ? (
+                <CollapsibleSection title="Экспертные проверки ордера P3 (N20–N22, S. 12–13)">
+                  <MeterControl
+                    id="calc-wp-wall-pier"
+                    label="Ширина стенового простенка W_стены (N20: W_p < W_стены)"
+                    value={params.wpWallPier}
+                    min={0.3}
+                    max={2.4}
+                    lockKey="wpWallPier"
+                    locked={isParamLocked(lockedParams, 'wpWallPier')}
+                    onToggleLock={onToggleLock}
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onChange={(wpWallPier) => onUpdateParams({ wpWallPier })}
+                  />
+                  <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={params.hasPairedPilasters}
+                      onChange={(e) => onUpdateParams({ hasPairedPilasters: e.target.checked })}
+                      className="accent-[#9A3412]"
+                    />
+                    <span>Спаренные пилястры (N21: gap &lt; W_p, &gt; 0.2·W_p — UX-порог)</span>
+                  </label>
+                  {params.hasPairedPilasters && (
+                    <MeterControl
+                      id="calc-paired-gap"
+                      label="Просвет между спаренными пилястрами"
+                      value={params.pairedPilastersGap}
+                      min={0.05}
+                      max={1.2}
+                      lockKey="pairedPilastersGap"
+                      locked={isParamLocked(lockedParams, 'pairedPilastersGap')}
+                      onToggleLock={onToggleLock}
+                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      onChange={(pairedPilastersGap) => onUpdateParams({ pairedPilastersGap })}
+                    />
+                  )}
+                  <div className="space-y-1">
+                    <span className="block text-[11px] font-mono text-[#78716C]">
+                      Тип пристенной колонны (N22, S. 12):
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          { id: 'none', label: 'Только пилястр' },
+                          { id: 'half', label: 'Полуколонна (1/2)' },
+                          { id: 'two_thirds', label: '2/3-колонна (S. 13)' },
+                          { id: 'three_quarters', label: '3/4-колонна (S. 13)' },
+                        ] as { id: ColumnProfileType; label: string }[]
+                      ).map((cp) => (
+                        <button
+                          key={cp.id}
+                          type="button"
+                          onClick={() => onUpdateParams({ columnProfileType: cp.id })}
+                          className={`px-2 py-1 text-[11px] border ${
+                            params.columnProfileType === cp.id
+                              ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                              : 'bg-[#F3EFE6] text-[#44403C] border-[#D6CEBE]'
+                          }`}
+                        >
+                          {cp.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </CollapsibleSection>
+              ) : (
+                <p className="font-mono text-[11px] text-[#78716C]">
+                  Доп. проверки ордера N20–N22 доступны при включении «Эксперт P3».
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* 4.6 Карниз */}
         {activeModule === 'cornice' && (
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.6. Венчающая часть карниза (Kranz)
+                <TextWithGlossaryLinks
+                  text="4.6. Венчающая часть карниза (Kranz)"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
                 Деление на верхние и нижние обломы h_u : h_l в пределах от 1:2 до 2:1 (норма 1:1, S. 10–11).
               </p>
             </div>
 
-            <MeterControl
-              id="calc-Tc"
-              label="Общая высота венчающей части T_c"
-              value={params.Tc}
-              min={0.2}
-              max={1.2}
-              lockKey="Tc"
-              locked={isParamLocked(lockedParams, 'Tc')}
-              onToggleLock={onToggleLock}
-              onChange={(Tc) => onUpdateParams({ Tc })}
-            />
+            <CollapsibleSection title="Высота карниза T_c и отношение h_u : h_l">
+              <MeterControl
+                id="calc-Tc"
+                label="Общая высота венчающей части T_c"
+                value={params.Tc}
+                min={0.2}
+                max={1.2}
+                lockKey="Tc"
+                locked={isParamLocked(lockedParams, 'Tc')}
+                onToggleLock={onToggleLock}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onChange={(Tc) => onUpdateParams({ Tc })}
+              />
 
-            <MeterControl
-              id="calc-cornice-ratio"
-              label="Отношение h_u : h_l (норма 1:1, допустимо 0.50…2.00)"
-              value={params.corniceRatio}
-              min={0.3}
-              max={2.5}
-              step={0.05}
-              unit=":1"
-              lockKey="corniceRatio"
-              locked={isParamLocked(lockedParams, 'corniceRatio')}
-              onToggleLock={onToggleLock}
-              onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
-            />
+              <MeterControl
+                id="calc-cornice-ratio"
+                label="Отношение h_u : h_l (норма 1:1, допустимо 0.50…2.00)"
+                value={params.corniceRatio}
+                min={0.3}
+                max={2.5}
+                step={0.05}
+                unit=":1"
+                lockKey="corniceRatio"
+                locked={isParamLocked(lockedParams, 'corniceRatio')}
+                onToggleLock={onToggleLock}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
+              />
+            </CollapsibleSection>
 
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#1C1917]">
-                  Характер профиля и доля плиты
-                </span>
-                <span className="font-mono text-[11px] text-[#9A3412]">
-                  допущение/эвристика
-                </span>
-              </div>
+            <CollapsibleSection title="Характер профиля и доля плиты" badge="эвристика" subtle>
               <div className="flex flex-wrap gap-1.5">
                 {[
                   { label: 'Тяжёлый (≥75 %)', share: 0.8 },
@@ -3043,10 +3317,11 @@ export function CalculatorModules({
                 lockKey="plateShare"
                 locked={isParamLocked(lockedParams, 'plateShare')}
                 onToggleLock={onToggleLock}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
                 note="Процентные пороги ≥75 % и ≤50 % — интерпретационное допущение UX поверх качественного описания S. 10–11."
                 onChange={(pct) => onUpdateParams({ plateShare: pct / 100 })}
               />
-            </div>
+            </CollapsibleSection>
 
             <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
               <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
@@ -3066,6 +3341,7 @@ export function CalculatorModules({
               page={summary.corniceCheck.page}
               explanation={summary.corniceCheck.explanation}
               onOpenBookPage={onOpenBookPage}
+              onOpenGlossaryTerm={onOpenGlossaryTerm}
             />
           </div>
         )}
@@ -3075,15 +3351,21 @@ export function CalculatorModules({
           <div className="space-y-5">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.7. Цоколь (Sockel), карнизы и рустика
+                <TextWithGlossaryLinks
+                  text="4.7. Цоколь (Sockel), карнизы и рустика"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
-                Высота цоколя (1/6…1/10 общей высоты), подчинённость главного и поясного карнизов, трёхчастное деление, ряды рустики и убывание вверх (S. 10, 12, 16–17, 22).
+                <TextWithGlossaryLinks
+                  text="Высота цоколя (1/6…1/10 общей высоты), подчинённость главного и поясного карнизов, трёхчастное деление, ряды рустики и убывание вверх (S. 10, 12, 16–17, 22)."
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </p>
             </div>
 
             {/* Этажность и общая высота здания */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+            <CollapsibleSection title="Этажность и высота цоколя" subtle>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1C1917]">
                   <span>Число этажей здания</span>
@@ -3200,14 +3482,12 @@ export function CalculatorModules({
                 page={summary.socleHeightCheck.page}
                 explanation={summary.socleHeightCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
             {/* Главный и поясной карнизы */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
-              <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                Иерархия карнизов (h_gurt &lt; h_main &lt; h_socle)
-              </h4>
+            <CollapsibleSection title="Иерархия карнизов (h_gurt < h_main < h_socle)">
 
               <MeterControl
                 id="calc-h-main"
@@ -3268,19 +3548,12 @@ export function CalculatorModules({
                 page={summary.gurtCheck.page}
                 explanation={summary.gurtCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
             {/* Трёхчастность цоколя и доминирование плиты */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium text-[#1C1917]">
-                  Трёхчастное деление цоколя и плита (S. 10)
-                </span>
-                <span className="font-mono text-[11px] text-[#9A3412]">
-                  допущение/эвристика
-                </span>
-              </div>
+            <CollapsibleSection title="Трёхчастное деление цоколя и плита (S. 10)" badge="эвристика" subtle>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <MeterControl
@@ -3380,14 +3653,12 @@ export function CalculatorModules({
                 isHeuristic={true}
                 explanation={summary.plateCheck.note}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
             {/* Рустика, убывание вверх и раскреповки */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
-              <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                Рустика, убывание вверх и раскреповки (S. 10, 12, 17)
-              </h4>
+            <CollapsibleSection title="Рустика, убывание вверх и раскреповки (S. 10, 12, 17)">
 
               <MeterControl
                 id="calc-rust-row"
@@ -3515,8 +3786,9 @@ export function CalculatorModules({
                 page={summary.abkroepfungCheck.page}
                 explanation={summary.abkroepfungCheck.note}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -3525,15 +3797,21 @@ export function CalculatorModules({
           <div className="space-y-5">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                4.8. Межэтажные карнизы — ленты (Gurtgesims)
+                <TextWithGlossaryLinks
+                  text="4.8. Межэтажные карнизы — ленты (Gurtgesims)"
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </h3>
               <p className="mt-1 text-xs text-[#57534E]">
-                Двойственность ленты, диапазон h_нижн/12…h_нижн/6, соподчинение цоколю и главному карнизу, 4 класса профиля, разбивка венца 1:2…2:1 и спецслучаи (S. 10–11, 16–17, 22).
+                <TextWithGlossaryLinks
+                  text="Двойственность ленты, диапазон h_нижн/12…h_нижн/6, соподчинение цоколю и главному карнизу, 4 класса профиля, разбивка венца 1:2…2:1 и спецслучаи (S. 10–11, 16–17, 22)."
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                />
               </p>
             </div>
 
             {/* Входные высоты и иерархия */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
+            <CollapsibleSection title="Входные высоты и иерархия ленты" subtle>
               <div className="flex flex-wrap gap-4 text-xs text-[#1C1917]">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -3661,11 +3939,12 @@ export function CalculatorModules({
                 page={summary.beltHeightCheck.page}
                 explanation={summary.beltHeightCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
             {/* Режим (связующая / венчающая) и класс 1-4 (S. 10–11) */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+            <CollapsibleSection title="Функция ленты и класс профиля (S. 10–11)">
               <div>
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
                   Функция ленты (двойственность, S. 10)
@@ -3717,13 +3996,10 @@ export function CalculatorModules({
                   ))}
                 </div>
               </div>
-            </div>
+            </CollapsibleSection>
 
             {/* Разбивка венчающей части и консоли (S. 10–11) */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
-              <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                Венчающая часть: h_верх : h_низ и консоли (S. 10–11)
-              </h4>
+            <CollapsibleSection title="Венчающая часть: h_верх : h_низ и консоли (S. 10–11)" subtle>
 
               <MeterControl
                 id="calc-belt-crown-ratio"
@@ -3815,14 +4091,12 @@ export function CalculatorModules({
                 page={summary.beltCrowningCheck.page}
                 explanation={summary.beltCrowningCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
             {/* Спецслучаи, колоннада, рустовка, ризалиты и 3 схемы 3-этажного */}
-            <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
-              <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                Опоры, спецслучаи и схемы 3-этажного дома (S. 16–17, 22)
-              </h4>
+            <CollapsibleSection title="Опоры, спецслучаи и схемы 3-этажного дома (S. 16–17, 22)">
 
               <div className="space-y-2 text-xs text-[#1C1917]">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -4012,20 +4286,18 @@ export function CalculatorModules({
                 page={summary.beltSpecialCheck.page}
                 explanation={summary.beltSpecialCheck.explanation}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
-            </div>
+            </CollapsibleSection>
 
-            {/* Явный блок 12: Чего в источнике нет */}
-            <div className="p-3.5 border border-[#D6CEBE] bg-[#F3EFE6]/70 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="font-display text-lg font-medium text-[#1C1917]">
-                  Чего в источнике нет (межэтажные ленты)
-                </h4>
-                <span className="font-mono text-[11px] text-[#9A3412]">
-                  не из источника / экстраполяция ({BELT_TEXT_GAPS.length})
-                </span>
-              </div>
-              <div className="divide-y divide-[#E5DFD3] border-t border-[#E5DFD3]">
+            {/* Явное блок 12: Чего в источнике нет */}
+            <CollapsibleSection
+              title="Чего в источнике нет (межэтажные ленты)"
+              badge={`${BELT_TEXT_GAPS.length} пункта`}
+              defaultOpen={false}
+              subtle
+            >
+              <div className="divide-y divide-[#E5DFD3]">
                 {BELT_TEXT_GAPS.map((gap) => (
                   <div key={gap.id} className="py-2.5 space-y-1 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -4038,7 +4310,7 @@ export function CalculatorModules({
                   </div>
                 ))}
               </div>
-            </div>
+            </CollapsibleSection>
           </div>
         )}
 

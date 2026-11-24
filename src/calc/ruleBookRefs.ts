@@ -482,6 +482,120 @@ export const RULE_BOOK_EXCERPTS: Record<string, RuleBookExcerpt> = {
   },
 };
 
+export const CATALOG_EXTRA_EXCERPTS: Record<string, RuleBookExcerpt> = {
+  fenster_goldener_schnitt: {
+    id: 'fenster_goldener_schnitt',
+    pageNumber: 6,
+    ruleTitle: 'Золотое сечение окна и практические приближения (Fig. 2 / Fig. 4)',
+    ruleSummaryHighlight:
+      'Отношение ширины окна к высоте по золотому сечению (a : b = b : (a + b)) с практическими приближениями 3:5, 5:8 и рядом Фибоначчи.',
+    bookQuoteRu: 'его высота не должна превышать удвоенную ширину и не должна быть меньше полуторной ширины.',
+    bookQuoteDe: 'so wird seine Höhe nicht mehr als das Doppelte und nicht weniger als das 1½fache der Breite betragen dürfen.',
+  },
+  erdgeschoss_als_sockel: {
+    id: 'erdgeschoss_als_sockel',
+    pageNumber: 16,
+    ruleTitle: 'Включение всего 1-го этажа в цоколь (Erdgeschoss als Sockel)',
+    ruleSummaryHighlight:
+      'Если цоколю нельзя придать требуемую высоту (≥ 1/10 общей высоты), лучшим выходом является привлечение всего первого этажа к образованию цоколя.',
+    bookQuoteRu:
+      'Если цоколю нельзя придать требуемую высоту, лучшим является часто избираемый выход — привлечь к образованию цокольного яруса весь первый этаж.',
+    bookQuoteDe:
+      'Wenn dem Sockel die erforderliche Höhe nicht gegeben werden kann, so ist der oft gewählte Ausweg der beste, nämlich das ganze Erdgeschoss zur Sockelbildung herbeizuziehen.',
+  },
+  n7_gerade_axenzahl_gruppierung: {
+    id: 'n7_gerade_axenzahl_gruppierung',
+    pageNumber: 15,
+    ruleTitle: 'N7: Группировка чётных и протяжённых фасадов (4, 6, 8, 9–10 осей)',
+    ruleSummaryHighlight:
+      'При 4 осях два средних окна сдвигают или объединяют; при 6 — три парные группы 2+2+2; при 8 — группировка или ризалиты.',
+    bookQuoteRu:
+      'Чтобы смягчить скучное впечатление при уличном фасаде в четыре оси, целесообразно сдвинуть оба средних окна ближе друг к другу',
+    bookQuoteDe:
+      'Um bei einer Strassenfront mit vier Axen den langweiligen Eindruck abzuschwächen, ist es ratsam, die beiden Fenster im Mittel näher zusammenzurücken',
+  },
+  n29_nur_sohlbank_zweiter_stock: {
+    id: 'n29_nur_sohlbank_zweiter_stock',
+    pageNumber: 22,
+    ruleTitle: 'N29: Только подоконный пояс под 2-м этажом (редко и проблематично)',
+    ruleSummaryHighlight:
+      'Случай, когда под окнами второго этажа проходит лишь подоконный карниз, встречается редко, так как 1-й этаж зрительно увеличивается за счёт 2-го.',
+    bookQuoteRu:
+      'Ещё один случай, когда под окнами второго этажа проходит лишь подоконный карниз, встречается редко, поскольку первый этаж при этом излишне увеличивается за счёт',
+    bookQuoteDe:
+      'Der weitere Fall, wonach unter den Fenstern des zweiten Geschosses nur ein Sohlbankgesimse durchläuft, kommt selten vor, weil das Erdgeschoss dadurch auf Kosten',
+  },
+};
+
+export const CATALOG_RULE_TO_EXCERPT_ID: Record<string, string> = {
+  axenweite_zimmerhoehe: 'axen_ratio',
+  pfeiler_ohne_umrahmung: 'pier_width',
+  pfeiler_mit_umrahmung: 'pier_width',
+  eckpfeiler_abstand: 'corner_pier',
+  fenster_hoehen_grenzen: 'window_range',
+  fenster_goldener_schnitt: 'fenster_goldener_schnitt',
+  fenster_halbe_diagonale: 'window_diag',
+  fenster_verdachung_rfk: 'framing_rfk',
+  ausladung_45_und_konsolen: 'console_offset',
+  pilaster_vorsprung: 'pilaster_check',
+  kranz_gliederung: 'cornice_split',
+  kranz_charakter_preset: 'cornice_split',
+  typologie_auswahl: 'variant_axis_ratio',
+  sockel_gesammthoehe: 'socle_height',
+  hauptgesims_unterordnung: 'main_cornice_subordination',
+  gurtgesims_abmessung: 'gurt_cornice',
+  sockel_dreiteilig: 'socle_plate_dominant',
+  sockel_abnahme_nach_oben: 'socle_decreasing_upward',
+  sockel_abkroepfung: 'socle_abkroepfung',
+  sockel_quader_schichten: 'socle_rustication_rows',
+  erdgeschoss_als_sockel: 'erdgeschoss_als_sockel',
+  varianty_etazhnosti_i_pryamougolnik: 'facade_rectangle',
+  gurtgesims_lenta_pravila: 'belt_crowning_and_special',
+  n1_fenster_umrahmung_u: 'n1_framing_width',
+  n2_sohlbank_platte: 'n2_sill_plate',
+  n3_sohlbankgesims_ueber_u: 'n3_sill_cornice_over_u',
+  n27_n28_fuenfgeschossig_schemata: 'n27_five_story_scheme',
+  n29_nur_sohlbank_zweiter_stock: 'n29_nur_sohlbank_zweiter_stock',
+  n4_rustika_fenster_schichten: 'n4_window_rust_rows',
+  n5_eckquaderung_ungerade: 'n5_corner_rust_rows',
+  n6_eckvorsprung_m_vs_n: 'n6_corner_offset_m_n',
+  n7_gerade_axenzahl_gruppierung: 'n7_gerade_axenzahl_gruppierung',
+  n8_n9_n10_n13_risalit_fluegel_breiten: 'n9_side_risalit',
+  n11_n12_mehrteilige_fassaden: 'n11_five_part',
+  n14_n17_risalit_axen_pilaster: 'n16_pilaster_pairs',
+  n18_n19_pilaster_stockwerke: 'n18_pilaster_repetition',
+  n23_n25_attika_und_reichtum: 'n23_attic',
+  n20_pilaster_schmaler_wandpfeiler: 'n20_pilaster_vs_wall',
+  n21_gekoppelte_pilaster_abstand: 'n21_paired_pilasters_gap',
+  n22_dreiviertelsaeule_bevorzugt: 'n22_column_profile',
+  n24_n26_giebel_risalit: 'n24_n26_pediment',
+};
+
+export function getExcerptForCatalogRule(rule: {
+  id: string;
+  title: string;
+  page: string;
+  note?: string;
+}): RuleBookExcerpt {
+  const mappedKey = CATALOG_RULE_TO_EXCERPT_ID[rule.id] ?? rule.id;
+  if (CATALOG_EXTRA_EXCERPTS[mappedKey]) {
+    return CATALOG_EXTRA_EXCERPTS[mappedKey];
+  }
+  if (RULE_BOOK_EXCERPTS[mappedKey]) {
+    return RULE_BOOK_EXCERPTS[mappedKey];
+  }
+  const match = rule.page.match(/\d+/);
+  const pageNumber = match ? parseInt(match[0], 10) : 5;
+  return {
+    id: rule.id,
+    pageNumber,
+    ruleTitle: rule.title,
+    ruleSummaryHighlight: rule.note ?? rule.title,
+    bookQuoteRu: '',
+    bookQuoteDe: '',
+  };
+}
+
 export function getExcerptForCheckId(checkId: string, fallbackPageStr?: string): RuleBookExcerpt {
   if (RULE_BOOK_EXCERPTS[checkId]) {
     return RULE_BOOK_EXCERPTS[checkId];

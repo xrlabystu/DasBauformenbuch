@@ -1,6 +1,8 @@
 import {
   ACadVersion,
+  Arc,
   CadDocument,
+  Circle,
   Color,
   DwgWriter,
   Layer,
@@ -18,8 +20,16 @@ import {
   XYZ,
 } from '@node-projects/acad-ts';
 import {
+  BELT_CLASSES,
+  PHI,
+  RULES_DATA,
   formatMeters,
+  projection_45,
+  projection_console,
   resolveEntranceGeometry,
+  resolvePilasterElevationSpans,
+  resolvePilasterXPositions,
+  resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
   type FacadeParameters,
   type FacadeSummary,
@@ -62,6 +72,53 @@ function addLine(
   line.layer = layer;
   if (color) line.color = color;
   doc.modelSpace?.entities.add(line);
+}
+
+function addPolylinePoints(
+  doc: CadDocument,
+  layer: Layer,
+  pointsMm: Array<[number, number]>,
+  closed = false,
+  color?: Color
+) {
+  if (pointsMm.length < 2) return;
+  const poly = new LwPolyline(pointsMm.map(([x, y]) => new LwPolylineVertex(new XY(x, y))));
+  poly.isClosed = closed;
+  poly.layer = layer;
+  if (color) poly.color = color;
+  doc.modelSpace?.entities.add(poly);
+}
+
+function addCircle(
+  doc: CadDocument,
+  layer: Layer,
+  cxMm: number,
+  cyMm: number,
+  radiusMm: number,
+  color?: Color
+) {
+  if (radiusMm <= 0) return;
+  const circle = new Circle(new XYZ(cxMm, cyMm, 0), radiusMm);
+  circle.layer = layer;
+  if (color) circle.color = color;
+  doc.modelSpace?.entities.add(circle);
+}
+
+function addArc(
+  doc: CadDocument,
+  layer: Layer,
+  cxMm: number,
+  cyMm: number,
+  radiusMm: number,
+  startRad: number,
+  endRad: number,
+  color?: Color
+) {
+  if (radiusMm <= 0) return;
+  const arc = new Arc(new XYZ(cxMm, cyMm, 0), radiusMm, startRad, endRad);
+  arc.layer = layer;
+  if (color) arc.color = color;
+  doc.modelSpace?.entities.add(arc);
 }
 
 function addText(
@@ -225,26 +282,15 @@ export function buildFacadeCadDocument(
   const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
   const totalWidthM = summary.derivedGeometry.facadeWidth;
 
-  const groundToFloor1 = Math.max(0.25, params.levels.groundToFloor1);
+  const verticalGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+  const { groundToFloor1, floorHeightsM, floorOffsetsM, wallTopM, corniceM, corniceTopM, totalHeightM } =
+    verticalGeo;
   const effectiveSocleH = params.useFullFloorAsSocle
-    ? summary.derivedGeometry.floor1FullHeight
+    ? floorOffsetsM.length >= 2
+      ? floorOffsetsM[1]
+      : wallTopM
     : Math.max(0.25, params.hSocle);
-  const corniceM = Math.max(0.2, params.hMain);
-
-  const floorHeightsM = levelFloors
-    .slice(0, safeFloors)
-    .map((fl) => Math.max(1.8, fl.floorToFloor));
-
-  const floorOffsetsM: number[] = [];
-  let cursorM = groundToFloor1;
-  for (let i = 0; i < safeFloors; i++) {
-    floorOffsetsM.push(cursorM);
-    cursorM += floorHeightsM[i];
-  }
-  const wallTopM = cursorM;
   const wallHeightM = wallTopM - groundToFloor1;
-  const corniceTopM = wallTopM + corniceM;
-  const totalHeightM = summary.derivedGeometry.totalHeight;
   const soclePilasterBounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
   const visualSocleTopM = soclePilasterBounds.socleTopM;
 
@@ -252,7 +298,7 @@ export function buildFacadeCadDocument(
   addLine(doc, layerWalls, -1000, 0, totalWidthM * MM + 1000, 0);
   addRect(doc, layerWalls, 0, 0, totalWidthM * MM, wallTopM * MM);
 
-  // 2. Цоколь и рустовка
+  // 2. Цоколь и рустовка (трёхчастное деление сохраняется и при включении всего 1-го этажа в цоколь)
   const partsSum = Math.max(
     0.01,
     summary.threePartSocleResult.fuss +
@@ -265,20 +311,18 @@ export function buildFacadeCadDocument(
   const rustCourses = Math.min(12, Math.max(1, summary.rusticationCheck.n));
 
   addRect(doc, layerSocle, -30, 0, totalWidthM * MM + 60, visualSocleTopM * MM);
-  if (!params.useFullFloorAsSocle) {
-    addRect(doc, layerSocle, -45, 0, totalWidthM * MM + 90, fussM * MM);
-    addRect(
-      doc,
-      layerSocle,
-      -45,
-      (visualSocleTopM - deckM) * MM,
-      totalWidthM * MM + 90,
-      deckM * MM
-    );
-    for (let r = 1; r < rustCourses; r++) {
-      const yRust = (fussM + (r / rustCourses) * rumpfM) * MM;
-      addLine(doc, layerSocle, -20, yRust, totalWidthM * MM + 20, yRust);
-    }
+  addRect(doc, layerSocle, -45, 0, totalWidthM * MM + 90, fussM * MM);
+  addRect(
+    doc,
+    layerSocle,
+    -45,
+    (visualSocleTopM - deckM) * MM,
+    totalWidthM * MM + 90,
+    deckM * MM
+  );
+  for (let r = 1; r < rustCourses; r++) {
+    const yRust = (fussM + (r / rustCourses) * rumpfM) * MM;
+    addLine(doc, layerSocle, -20, yRust, totalWidthM * MM + 20, yRust);
   }
 
   // 3. Колоннада нижнего яруса (если включена и не ниже верха цоколя)
@@ -351,42 +395,46 @@ export function buildFacadeCadDocument(
     });
   }
 
-  // 5. Угловые пилястры / Mauerpfeiler (низ с базой или без базы не ниже верха цоколя)
+  // 5. Пилястры / Mauerpfeiler (поэтажные диапазоны >= верха цоколя; по краям или в каждом простенке)
   const p_corner = D - safeW / 2 - effectiveU;
   const pilasterW = Math.min(params.Wp, Math.max(0.2, p_corner * 0.72));
-  if (soclePilasterBounds.hasUpperPilasters) {
-    const pilBotM = soclePilasterBounds.pilasterBottomM;
-    const pilTopM = soclePilasterBounds.pilasterTopM;
-    const pilHM = soclePilasterBounds.pilasterHeightM;
-    [0, totalWidthM - pilasterW].forEach((pxStart) => {
+  const pilasterSpans = resolvePilasterElevationSpans(params, summary.derivedGeometry);
+  const pilasterXPositions = resolvePilasterXPositions(params, totalWidthM, axesM, pilasterW);
+  if (pilasterSpans.length > 0) {
+    pilasterSpans.forEach((span) => {
+      const pilBotM = span.bottomM;
+      const pilTopM = span.topM;
+      const pilHM = Math.max(0.15, pilTopM - pilBotM);
       const capH = params.isMauerpfeiler ? 0 : Math.min(0.45, pilHM * 0.08);
       const baseH = params.isMauerpfeiler ? 0 : Math.min(0.35, pilHM * 0.06);
-      addRect(
-        doc,
-        layerPilasters,
-        pxStart * MM,
-        (pilBotM + baseH) * MM,
-        pilasterW * MM,
-        Math.max(0.1, pilHM - capH - baseH) * MM
-      );
-      if (!params.isMauerpfeiler) {
+      pilasterXPositions.forEach((px) => {
         addRect(
           doc,
           layerPilasters,
-          pxStart * MM - 40,
-          (pilTopM - capH) * MM,
-          pilasterW * MM + 80,
-          capH * MM
+          px.xStartM * MM,
+          (pilBotM + baseH) * MM,
+          pilasterW * MM,
+          Math.max(0.1, pilHM - capH - baseH) * MM
         );
-        addRect(
-          doc,
-          layerPilasters,
-          pxStart * MM - 40,
-          pilBotM * MM,
-          pilasterW * MM + 80,
-          baseH * MM
-        );
-      }
+        if (!params.isMauerpfeiler) {
+          addRect(
+            doc,
+            layerPilasters,
+            px.xStartM * MM - 40,
+            (pilTopM - capH) * MM,
+            pilasterW * MM + 80,
+            capH * MM
+          );
+          addRect(
+            doc,
+            layerPilasters,
+            px.xStartM * MM - 40,
+            pilBotM * MM,
+            pilasterW * MM + 80,
+            baseH * MM
+          );
+        }
+      });
     });
   }
 
@@ -749,6 +797,313 @@ export function downloadFacadeDwg(
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const fileName = `brausewetter-facade-${safeFloors}et-${safeAxesCount}ax.dwg`;
 
+  const blob = new Blob([bytes.slice().buffer], { type: 'application/acad' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ==================================================
+// Экспорт аналитической детали («Деталь») в формат DWG
+// ==================================================
+
+export type DetailPlateId = 'fan' | 'golden' | 'diagonal' | 'cornice' | 'socle' | 'belt';
+
+export function buildDetailPlateCadDocument(
+  plateId: DetailPlateId,
+  params: FacadeParameters,
+  summary: FacadeSummary
+): CadDocument {
+  const doc = new CadDocument(ACadVersion.AC1027);
+  doc.header!.insUnits = UnitsType.Millimeters;
+  doc.header!.measurementUnits = MeasurementUnits.Metric;
+
+  const titles: Record<DetailPlateId, string> = {
+    fan: 'Деталь — Веер A : H',
+    golden: 'Деталь — Циркуль золотого сечения',
+    diagonal: 'Деталь — Диагональ окна d/2',
+    cornice: 'Деталь — Профиль главного карниза',
+    socle: 'Деталь — Иерархия и трёхчастный цоколь',
+    belt: 'Деталь — Разрез межэтажной ленты (Gurtgesims)',
+  };
+  doc.summaryInfo!.title = `Brausewetter (1895) · ${titles[plateId]}`;
+
+  const layerGeom = ensureLayer(doc, '01_DETAIL_GEOMETRY', 7);
+  const layerGuides = ensureLayer(doc, '02_CONSTRUCTION', 1);
+  const layerGrid = ensureLayer(doc, '03_GRID', 9);
+  const layerDims = ensureLayer(doc, '04_DIMENSIONS', 3);
+  const layerNotes = ensureLayer(doc, '05_ANNOTATIONS', 7);
+
+  if (plateId === 'fan') {
+    const rays = [...RULES_DATA.standardAxenRatios, ...RULES_DATA.limitAxenRatios];
+    const maxH = Math.max(6.0, Math.ceil(params.H + 0.5));
+    const maxA = Math.max(6.0, Math.ceil(params.A + 0.5));
+    const maxHMm = maxH * MM;
+    const maxAMm = maxA * MM;
+
+    for (let tick = 1; tick <= Math.max(maxH, maxA); tick += 1) {
+      if (tick <= maxH) {
+        addLine(doc, layerGrid, tick * MM, 0, tick * MM, maxAMm);
+        addText(doc, layerNotes, `${tick} м`, tick * MM, -240, 140, {
+          hAlign: TextHorizontalAlignment.Center,
+        });
+      }
+      if (tick <= maxA) {
+        addLine(doc, layerGrid, 0, tick * MM, maxHMm, tick * MM);
+        addText(doc, layerNotes, `${tick} м`, -160, tick * MM, 140, {
+          hAlign: TextHorizontalAlignment.Right,
+          vAlign: TextVerticalAlignmentType.Middle,
+        });
+      }
+    }
+
+    addLine(doc, layerGeom, 0, 0, maxHMm, 0);
+    addLine(doc, layerGeom, 0, 0, 0, maxAMm);
+
+    const nearest = summary.ahCheck.nearestAny;
+    for (const ray of rays) {
+      const slope = ray.n / ray.m;
+      const endH = Math.min(maxH, maxA / slope);
+      const endA = slope * endH;
+      const isNearest = ray.label === nearest.label;
+      addLine(
+        doc,
+        isNearest ? layerGuides : layerGeom,
+        0,
+        0,
+        endH * MM,
+        endA * MM
+      );
+      addText(doc, layerNotes, ray.label, endH * MM + 120, endA * MM, 130, {
+        vAlign: TextVerticalAlignmentType.Middle,
+      });
+    }
+
+    const ptX = params.H * MM;
+    const ptY = params.A * MM;
+    addLine(doc, layerGuides, ptX, 0, ptX, ptY);
+    addLine(doc, layerGuides, 0, ptY, ptX, ptY);
+    addCircle(doc, layerGuides, ptX, ptY, 120);
+    addText(
+      doc,
+      layerNotes,
+      `H=${formatMeters(params.H, 2)} м; A=${formatMeters(params.A, 2)} м (ближ. ${nearest.label})`,
+      ptX + 180,
+      ptY + 120,
+      150
+    );
+  } else if (plateId === 'golden') {
+    const wMm = Math.max(0.4, params.w) * MM;
+    const hMm = Math.max(0.5, params.h) * MM;
+    const radiusMm = Math.hypot(wMm / 2, wMm);
+    const arcEndX = wMm / 2 + radiusMm;
+    const goldenHMm = wMm * PHI;
+
+    addRect(doc, layerGeom, 0, 0, wMm, hMm);
+    addRect(doc, layerGuides, 0, 0, wMm, wMm);
+    addLine(doc, layerGuides, wMm / 2, 0, wMm, wMm);
+    addArc(doc, layerGuides, wMm / 2, 0, radiusMm, 0, Math.atan2(wMm, wMm / 2));
+    addLine(doc, layerGeom, 0, 0, arcEndX, 0);
+    addLine(doc, layerDims, -250, goldenHMm, wMm + 250, goldenHMm);
+
+    addHorizontalDimension(doc, layerDims, 0, wMm, -350, 0, `w = ${formatMeters(params.w)} м`);
+    addVerticalDimension(doc, layerDims, 0, hMm, -420, 0, `h = ${formatMeters(params.h)} м`);
+    addText(
+      doc,
+      layerNotes,
+      `φ·w = ${formatMeters(params.w * PHI)} м · h/w = ${formatMeters(summary.windowCheck.ratio, 3)}`,
+      wMm + 280,
+      goldenHMm,
+      110
+    );
+  } else if (plateId === 'diagonal') {
+    const wMm = Math.max(0.4, params.w) * MM;
+    const hMm = Math.max(0.5, params.h) * MM;
+    const { d, halfD } = summary.windowCheck.diagCheck;
+    const halfRMm = halfD * MM;
+
+    addRect(doc, layerGeom, 0, 0, wMm, hMm);
+    addLine(doc, layerGuides, 0, 0, wMm, hMm);
+    addCircle(doc, layerGuides, wMm / 2, hMm / 2, 45);
+    addArc(doc, layerGuides, 0, 0, halfRMm, 0, Math.PI / 2);
+
+    addHorizontalDimension(doc, layerDims, 0, halfRMm, -300, 0, `d/2 = ${formatMeters(halfD)} м`);
+    addHorizontalDimension(doc, layerDims, 0, wMm, -650, 0, `w = ${formatMeters(params.w)} м`);
+    addVerticalDimension(doc, layerDims, 0, hMm, wMm + 300, wMm, `h = ${formatMeters(params.h)} м`);
+    addText(
+      doc,
+      layerNotes,
+      `d = √(w²+h²) = ${formatMeters(d)} м`,
+      wMm / 2,
+      hMm / 2 + 120,
+      110,
+      { hAlign: TextHorizontalAlignment.Center }
+    );
+  } else if (plateId === 'cornice') {
+    const { h_u, h_l } = summary.corniceCheck;
+    const tcMm = Math.max(0.05, params.Tc) * MM;
+    const huMm = (h_u / Math.max(0.01, params.Tc)) * tcMm;
+    const hlMm = Math.max(0, tcMm - huMm);
+    const plateMm = huMm * params.plateShare;
+    const K = summary.framingResult.K;
+    const projM = params.withConsoles ? projection_console(K) : projection_45(K);
+    const overhangMm = Math.max(120, projM * MM);
+    const wallWidthMm = 450;
+
+    // Сечение стены слева от x=0
+    addRect(doc, layerGeom, -wallWidthMm, -600, wallWidthMm, tcMm + 600);
+    // Плита
+    addRect(doc, layerGeom, 0, tcMm - plateMm, overhangMm, plateMm);
+    // Верхний облом под плитой
+    if (huMm - plateMm > 5) {
+      addPolylinePoints(
+        doc,
+        layerGeom,
+        [
+          [0, tcMm - plateMm],
+          [overhangMm * 0.78, tcMm - plateMm],
+          [overhangMm * 0.55, tcMm - huMm],
+          [0, tcMm - huMm],
+        ],
+        true
+      );
+    }
+    // Нижние обломы h_l
+    addRect(doc, layerGeom, 0, hlMm * 0.72, overhangMm * 0.52, hlMm * 0.28);
+    addPolylinePoints(
+      doc,
+      layerGeom,
+      [
+        [0, hlMm * 0.72],
+        [overhangMm * 0.45, hlMm * 0.72],
+        [overhangMm * 0.32, hlMm * 0.32],
+        [0, hlMm * 0.32],
+      ],
+      true
+    );
+    addRect(doc, layerGeom, 0, 0, overhangMm * 0.26, hlMm * 0.32);
+
+    if (params.withConsoles) {
+      addPolylinePoints(
+        doc,
+        layerGuides,
+        [
+          [0, 0],
+          [overhangMm * 0.74, 0],
+          [overhangMm * 0.64, -220],
+          [0, -250],
+        ],
+        true
+      );
+    }
+    // Линия 45°
+    addLine(doc, layerGuides, 0, 0, tcMm, tcMm);
+
+    addVerticalDimension(doc, layerDims, hlMm, tcMm, overhangMm + 250, overhangMm, `h_u = ${formatMeters(h_u)} м`);
+    addVerticalDimension(doc, layerDims, 0, hlMm, overhangMm + 250, overhangMm * 0.52, `h_l = ${formatMeters(h_l)} м`);
+    addVerticalDimension(doc, layerDims, 0, tcMm, -wallWidthMm - 250, -wallWidthMm, `T_c = ${formatMeters(params.Tc)} м`);
+    addHorizontalDimension(doc, layerDims, 0, overhangMm, tcMm + 220, tcMm, `Вынос = ${formatMeters(projM)} м`);
+  } else if (plateId === 'socle') {
+    const effectiveSocleH = params.useFullFloorAsSocle
+      ? summary.derivedGeometry.floor1FullHeight
+      : params.hSocle;
+    const { fuss, rumpf, deck } = summary.threePartSocleResult;
+    const totalParts = Math.max(0.01, fuss + rumpf + deck);
+    const totalMm = Math.max(0.3, effectiveSocleH) * MM;
+    const fussMm = (fuss / totalParts) * totalMm;
+    const deckMm = (deck / totalParts) * totalMm;
+    const rumpfMm = Math.max(50, totalMm - fussMm - deckMm);
+    const secW = 900;
+    const nCourses = Math.min(12, Math.max(1, summary.rusticationCheck.n));
+
+    addRect(doc, layerGeom, -60, 0, secW + 120, fussMm);
+    addRect(doc, layerGeom, 0, fussMm, secW, rumpfMm);
+    addRect(doc, layerGeom, -45, fussMm + rumpfMm, secW + 90, deckMm);
+    for (let i = 1; i < nCourses; i += 1) {
+      const y = fussMm + (i / nCourses) * rumpfMm;
+      addLine(doc, layerGrid, 0, y, secW, y);
+    }
+
+    addVerticalDimension(doc, layerDims, 0, fussMm, secW + 280, secW + 60, `Fuß ${formatMeters(fuss, 2)} м`);
+    addVerticalDimension(doc, layerDims, fussMm, fussMm + rumpfMm, secW + 280, secW, `Rumpf (${nCourses} ряд.)`);
+    addVerticalDimension(doc, layerDims, fussMm + rumpfMm, totalMm, secW + 280, secW + 45, `Deck ${formatMeters(deck, 2)} м`);
+    addVerticalDimension(doc, layerDims, 0, totalMm, -320, -60, `h_s = ${formatMeters(effectiveSocleH, 2)} м`);
+  } else {
+    // belt
+    const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];
+    const { hUpper, hLower, hCrown } = summary.beltCrowningCheck;
+    const totalMm = Math.max(0.15, params.hGurt) * MM;
+    const crownMm = totalMm * beltMeta.crownShareOfBelt;
+    const subMm = Math.max(0, totalMm - crownMm);
+    const upperMm = (hUpper / Math.max(0.01, hCrown)) * crownMm;
+    const lowerMm = Math.max(0, crownMm - upperMm);
+    const wallW = 450;
+    const reachMm = params.beltMode === 'crowning' ? Math.max(220, totalMm * 0.7) : Math.max(160, totalMm * 0.52);
+
+    addRect(doc, layerGeom, -wallW, -400, wallW, totalMm + 800);
+    if (!params.beltIsAbsent && !params.beltAsRusticationMode) {
+      // Венчающие верхние обломы
+      addRect(doc, layerGeom, 0, totalMm - upperMm, reachMm, upperMm);
+      // Нижние обломы венца
+      addPolylinePoints(
+        doc,
+        layerGeom,
+        [
+          [0, totalMm - upperMm],
+          [reachMm * 0.72, totalMm - upperMm],
+          [reachMm * 0.3, subMm],
+          [0, subMm],
+        ],
+        true
+      );
+      if (subMm > 5) {
+        addRect(doc, layerGeom, 0, 0, reachMm * 0.3, subMm);
+      }
+      addVerticalDimension(doc, layerDims, subMm + lowerMm, totalMm, reachMm + 240, reachMm, `h_в = ${formatMeters(hUpper)} м`);
+      addVerticalDimension(doc, layerDims, subMm, subMm + lowerMm, reachMm + 240, reachMm * 0.72, `h_н = ${formatMeters(hLower)} м`);
+    } else if (params.beltAsRusticationMode) {
+      for (let r = 0; r < 3; r += 1) {
+        addRect(doc, layerGeom, 0, r * 240, 120, 200);
+      }
+      if (params.beltRusticationHasBaseProfile) {
+        addRect(doc, layerGuides, 0, -90, 240, 90);
+      }
+    }
+    addVerticalDimension(doc, layerDims, 0, totalMm, -wallW - 240, -wallW, `H_ленты = ${formatMeters(params.hGurt, 2)} м`);
+    addText(
+      doc,
+      layerNotes,
+      `${beltMeta.titleRu} (${params.beltMode === 'binding' ? 'связующая' : 'венчающая'})`,
+      0,
+      totalMm + 480,
+      110
+    );
+  }
+
+  return doc;
+}
+
+export function exportDetailPlateToDwg(
+  plateId: DetailPlateId,
+  params: FacadeParameters,
+  summary: FacadeSummary
+): Uint8Array {
+  const doc = buildDetailPlateCadDocument(plateId, params, summary);
+  return DwgWriter.writeToBuffer(doc);
+}
+
+export function downloadDetailPlateDwg(
+  plateId: DetailPlateId,
+  params: FacadeParameters,
+  summary: FacadeSummary
+): void {
+  const bytes = exportDetailPlateToDwg(plateId, params, summary);
+  const fileName = `brausewetter-detail-${plateId}.dwg`;
   const blob = new Blob([bytes.slice().buffer], { type: 'application/acad' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

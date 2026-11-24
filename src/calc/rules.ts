@@ -2366,6 +2366,177 @@ export function resolveEntranceGeometry(
   };
 }
 
+export type PilasterPlacement = 'edges' | 'every_pier';
+
+export interface ScaledVerticalGeometry {
+  groundToFloor1: number;
+  floorHeightsM: number[];
+  floorOffsetsM: number[];
+  wallTopM: number;
+  corniceM: number;
+  corniceTopM: number;
+  totalHeightM: number;
+  verticalScale: number;
+}
+
+/**
+ * Единая вертикальная геометрия фасада (для ортогонального чертежа и DWG-экспорта):
+ * - если задана ручная высота здания manualTotalHeight, масштабирует вертикальные отметки так,
+ *   чтобы верх главного карниза строго совпадал с totalHeight.
+ */
+export function resolveScaledVerticalGeometry(
+  params: FacadeParameters,
+  derivedGeometry: DerivedGeometry
+): ScaledVerticalGeometry {
+  const safeFloors = Math.min(6, Math.max(1, params.levels.floors.length));
+  const rawGround = Math.max(0.25, params.levels.groundToFloor1);
+  const rawFloorHeights = params.levels.floors
+    .slice(0, safeFloors)
+    .map((fl) => Math.max(1.8, fl.floorToFloor));
+
+  const naturalWallTop =
+    rawGround + rawFloorHeights.reduce((acc, h) => acc + h, 0);
+  const corniceM = Math.max(0.2, params.hMain);
+
+  const targetTotal = derivedGeometry.usesManualTotalHeight
+    ? Math.max(2.0 + corniceM, derivedGeometry.totalHeight)
+    : naturalWallTop + corniceM;
+  const targetWallTop = Math.max(1.5, targetTotal - corniceM);
+  const verticalScale = derivedGeometry.usesManualTotalHeight
+    ? targetWallTop / Math.max(0.5, naturalWallTop)
+    : 1;
+
+  const groundToFloor1 = rawGround * verticalScale;
+  const floorHeightsM = rawFloorHeights.map((h) => h * verticalScale);
+  const floorOffsetsM: number[] = [];
+  let cursor = groundToFloor1;
+  for (let i = 0; i < floorHeightsM.length; i += 1) {
+    floorOffsetsM.push(cursor);
+    cursor += floorHeightsM[i];
+  }
+
+  const wallTopM = cursor;
+  const corniceTopM = wallTopM + corniceM;
+
+  return {
+    groundToFloor1,
+    floorHeightsM,
+    floorOffsetsM,
+    wallTopM,
+    corniceM,
+    corniceTopM,
+    totalHeightM: derivedGeometry.usesManualTotalHeight ? targetTotal : corniceTopM,
+    verticalScale,
+  };
+}
+
+export interface PilasterElevationSpan {
+  bottomM: number;
+  topM: number;
+  floorIndices: number[];
+}
+
+export function isPilasterEnabledOnFloor(
+  params: FacadeParameters,
+  floorIndex: number,
+  totalFloors: number
+): boolean {
+  if (params.pilasterFloors && params.pilasterFloors.length > 0) {
+    if (floorIndex < params.pilasterFloors.length) {
+      return Boolean(params.pilasterFloors[floorIndex]);
+    }
+    return Boolean(params.pilasterFloors[params.pilasterFloors.length - 1]);
+  }
+  if (params.pilastersOnlyOnUpperFloor && totalFloors >= 2) {
+    return floorIndex === totalFloors - 1;
+  }
+  return true;
+}
+
+/**
+ * Разрешает поэтажные вертикальные диапазоны пилястр / лопаток:
+ * - учитывает включение/отключение на каждом этаже;
+ * - низ любого фрагмента пилястра (с базой или без) строго >= верха цоколя;
+ * - объединяет смежные активные этажи в непрерывный ордер.
+ */
+export function resolvePilasterElevationSpans(
+  params: FacadeParameters,
+  derivedGeometry: DerivedGeometry
+): PilasterElevationSpan[] {
+  const vg = resolveScaledVerticalGeometry(params, derivedGeometry);
+  const floorCount = vg.floorOffsetsM.length;
+  const floor1TopM = floorCount >= 2 ? vg.floorOffsetsM[1] : vg.wallTopM;
+  const effectiveSocleH = params.useFullFloorAsSocle
+    ? floor1TopM
+    : Math.max(0.25, params.hSocle);
+  const socleTopM = params.useFullFloorAsSocle
+    ? floor1TopM
+    : Math.min(effectiveSocleH, vg.wallTopM * 0.48);
+
+  const rawSpans: PilasterElevationSpan[] = [];
+  for (let i = 0; i < floorCount; i += 1) {
+    if (!isPilasterEnabledOnFloor(params, i, floorCount)) continue;
+    const rawBot = i === 0 ? 0 : vg.floorOffsetsM[i];
+    const rawTop = vg.floorOffsetsM[i] + vg.floorHeightsM[i];
+    const clampedBot = Math.max(rawBot, socleTopM);
+    if (rawTop - clampedBot > 0.15) {
+      rawSpans.push({
+        bottomM: clampedBot,
+        topM: rawTop,
+        floorIndices: [i],
+      });
+    }
+  }
+
+  const merged: PilasterElevationSpan[] = [];
+  for (const span of rawSpans) {
+    const prev = merged[merged.length - 1];
+    if (prev && Math.abs(prev.topM - span.bottomM) <= 0.02) {
+      prev.topM = span.topM;
+      prev.floorIndices.push(...span.floorIndices);
+    } else {
+      merged.push({
+        bottomM: span.bottomM,
+        topM: span.topM,
+        floorIndices: [...span.floorIndices],
+      });
+    }
+  }
+  return merged;
+}
+
+export interface PilasterXPosition {
+  xStartM: number;
+  kind: 'edge' | 'pier';
+}
+
+/**
+ * Позиции пилястр по горизонтали:
+ * - 'edges': по краям здания (левый и правый углы);
+ * - 'every_pier': по краям здания + в центре каждого межоконного простенка.
+ */
+export function resolvePilasterXPositions(
+  params: FacadeParameters,
+  totalWidthM: number,
+  axesM: number[],
+  pilasterW: number
+): PilasterXPosition[] {
+  const result: PilasterXPosition[] = [
+    { xStartM: 0, kind: 'edge' },
+    { xStartM: Math.max(0, totalWidthM - pilasterW), kind: 'edge' },
+  ];
+  if (params.pilasterPlacement === 'every_pier' && axesM.length >= 2) {
+    for (let i = 0; i < axesM.length - 1; i += 1) {
+      const midX = (axesM[i] + axesM[i + 1]) / 2;
+      result.push({
+        xStartM: midX - pilasterW / 2,
+        kind: 'pier',
+      });
+    }
+  }
+  return result;
+}
+
 export interface VerticalSocleAndPilasterBounds {
   socleTopM: number;
   pilasterBottomM: number;
@@ -2383,32 +2554,29 @@ export function resolveSocleAndPilasterBounds(
   params: FacadeParameters,
   derivedGeometry: DerivedGeometry
 ): VerticalSocleAndPilasterBounds {
-  const groundToFloor1 = Math.max(0.25, params.levels.groundToFloor1);
-  const floorHeights = params.levels.floors
-    .slice(0, 6)
-    .map((fl) => Math.max(1.8, fl.floorToFloor));
-  const floorOffsets: number[] = [];
-  let cursor = groundToFloor1;
-  for (let i = 0; i < floorHeights.length; i++) {
-    floorOffsets.push(cursor);
-    cursor += floorHeights[i];
-  }
-  const wallTopM = cursor;
-  const floor1TopM = floorOffsets.length >= 2 ? floorOffsets[1] : wallTopM;
+  const vg = resolveScaledVerticalGeometry(params, derivedGeometry);
+  const floor1TopM = vg.floorOffsetsM.length >= 2 ? vg.floorOffsetsM[1] : vg.wallTopM;
   const effectiveSocleH = params.useFullFloorAsSocle
     ? Math.max(derivedGeometry.floor1FullHeight, floor1TopM)
     : Math.max(0.25, params.hSocle);
   const socleTopM = params.useFullFloorAsSocle
     ? floor1TopM
-    : Math.min(effectiveSocleH, wallTopM * 0.48);
+    : Math.min(effectiveSocleH, vg.wallTopM * 0.48);
 
-  const upperFloorStart =
-    params.pilastersOnlyOnUpperFloor && floorOffsets.length >= 2
-      ? floorOffsets[floorOffsets.length - 1]
-      : socleTopM;
-  const pilasterBottomM = Math.max(socleTopM, upperFloorStart);
-  const pilasterTopM = wallTopM;
-  const pilasterHeightM = Math.max(0, pilasterTopM - pilasterBottomM);
+  const spans = resolvePilasterElevationSpans(params, derivedGeometry);
+  if (spans.length === 0) {
+    return {
+      socleTopM,
+      pilasterBottomM: socleTopM,
+      pilasterTopM: socleTopM,
+      pilasterHeightM: 0,
+      hasUpperPilasters: false,
+    };
+  }
+
+  const pilasterBottomM = spans[0].bottomM;
+  const pilasterTopM = spans[spans.length - 1].topM;
+  const pilasterHeightM = spans.reduce((acc, sp) => acc + Math.max(0, sp.topM - sp.bottomM), 0);
 
   return {
     socleTopM,
@@ -3703,6 +3871,8 @@ export interface FacadeParameters {
   pilasterAdjacentSameHeight: boolean;
   pilasterHeightDiffPct: number;
   pilastersOnlyOnUpperFloor: boolean;
+  pilasterFloors?: boolean[];
+  pilasterPlacement?: PilasterPlacement;
   atticOverRisalit: boolean;
   atticOverWing: boolean;
   atticRisalitHeavier: boolean;
@@ -4599,13 +4769,24 @@ export function evaluateFacadeSummary(
     }
   }
 
-  // N18–N19 (P2): многоярусное размещение пилястр
-  if (params.pilasterAdjacentSameHeight || params.pilastersOnlyOnUpperFloor) {
+  // N18–N19 (P2): многоярусное размещение пилястр (учитывает также поэтажные флаги pilasterFloors)
+  const floorCountForPilasters = params.levels.floors.length;
+  const activePilasterIndices = Array.from({ length: floorCountForPilasters }, (_, i) => i).filter(
+    (i) => isPilasterEnabledOnFloor(params, i, floorCountForPilasters)
+  );
+  const derivedOnlyUpperFromFloors =
+    params.pilasterFloors !== undefined &&
+    floorCountForPilasters >= 2 &&
+    activePilasterIndices.length === 1 &&
+    activePilasterIndices[0] === floorCountForPilasters - 1;
+  const effectiveOnlyUpper = params.pilastersOnlyOnUpperFloor || derivedOnlyUpperFromFloors;
+
+  if (params.pilasterAdjacentSameHeight || effectiveOnlyUpper) {
     const n18 = checkPilasterRepetition(
       params.pilasterAdjacentSameHeight,
       params.pilasterHeightDiffPct
     );
-    const n19 = checkPilastersOnlyUpper(params.pilastersOnlyOnUpperFloor);
+    const n19 = checkPilastersOnlyUpper(effectiveOnlyUpper);
     if (params.pilasterAdjacentSameHeight) {
       checks.push({
         id: 'n18_pilaster_repetition',
@@ -4621,7 +4802,7 @@ export function evaluateFacadeSummary(
         targetElement: 'pilaster',
       });
     }
-    if (params.pilastersOnlyOnUpperFloor) {
+    if (effectiveOnlyUpper) {
       checks.push({
         id: 'n19_pilaster_only_upper',
         title: 'N19: Пилястры только на верхнем этаже',
@@ -5003,6 +5184,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     pilasterAdjacentSameHeight: false,
     pilasterHeightDiffPct: 0.18,
     pilastersOnlyOnUpperFloor: false,
+    pilasterPlacement: 'edges',
     atticOverRisalit: false,
     atticOverWing: false,
     atticRisalitHeavier: true,

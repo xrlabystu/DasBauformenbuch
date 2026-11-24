@@ -86,6 +86,9 @@ import {
   ratio_from_AH,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolvePilasterElevationSpans,
+  resolvePilasterXPositions,
+  resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
   rusticationRows,
   socleHeight,
@@ -96,10 +99,19 @@ import {
   w_max_from_A,
 } from './rules.ts';
 import { countLockedParams, filterUnlockedPatch, isParamLocked } from './paramLocks.ts';
-import { RULE_BOOK_EXCERPTS, getExcerptForCheckId } from './ruleBookRefs.ts';
+import {
+  RULE_BOOK_EXCERPTS,
+  getExcerptForCatalogRule,
+  getExcerptForCheckId,
+} from './ruleBookRefs.ts';
 import { BRAUSEWETTER_PAGES } from '../data/brausewetter_1895.ts';
-import { countSearchMatches } from '../utils/termHighlight.tsx';
-import { buildFacadeCadDocument, exportFacadeToDwg } from './dwgExport.ts';
+import { countSearchMatches, findGlossaryEntryByTerm } from '../utils/termHighlight.tsx';
+import {
+  buildFacadeCadDocument,
+  exportDetailPlateToDwg,
+  exportFacadeToDwg,
+  type DetailPlateId,
+} from './dwgExport.ts';
 import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
@@ -1140,6 +1152,116 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(countSearchMatches('Hauptgesims und Hauptgesims', 'hauptgesims'), 2);
     assert.equal(countSearchMatches('Высота цоколя и высота этажа', 'цокол'), 1);
     assert.equal(countSearchMatches('Текст без совпадений', ''), 0);
+  });
+
+  it('28. Полный 1-й этаж в цоколе сохраняет трёхчастное деление и рустовку в DWG', () => {
+    const base = createDefaultParamsForTypology('miethaus');
+    assert.equal(base.useFullFloorAsSocle, true);
+    const sum = evaluateFacadeSummary(base, { expertMode: true });
+    const cad = buildFacadeCadDocument(base, sum);
+    const socleEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '02_SOCLE'
+    );
+    // Должны присутствовать контур цоколя, Deckgesims, Fuß, а также швы рустовки
+    assert.ok(socleEnts.length >= 6, `Expected >=6 entities in 02_SOCLE for 3-part full-floor socle, got ${socleEnts.length}`);
+  });
+
+  it('29. Пилястры и лопатки: включение по этажам, края vs каждый простенок и соблюдение низа >= цоколя', () => {
+    const urban = createDefaultParamsForTypology('urban_house');
+    // 3-этажный фасад, 4 оси -> 5 вертикальных позиций в режиме every_pier (2 края + 3 внутренних простенка)
+    const paramsEveryPier = {
+      ...urban,
+      floors: 3,
+      axesCount: 4,
+      levels: buildDefaultLevels(3, urban.H, urban.levels.groundToFloor1),
+      hSocle: 2.2,
+      useFullFloorAsSocle: false,
+      pilasterPlacement: 'every_pier' as const,
+      pilasterFloors: [true, false, true],
+    };
+    const sum = evaluateFacadeSummary(paramsEveryPier, { expertMode: true });
+    const dg = sum.derivedGeometry;
+    const cornerD = D_from_A(paramsEveryPier.A, paramsEveryPier.k_D);
+    const axesM = Array.from({ length: paramsEveryPier.axesCount }, (_, idx) => cornerD + idx * paramsEveryPier.A);
+    const xPosEdges = resolvePilasterXPositions(
+      { ...paramsEveryPier, pilasterPlacement: 'edges' },
+      dg.facadeWidth,
+      axesM,
+      paramsEveryPier.Wp
+    );
+    const xPosPier = resolvePilasterXPositions(paramsEveryPier, dg.facadeWidth, axesM, paramsEveryPier.Wp);
+    assert.equal(xPosEdges.length, 2);
+    assert.equal(xPosPier.length, 5);
+
+    const spans = resolvePilasterElevationSpans(paramsEveryPier, dg);
+    assert.equal(spans.length, 2); // 1-й и 3-й этажи
+    const bounds = resolveSocleAndPilasterBounds(paramsEveryPier, dg);
+    for (const sp of spans) {
+      assert.ok(sp.bottomM >= bounds.socleTopM - 1e-6);
+    }
+
+    const cad = buildFacadeCadDocument(paramsEveryPier, sum);
+    const pilEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '06_PILASTERS'
+    );
+    // 5 позиций × 2 этажа => как минимум 10 полилиний тел + базы/капители
+    assert.ok(pilEnts.length >= 10, `Expected >=10 pilaster entities, got ${pilEnts.length}`);
+  });
+
+  it('30. Ручная общая высота здания (manualTotalHeight) масштабирует вертикальную геометрию и DWG', () => {
+    const urban = createDefaultParamsForTypology('urban_house');
+    const targetH = 18.0;
+    const manualParams = {
+      ...urban,
+      levels: { ...urban.levels, manualTotalHeight: targetH },
+    };
+    const sum = evaluateFacadeSummary(manualParams, { expertMode: true });
+    const scaled = resolveScaledVerticalGeometry(manualParams, sum.derivedGeometry);
+    assertClose(scaled.corniceTopM, targetH);
+    assertClose(scaled.totalHeightM, targetH);
+
+    const cad = buildFacadeCadDocument(manualParams, sum);
+    const wallEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '01_WALL_FACADE'
+    );
+    assert.ok(wallEnts.length > 0);
+    let maxWallY = 0;
+    for (const ent of wallEnts) {
+      const verts = (ent as { vertices?: Array<{ location: { y: number } }> }).vertices;
+      if (verts) {
+        for (const v of verts) {
+          if (v.location.y > maxWallY) maxWallY = v.location.y;
+        }
+      }
+    }
+    assertClose(maxWallY / 1000, scaled.wallTopM);
+  });
+
+  it('31. Кнопка «Показать в тексте» и ссылки на терминологию: все 41 правило привязаны к первоисточнику', () => {
+    assert.equal(RULES_DATA.rules.length, 41);
+    for (const rule of RULES_DATA.rules) {
+      const excerpt = getExcerptForCatalogRule(rule);
+      assert.ok(excerpt.pageNumber >= 1 && excerpt.pageNumber <= 23, `Rule ${rule.id} page out of bounds`);
+      assert.ok(excerpt.bookQuoteDe.length > 5 && excerpt.bookQuoteRu.length > 5);
+    }
+    const gurtTerm = findGlossaryEntryByTerm('Gurtgesims');
+    assert.ok(gurtTerm && typeof gurtTerm.pageNumber === 'string' && parseInt(gurtTerm.pageNumber, 10) >= 1);
+    const sockelTerm = findGlossaryEntryByTerm('цоколь');
+    assert.ok(sockelTerm && typeof sockelTerm.pageNumber === 'string' && parseInt(sockelTerm.pageNumber, 10) >= 1);
+  });
+
+  it('32. Экспорт чертежей блока «Деталь» в формат DWG: все 6 схем валидны в AC1027', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const summary = evaluateFacadeSummary(base, { expertMode: true });
+    const plateIds: DetailPlateId[] = ['fan', 'golden', 'diagonal', 'cornice', 'socle', 'belt'];
+    for (const plateId of plateIds) {
+      const dwgBytes = exportDetailPlateToDwg(plateId, base, summary);
+      assert.ok(dwgBytes instanceof Uint8Array && dwgBytes.byteLength > 1500, `Plate ${plateId} DWG empty`);
+      const magic = new TextDecoder('ascii').decode(dwgBytes.slice(0, 6));
+      assert.equal(magic, 'AC1027', `Plate ${plateId} header mismatch`);
+      const parsed = DwgReader.readFromStream(new Uint8Array(dwgBytes).buffer);
+      assert.ok((parsed.modelSpace?.entities.count ?? 0) >= 8, `Plate ${plateId} should contain geometry`);
+    }
   });
 });
 

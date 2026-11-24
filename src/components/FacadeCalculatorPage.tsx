@@ -25,6 +25,7 @@ import {
   type LockedParamsMap,
 } from '../calc/paramLocks';
 import type { RuleBookExcerpt } from '../calc/ruleBookRefs';
+import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../utils/termHighlight';
 import { FacadeSvg } from './calculator/FacadeSvg';
 import { AnalyticalPlates, type AnalyticalPlateId } from './calculator/AnalyticalPlates';
 import {
@@ -34,11 +35,38 @@ import {
 } from './calculator/CalculatorModules';
 import { RuleCardsView, TestCasesVerificationView } from './calculator/RuleCardsPanel';
 
-interface FacadeCalculatorPageProps {
-  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
+export type CalculatorSubpage = 'workspace' | 'rules' | 'tests';
+
+export interface CalcSessionSnapshot {
+  params: FacadeParameters;
+  lockedParams: LockedParamsMap;
 }
 
-type CalculatorSubpage = 'workspace' | 'rules' | 'tests';
+interface FacadeCalculatorPageProps {
+  onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
+  onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
+  subpage?: CalculatorSubpage;
+  onChangeSubpage?: (sub: CalculatorSubpage) => void;
+  expertMode?: boolean;
+  onChangeExpertMode?: (val: boolean) => void;
+  activeModule?: CalculatorModuleId;
+  onChangeActiveModule?: (mod: CalculatorModuleId) => void;
+  activePlate?: AnalyticalPlateId;
+  onChangeActivePlate?: (plate: AnalyticalPlateId) => void;
+  highlightedElement?: FacadeTargetElement | null;
+  onChangeHighlightedElement?: (el: FacadeTargetElement | null) => void;
+  params?: FacadeParameters;
+  lockedParams?: LockedParamsMap;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  onResetSession?: () => void;
+  onCommitSnapshot?: (
+    updater: (prev: CalcSessionSnapshot) => CalcSessionSnapshot,
+    burstKey?: string
+  ) => void;
+}
 
 const ELEMENT_TO_MODULE: Record<FacadeTargetElement, CalculatorModuleId> = {
   axenweite: 'axes',
@@ -62,16 +90,139 @@ const ELEMENT_TO_PLATE: Partial<Record<FacadeTargetElement, AnalyticalPlateId>> 
   belt: 'belt',
 };
 
-export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPageProps) {
-  const [subpage, setSubpage] = useState<CalculatorSubpage>('workspace');
-  const [expertMode, setExpertMode] = useState<boolean>(false);
-  const [params, setParams] = useState<FacadeParameters>(() =>
+function computeNextParams(
+  prev: FacadeParameters,
+  rawPatch: Partial<FacadeParameters>,
+  lockedParams: LockedParamsMap
+): FacadeParameters {
+  const patch = filterUnlockedPatch(prev, rawPatch, lockedParams);
+  if (Object.keys(patch).length === 0) return prev;
+
+  const next: FacadeParameters = { ...prev, ...patch };
+  const isHLocked = isParamLocked(lockedParams, 'H');
+  const isFloorsLocked = isParamLocked(lockedParams, 'floors');
+  const isTotalHeightLocked =
+    isParamLocked(lockedParams, 'totalHeight') ||
+    isParamLocked(lockedParams, 'levels.manualTotalHeight');
+
+  if (patch.levels === undefined) {
+    if (!isFloorsLocked && patch.floors !== undefined && patch.floors !== prev.floors) {
+      const baseLevels = buildDefaultLevels(
+        Math.max(1, Math.round(patch.floors)),
+        isHLocked ? prev.H : next.H,
+        prev.levels.groundToFloor1
+      );
+      next.levels =
+        filterUnlockedPatch(prev, { levels: baseLevels }, lockedParams).levels ?? baseLevels;
+    } else if (!isHLocked && patch.H !== undefined && patch.H !== prev.H) {
+      const synced = syncLevelsWithH(prev.levels, patch.H);
+      next.levels = filterUnlockedPatch(prev, { levels: synced }, lockedParams).levels ?? synced;
+    }
+
+    if (
+      !isTotalHeightLocked &&
+      patch.totalHeight !== undefined &&
+      patch.totalHeight !== prev.totalHeight
+    ) {
+      next.levels = {
+        ...next.levels,
+        manualTotalHeight: patch.totalHeight,
+      };
+    }
+  }
+
+  const D = next.isRisalitCentered ? next.risalitWidth / 2 : D_from_A(next.A, next.k_D);
+  const dg = computeDerivedGeometry(next.levels, next.A, D, next.axesCount, next.hMain);
+
+  if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
+    next.H = dg.H_max;
+  }
+  if (!isFloorsLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
+    next.floors = next.levels.floors.length;
+  }
+  if (!isTotalHeightLocked && (patch.totalHeight === undefined || patch.levels !== undefined)) {
+    next.totalHeight = dg.totalHeight;
+  }
+  if (
+    !isParamLocked(lockedParams, 'beltUpperFloorHeight') &&
+    next.levels.floors[1] &&
+    patch.beltUpperFloorHeight === undefined
+  ) {
+    next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
+  }
+
+  // Синхронизируем массив пилястр по этажам при изменении этажности
+  if (next.pilasterFloors && next.pilasterFloors.length !== next.levels.floors.length) {
+    const resized = Array.from({ length: next.levels.floors.length }, (_, idx) => {
+      if (idx < next.pilasterFloors!.length) return next.pilasterFloors![idx];
+      return next.pilastersOnlyOnUpperFloor
+        ? idx === next.levels.floors.length - 1
+        : true;
+    });
+    next.pilasterFloors = resized;
+  }
+
+  return next;
+}
+
+export function FacadeCalculatorPage({
+  onOpenBookPage,
+  onOpenGlossaryTerm,
+  subpage: controlledSubpage,
+  onChangeSubpage,
+  expertMode: controlledExpertMode,
+  onChangeExpertMode,
+  activeModule: controlledActiveModule,
+  onChangeActiveModule,
+  activePlate: controlledActivePlate,
+  onChangeActivePlate,
+  highlightedElement: controlledHighlightedElement,
+  onChangeHighlightedElement,
+  params: controlledParams,
+  lockedParams: controlledLockedParams,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  onResetSession,
+  onCommitSnapshot,
+}: FacadeCalculatorPageProps) {
+  const [localSubpage, setLocalSubpage] = useState<CalculatorSubpage>('workspace');
+  const [localExpertMode, setLocalExpertMode] = useState<boolean>(false);
+  const [localActiveModule, setLocalActiveModule] = useState<CalculatorModuleId>('axes');
+  const [localActivePlate, setLocalActivePlate] = useState<AnalyticalPlateId>('fan');
+  const [localHighlightedElement, setLocalHighlightedElement] =
+    useState<FacadeTargetElement | null>(null);
+  const [localParams, setLocalParams] = useState<FacadeParameters>(() =>
     createDefaultParamsForTypology('urban_house')
   );
-  const [activeModule, setActiveModule] = useState<CalculatorModuleId>('axes');
-  const [activePlate, setActivePlate] = useState<AnalyticalPlateId>('fan');
-  const [highlightedElement, setHighlightedElement] = useState<FacadeTargetElement | null>(null);
-  const [lockedParams, setLockedParams] = useState<LockedParamsMap>({});
+  const [localLockedParams, setLocalLockedParams] = useState<LockedParamsMap>({});
+
+  const subpage = controlledSubpage ?? localSubpage;
+  const setSubpage = onChangeSubpage ?? setLocalSubpage;
+
+  const expertMode = controlledExpertMode ?? localExpertMode;
+  const setExpertMode = (valOrUpdater: boolean | ((prev: boolean) => boolean)) => {
+    const resolved =
+      typeof valOrUpdater === 'function' ? valOrUpdater(expertMode) : valOrUpdater;
+    if (onChangeExpertMode) onChangeExpertMode(resolved);
+    else setLocalExpertMode(resolved);
+  };
+
+  const activeModule = controlledActiveModule ?? localActiveModule;
+  const setActiveModule = onChangeActiveModule ?? setLocalActiveModule;
+
+  const activePlate = controlledActivePlate ?? localActivePlate;
+  const setActivePlate = onChangeActivePlate ?? setLocalActivePlate;
+
+  const highlightedElement =
+    controlledHighlightedElement !== undefined
+      ? controlledHighlightedElement
+      : localHighlightedElement;
+  const setHighlightedElement = onChangeHighlightedElement ?? setLocalHighlightedElement;
+
+  const params = controlledParams ?? localParams;
+  const lockedParams = controlledLockedParams ?? localLockedParams;
 
   const summary = useMemo(
     () => evaluateFacadeSummary(params, { expertMode }),
@@ -81,91 +232,34 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
   const lockedCount = useMemo(() => countLockedParams(lockedParams), [lockedParams]);
 
   const handleToggleLock = (key: string) => {
-    setLockedParams((prev) => {
+    if (onCommitSnapshot) {
+      onCommitSnapshot((prev) => {
+        const nextLocks = { ...prev.lockedParams };
+        if (nextLocks[key]) delete nextLocks[key];
+        else nextLocks[key] = true;
+        return { params: prev.params, lockedParams: nextLocks };
+      });
+      return;
+    }
+    setLocalLockedParams((prev) => {
       const next = { ...prev };
-      if (next[key]) {
-        delete next[key];
-      } else {
-        next[key] = true;
-      }
+      if (next[key]) delete next[key];
+      else next[key] = true;
       return next;
     });
   };
 
   const handleUpdateParams = (rawPatch: Partial<FacadeParameters>) => {
-    setParams((prev) => {
-      const patch = filterUnlockedPatch(prev, rawPatch, lockedParams);
-      if (Object.keys(patch).length === 0) return prev;
-
-      const next: FacadeParameters = { ...prev, ...patch };
-      const isHLocked = isParamLocked(lockedParams, 'H');
-      const isFloorsLocked = isParamLocked(lockedParams, 'floors');
-      const isTotalHeightLocked =
-        isParamLocked(lockedParams, 'totalHeight') ||
-        isParamLocked(lockedParams, 'levels.manualTotalHeight');
-
-      if (patch.levels === undefined) {
-        if (!isFloorsLocked && patch.floors !== undefined && patch.floors !== prev.floors) {
-          const baseLevels = buildDefaultLevels(
-            Math.max(1, Math.round(patch.floors)),
-            isHLocked ? prev.H : next.H,
-            isParamLocked(lockedParams, 'levels.groundToFloor1')
-              ? prev.levels.groundToFloor1
-              : prev.levels.groundToFloor1
-          );
-          next.levels = filterUnlockedPatch(
-            prev,
-            { levels: baseLevels },
-            lockedParams
-          ).levels ?? baseLevels;
-        } else if (!isHLocked && patch.H !== undefined && patch.H !== prev.H) {
-          const synced = syncLevelsWithH(prev.levels, patch.H);
-          next.levels =
-            filterUnlockedPatch(prev, { levels: synced }, lockedParams).levels ?? synced;
-        }
-
-        if (
-          !isTotalHeightLocked &&
-          patch.totalHeight !== undefined &&
-          patch.totalHeight !== prev.totalHeight
-        ) {
-          next.levels = {
-            ...next.levels,
-            manualTotalHeight: patch.totalHeight,
-          };
-        }
-      }
-
-      const D = next.isRisalitCentered
-        ? next.risalitWidth / 2
-        : D_from_A(next.A, next.k_D);
-      const dg = computeDerivedGeometry(
-        next.levels,
-        next.A,
-        D,
-        next.axesCount,
-        next.hMain
-      );
-
-      if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
-        next.H = dg.H_max;
-      }
-      if (!isFloorsLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
-        next.floors = next.levels.floors.length;
-      }
-      if (!isTotalHeightLocked && (patch.totalHeight === undefined || patch.levels !== undefined)) {
-        next.totalHeight = dg.totalHeight;
-      }
-      if (
-        !isParamLocked(lockedParams, 'beltUpperFloorHeight') &&
-        next.levels.floors[1] &&
-        patch.beltUpperFloorHeight === undefined
-      ) {
-        next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
-      }
-
-      return next;
-    });
+    const burstKey = Object.keys(rawPatch).sort().join(',');
+    if (onCommitSnapshot) {
+      onCommitSnapshot((prev) => {
+        const nextParams = computeNextParams(prev.params, rawPatch, prev.lockedParams);
+        if (nextParams === prev.params) return prev;
+        return { params: nextParams, lockedParams: prev.lockedParams };
+      }, burstKey);
+      return;
+    }
+    setLocalParams((prev) => computeNextParams(prev, rawPatch, localLockedParams));
   };
 
   const handleChangeBuildingType = (type: BuildingTypeId) => {
@@ -174,10 +268,21 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
   };
 
   const handleResetToBookExample = () => {
-    // Классический пример из текста S. 5: H = 4.00 м, A:H = 4:5 (A = 3.20 м), w = 1.15 м, u = 0.20 м, k_D = 4/5
-    setLockedParams({});
-    setParams(createDefaultParamsForTypology('urban_house'));
+    if (onResetSession) {
+      onResetSession();
+      return;
+    }
+    setLocalLockedParams({});
+    setLocalParams(createDefaultParamsForTypology('urban_house'));
     setHighlightedElement(null);
+  };
+
+  const handleClearAllLocks = () => {
+    if (onCommitSnapshot) {
+      onCommitSnapshot((prev) => ({ params: prev.params, lockedParams: {} }));
+      return;
+    }
+    setLocalLockedParams({});
   };
 
   const handleSelectElementFromSvg = (el: FacadeTargetElement) => {
@@ -195,6 +300,14 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
     setHighlightedElement(rule.targetElement);
     setActiveModule(ELEMENT_TO_MODULE[rule.targetElement]);
     const targetPlate = ELEMENT_TO_PLATE[rule.targetElement];
+    if (targetPlate) setActivePlate(targetPlate);
+  };
+
+  const handleHighlightElementOnFacade = (el: FacadeTargetElement) => {
+    setSubpage('workspace');
+    setHighlightedElement(el);
+    setActiveModule(ELEMENT_TO_MODULE[el]);
+    const targetPlate = ELEMENT_TO_PLATE[el];
     if (targetPlate) setActivePlate(targetPlate);
   };
 
@@ -225,7 +338,10 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
             Интерактивный пропорциональный калькулятор фасада
           </h2>
           <p className="mt-2 text-sm text-[#57534E] max-w-2xl">
-            Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов, цоколя и поэтажных отметок без округления промежуточных значений; проверенные нормы книги отделены от UX-эвристик.
+            <TextWithGlossaryLinks
+              text="Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов, цоколя и поэтажных отметок без округления промежуточных значений; проверенные нормы книги отделены от UX-эвристик."
+              onOpenGlossaryTerm={onOpenGlossaryTerm}
+            />
           </p>
         </div>
 
@@ -365,7 +481,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
               {lockedCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => setLockedParams({})}
+                  onClick={handleClearAllLocks}
                   title="Нажмите, чтобы снять замочки со всех закреплённых параметров"
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-[#9A3412]/50 bg-[#9A3412]/10 text-[#9A3412] hover:bg-[#9A3412]/15 transition-colors whitespace-nowrap shrink-0"
                 >
@@ -400,17 +516,26 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
           <div className="px-4 py-2.5 border border-[#E5DFD3] bg-[#FBF9F5] flex flex-wrap items-baseline justify-between gap-2 text-xs text-[#44403C]">
             <div>
               <strong className="text-[#1C1917]">{currentTypology.nameRu}</strong>{' '}
-              <span className="text-[#78716C]">({currentTypology.nameDe}, {currentTypology.page}):</span>{' '}
-              <span>{currentTypology.summary}</span>
+              <span className="text-[#78716C]">
+                ({currentTypology.nameDe}, {currentTypology.page}):
+              </span>{' '}
+              <TextWithGlossaryLinks
+                text={currentTypology.summary}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
             </div>
             <span className="font-mono text-[11px] text-[#9A3412] shrink-0">
-              A:H {currentTypology.recommendedAH} · {currentTypology.cornerRule}
+              A:H {currentTypology.recommendedAH} ·{' '}
+              <TextWithGlossaryLinks
+                text={currentTypology.cornerRule}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
             </span>
           </div>
 
-          {/* Two-Column Split: Left = Calculators (5 cols), Right = SVG Facade & Analytical Plates (7 cols) */}
+          {/* Two-Column Split: Left = Independent Scrollable Calculators (5 cols), Right = SVG Facade & Detail Plate (7 cols) */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            <div className="lg:col-span-5">
+            <div className="lg:col-span-5 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] flex flex-col">
               <CalculatorModules
                 activeModule={activeModule}
                 onSelectModule={(m) => {
@@ -429,6 +554,7 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                 onUpdateParams={handleUpdateParams}
                 onHighlightElement={setHighlightedElement}
                 onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
             </div>
 
@@ -443,6 +569,10 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
                   setActiveModule('entrance');
                 }}
                 onOpenBookPage={onOpenBookPage}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={onUndo}
+                onRedo={onRedo}
               />
 
               {/* Compact Tabular Readout Strip */}
@@ -528,9 +658,13 @@ export function FacadeCalculatorPage({ onOpenBookPage }: FacadeCalculatorPagePro
       )}
 
       {subpage === 'tests' && (
-        <TestCasesVerificationView onLoadCaseOnFacade={handleLoadCaseOnFacade} />
+        <TestCasesVerificationView
+          summary={summary}
+          onLoadCaseOnFacade={handleLoadCaseOnFacade}
+          onHighlightElementOnFacade={handleHighlightElementOnFacade}
+          onOpenBookPage={onOpenBookPage}
+        />
       )}
     </section>
   );
 }
-

@@ -13,7 +13,9 @@ import {
   Maximize2,
   Minimize2,
   Move,
+  Redo2,
   RotateCcw,
+  Undo2,
   X,
   XCircle,
   ZoomIn,
@@ -23,6 +25,9 @@ import {
   formatMeters,
   mergeStatuses,
   resolveEntranceGeometry,
+  resolvePilasterElevationSpans,
+  resolvePilasterXPositions,
+  resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
   type FacadeParameters,
   type FacadeSummary,
@@ -40,6 +45,10 @@ interface FacadeSvgProps {
   onSelectElement?: (el: FacadeTargetElement) => void;
   onSelectEntrance?: () => void;
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 const ELEMENT_LABELS_RU: Record<FacadeTargetElement, string> = {
@@ -80,14 +89,19 @@ export function FacadeSvg({
   onSelectElement,
   onSelectEntrance,
   onOpenBookPage,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
 }: FacadeSvgProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const [hoveredViolation, setHoveredViolation] = useState<{
     element: FacadeTargetElement;
-    x: number;
-    y: number;
+    left: number;
+    top?: number;
+    bottom?: number;
   } | null>(null);
 
   const [view, setView] = useState<{ zoom: number; pan: { x: number; y: number } }>({
@@ -126,31 +140,23 @@ export function FacadeSvg({
   // Общая ширина фасада из DerivedGeometry
   const totalWidthM = summary.derivedGeometry.facadeWidth;
 
-  // Поэтажные отметки из params.levels
-  const groundToFloor1 = Math.max(0.25, params.levels.groundToFloor1);
+  // Поэтажные отметки с учётом масштабирования при ручной H_зд
+  const verticalGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+  const {
+    groundToFloor1,
+    floorHeightsM,
+    floorOffsetsM,
+    wallTopM,
+    corniceM,
+    corniceTopM,
+    totalHeightM,
+  } = verticalGeo;
   const effectiveSocleH = params.useFullFloorAsSocle
-    ? summary.derivedGeometry.floor1FullHeight
+    ? floorOffsetsM.length >= 2
+      ? floorOffsetsM[1]
+      : wallTopM
     : Math.max(0.25, params.hSocle);
-  const corniceM = Math.max(0.2, params.hMain);
-
-  // Высоты каждого этажа снизу вверх (floorIdx 0 = 1-й этаж EG) строго из levels
-  const floorHeightsM = levelFloors
-    .slice(0, safeFloors)
-    .map((fl) => Math.max(1.8, fl.floorToFloor));
-
-  const floorOffsetsM: number[] = [];
-  let cursorM = groundToFloor1;
-  for (let i = 0; i < safeFloors; i++) {
-    floorOffsetsM.push(cursorM);
-    cursorM += floorHeightsM[i];
-  }
-  const wallTopM = cursorM;
   const wallHeightM = wallTopM - groundToFloor1;
-  const corniceTopM = wallTopM + corniceM;
-  const totalHeightM = summary.derivedGeometry.totalHeight;
-  const plinthM = params.useFullFloorAsSocle
-    ? summary.derivedGeometry.floor1FullHeight
-    : Math.min(effectiveSocleH, wallTopM * 0.48);
 
   const svgW = 860;
   const svgH = safeFloors >= 4 ? 540 : 470;
@@ -466,15 +472,17 @@ export function FacadeSvg({
     const violations = getViolationsForElement(el);
     if (violations.length === 0) return;
     cancelHideTimer();
-    const box = containerRef.current?.getBoundingClientRect();
-    const rawX = box ? e.clientX - box.left : 24;
-    const rawY = box ? e.clientY - box.top : 24;
-    const maxW = box ? Math.max(40, box.width - 348) : 400;
-    const maxH = box ? Math.max(40, box.height - 230) : 260;
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const left = Math.max(12, Math.min(e.clientX + 14, vw - 348));
+    const placeAbove = e.clientY + 300 > vh && e.clientY > 240;
+    const top = placeAbove ? undefined : Math.max(12, Math.min(e.clientY + 14, vh - 240));
+    const bottom = placeAbove ? Math.max(12, vh - e.clientY + 12) : undefined;
     setHoveredViolation({
       element: el,
-      x: Math.max(12, Math.min(rawX + 14, maxW)),
-      y: Math.max(12, Math.min(rawY + 14, maxH)),
+      left,
+      top,
+      bottom,
     });
   };
 
@@ -640,12 +648,39 @@ export function FacadeSvg({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           <div className="hidden sm:flex items-center gap-3 text-[11px] font-mono tabular-nums pr-2 border-r border-[#D6CEBE]">
             <span className="text-[#15803D]">■ OK</span>
             <span className="text-[#B45309]">▲ ПРИБЛ.</span>
             <span className="text-[#B91C1C]">✕ НАРУШЕНИЕ</span>
           </div>
+
+          {(onUndo || onRedo) && (
+            <div className="inline-flex items-center gap-1 pr-2 border-r border-[#D6CEBE] font-mono text-[11px]">
+              <button
+                type="button"
+                onClick={onUndo}
+                disabled={!canUndo}
+                title="Шаг назад — отменить последнее изменение"
+                aria-label="Шаг назад"
+                className="inline-flex items-center gap-1 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">Назад</span>
+              </button>
+              <button
+                type="button"
+                onClick={onRedo}
+                disabled={!canRedo}
+                title="Шаг вперёд — вернуть отменённое изменение"
+                aria-label="Шаг вперёд"
+                className="inline-flex items-center gap-1 px-2 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">Вперёд</span>
+              </button>
+            </div>
+          )}
 
           {/* Zoom / Pan / Fullscreen Controls */}
           <div className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums">
@@ -807,61 +842,57 @@ export function FacadeSvg({
               }
               strokeWidth={isHi('socle') || socleStatus === 'violation' ? 1.8 : 1.2}
             />
-            {!params.useFullFloorAsSocle && (
-              <>
-                <rect
-                  x={xM(0) - 5}
-                  y={yFromGroundM(visualSocleTopM)}
-                  width={facadePxW + 10}
-                  height={deckPxH}
-                  fill="#DDD4C0"
-                  stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
-                  strokeWidth={0.95}
+            <rect
+              x={xM(0) - 5}
+              y={yFromGroundM(visualSocleTopM)}
+              width={facadePxW + 10}
+              height={deckPxH}
+              fill="#DDD4C0"
+              stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+              strokeWidth={0.95}
+            />
+            {Array.from({ length: Math.max(0, rustCourses - 1) }).map((_, rIdx) => {
+              const lineY =
+                yFromGroundM(visualSocleTopM) + deckPxH + ((rIdx + 1) / rustCourses) * rumpfPxH;
+              return (
+                <line
+                  key={rIdx}
+                  x1={xM(0) - 2}
+                  y1={lineY}
+                  x2={xM(0) + facadePxW + 2}
+                  y2={lineY}
+                  stroke="#78716C"
+                  strokeOpacity={0.55}
+                  strokeWidth={0.8}
                 />
-                {Array.from({ length: Math.max(0, rustCourses - 1) }).map((_, rIdx) => {
-                  const lineY =
-                    yFromGroundM(visualSocleTopM) + deckPxH + ((rIdx + 1) / rustCourses) * rumpfPxH;
-                  return (
-                    <line
-                      key={rIdx}
-                      x1={xM(0) - 2}
-                      y1={lineY}
-                      x2={xM(0) + facadePxW + 2}
-                      y2={lineY}
-                      stroke="#78716C"
-                      strokeOpacity={0.55}
-                      strokeWidth={0.8}
-                    />
-                  );
-                })}
-                <rect
-                  x={xM(0) - 5}
-                  y={groundY - fussPxH}
-                  width={facadePxW + 10}
-                  height={fussPxH}
-                  fill="#D6CEBE"
-                  stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
-                  strokeWidth={0.95}
-                />
-                <rect
-                  x={xM(0) + 6}
-                  y={yFromGroundM(visualSocleTopM / 2) - 6}
-                  width={185}
-                  height={12}
-                  fill="#FBF9F5"
-                  fillOpacity={0.82}
-                />
-                <text
-                  x={xM(0) + 10}
-                  y={yFromGroundM(visualSocleTopM / 2) + 3}
-                  fontSize="9"
-                  fontFamily="IBM Plex Mono, monospace"
-                  fill={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
-                >
-                  Цоколь {formatMeters(effectiveSocleH)} м ({summary.rusticationCheck.n} ряд.)
-                </text>
-              </>
-            )}
+              );
+            })}
+            <rect
+              x={xM(0) - 5}
+              y={groundY - fussPxH}
+              width={facadePxW + 10}
+              height={fussPxH}
+              fill="#D6CEBE"
+              stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+              strokeWidth={0.95}
+            />
+            <rect
+              x={xM(0) + 6}
+              y={yFromGroundM(visualSocleTopM / 2) - 6}
+              width={185}
+              height={12}
+              fill="#FBF9F5"
+              fillOpacity={0.82}
+            />
+            <text
+              x={xM(0) + 10}
+              y={yFromGroundM(visualSocleTopM / 2) + 3}
+              fontSize="9"
+              fontFamily="IBM Plex Mono, monospace"
+              fill={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+            >
+              Цоколь {formatMeters(effectiveSocleH)} м ({summary.rusticationCheck.n} ряд.)
+            </text>
           </g>
 
           {/* Highlight overlay: Corner pier (left) */}
@@ -1191,64 +1222,74 @@ export function FacadeSvg({
               );
             })}
 
-          {/* Corner Pilasters / Mauerpfeiler (низ пилястр не может быть ниже верха цоколя) */}
-          {soclePilasterBounds.hasUpperPilasters &&
-            [0, totalWidthM - pilasterW].map((pxStart, idx) => {
-            const xLeft = xM(pxStart);
-            const yTop = yFromGroundM(soclePilasterBounds.pilasterTopM);
-            const yBot = yFromGroundM(soclePilasterBounds.pilasterBottomM);
-            const hPx = Math.max(4, yBot - yTop);
-            const capH = params.isMauerpfeiler ? 0 : Math.min(18, hPx * 0.08);
-            const baseH = params.isMauerpfeiler ? 0 : Math.min(14, hPx * 0.06);
+          {/* Pilasters / Mauerpfeiler (поэтажные диапазоны >= верха цоколя; по краям или в каждом простенке) */}
+          {(() => {
+            const pilasterSpans = resolvePilasterElevationSpans(params, summary.derivedGeometry);
+            const pilasterXPositions = resolvePilasterXPositions(
+              params,
+              totalWidthM,
+              axesM,
+              pilasterW
+            );
             const strokeCol =
               isHi('pilaster') || pilasterStatus === 'violation'
                 ? STATUS_STROKE[pilasterStatus]
                 : '#57534E';
-            return (
-              <g
-                key={idx}
-                className="cursor-pointer"
-                onClick={() => onSelectElement?.('pilaster')}
-                {...violationHoverProps('pilaster')}
-              >
-                <rect
-                  x={xLeft}
-                  y={yTop + capH}
-                  width={pilasterPxW}
-                  height={Math.max(4, hPx - capH - baseH)}
-                  fill={
-                    isHi('pilaster') || pilasterStatus === 'violation'
-                      ? STATUS_FILL[pilasterStatus]
-                      : '#EAE3D3'
-                  }
-                  stroke={strokeCol}
-                  strokeWidth={isHi('pilaster') || pilasterStatus === 'violation' ? 1.6 : 1}
-                />
-                {!params.isMauerpfeiler && (
-                  <>
+            return pilasterSpans.map((span, spanIdx) => {
+              const yTop = yFromGroundM(span.topM);
+              const yBot = yFromGroundM(span.bottomM);
+              const hPx = Math.max(4, yBot - yTop);
+              const capH = params.isMauerpfeiler ? 0 : Math.min(18, hPx * 0.08);
+              const baseH = params.isMauerpfeiler ? 0 : Math.min(14, hPx * 0.06);
+              return pilasterXPositions.map((px, posIdx) => {
+                const xLeft = xM(px.xStartM);
+                return (
+                  <g
+                    key={`pil-${spanIdx}-${posIdx}`}
+                    className="cursor-pointer"
+                    onClick={() => onSelectElement?.('pilaster')}
+                    {...violationHoverProps('pilaster')}
+                  >
                     <rect
-                      x={xLeft - 2}
-                      y={yTop}
-                      width={pilasterPxW + 4}
-                      height={capH}
-                      fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
+                      x={xLeft}
+                      y={yTop + capH}
+                      width={pilasterPxW}
+                      height={Math.max(4, hPx - capH - baseH)}
+                      fill={
+                        isHi('pilaster') || pilasterStatus === 'violation'
+                          ? STATUS_FILL[pilasterStatus]
+                          : '#EAE3D3'
+                      }
                       stroke={strokeCol}
-                      strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
+                      strokeWidth={isHi('pilaster') || pilasterStatus === 'violation' ? 1.6 : 1}
                     />
-                    <rect
-                      x={xLeft - 2}
-                      y={yTop + hPx - baseH}
-                      width={pilasterPxW + 4}
-                      height={baseH}
-                      fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
-                      stroke={strokeCol}
-                      strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
-                    />
-                  </>
-                )}
-              </g>
-            );
-          })}
+                    {!params.isMauerpfeiler && (
+                      <>
+                        <rect
+                          x={xLeft - 2}
+                          y={yTop}
+                          width={pilasterPxW + 4}
+                          height={capH}
+                          fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
+                          stroke={strokeCol}
+                          strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
+                        />
+                        <rect
+                          x={xLeft - 2}
+                          y={yTop + hPx - baseH}
+                          width={pilasterPxW + 4}
+                          height={baseH}
+                          fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
+                          stroke={strokeCol}
+                          strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
+                        />
+                      </>
+                    )}
+                  </g>
+                );
+              });
+            });
+          })()}
 
           {/* Crowning Cornice (Главный карниз) — строго от wallTopM до corniceTopM */}
           <g
@@ -1769,7 +1810,7 @@ export function FacadeSvg({
           </span>
         </div>
 
-        {/* Floating Explanatory Popover for Hovered Violation Element */}
+        {/* Floating Explanatory Popover for Hovered Violation Element (fixed viewport-clamped so never clipped) */}
         {hoveredViolation && activeViolationItems.length > 0 && (
           <div
             role="dialog"
@@ -1777,10 +1818,13 @@ export function FacadeSvg({
             onMouseEnter={cancelHideTimer}
             onMouseLeave={scheduleHideViolation}
             style={{
-              left: `${hoveredViolation.x}px`,
-              top: `${hoveredViolation.y}px`,
+              left: `${hoveredViolation.left}px`,
+              ...(hoveredViolation.top !== undefined ? { top: `${hoveredViolation.top}px` } : {}),
+              ...(hoveredViolation.bottom !== undefined
+                ? { bottom: `${hoveredViolation.bottom}px` }
+                : {}),
             }}
-            className="absolute z-30 w-[332px] max-w-[calc(100%-24px)] border-2 border-[#B91C1C] bg-[#FBF9F5] shadow-lg p-3 space-y-2.5 text-xs cursor-default"
+            className="fixed z-60 w-[332px] max-w-[calc(100vw-24px)] border-2 border-[#B91C1C] bg-[#FBF9F5] shadow-xl p-3 space-y-2.5 text-xs cursor-default"
           >
             <div className="flex items-start justify-between gap-2 pb-1.5 border-b border-[#E5DFD3]">
               <div className="flex items-center gap-1.5 text-[#B91C1C] font-semibold">
