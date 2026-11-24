@@ -538,21 +538,22 @@ export function buildFacadeCadDocument(
           winHMm + uMm * 0.5 + rMm
         );
         // Фриз (если F > 0; при F = 0 карниз ложится прямо на архитрав R)
-        if (fMm > 0.5) {
+        const effectiveFMm = fMm > 0.5 ? Math.max(40, fMm) : 0;
+        if (effectiveFMm > 0) {
           addRect(
             doc,
             layerOpenings,
             winXMm - uMm,
             winYMm + winHMm + rMm,
             winWMm + 2 * uMm,
-            Math.max(40, fMm)
+            effectiveFMm
           );
         }
         // Консоли
         if (params.withConsoles) {
           const consW = Math.max(70, uMm * 0.7);
-          const consH = Math.max(80, fMm + rMm * 0.5);
-          const consY = winYMm + winHMm + rMm + fMm - consH;
+          const consH = Math.max(80, effectiveFMm + rMm * 0.5);
+          const consY = winYMm + winHMm + rMm + effectiveFMm - consH;
           addRect(doc, layerOpenings, winXMm - uMm - consW * 0.4, consY, consW, consH);
           addRect(
             doc,
@@ -563,14 +564,23 @@ export function buildFacadeCadDocument(
             consH
           );
         }
-        // Карниз сандрика
-        addRect(
+        // Карниз сандрика (трапеция в габаритах выноса)
+        const capBotYMm = winYMm + winHMm + rMm + effectiveFMm;
+        const capTopYMm = capBotYMm + Math.max(50, kMm);
+        const capInnerLMm = winXMm - uMm;
+        const capInnerRMm = winXMm + winWMm + uMm;
+        const capOuterLMm = capInnerLMm - kOverhangMm;
+        const capOuterRMm = capInnerRMm + kOverhangMm;
+        addPolylinePoints(
           doc,
           layerOpenings,
-          winXMm - uMm - kOverhangMm,
-          winYMm + winHMm + rMm + fMm,
-          winWMm + 2 * uMm + kOverhangMm * 2,
-          Math.max(50, kMm)
+          [
+            [capInnerLMm, capBotYMm],
+            [capInnerRMm, capBotYMm],
+            [capOuterRMm, capTopYMm],
+            [capOuterLMm, capTopYMm],
+          ],
+          true
         );
       } else if (params.withFraming && uMm > 0) {
         addRect(

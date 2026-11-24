@@ -1483,19 +1483,28 @@ export function FacadeSvg({
                               />
                             </>
                           )}
-                          <rect
-                            x={winX - uPx - kOverhangPx}
-                            y={winY - rPx - fPx - kPx}
-                            width={winWpx + 2 * uPx + kOverhangPx * 2}
-                            height={Math.max(3, kPx)}
-                            fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#DDD4C0'}
-                            stroke={
-                              isHi('entablature') || entablatureStatus === 'violation'
-                                ? STATUS_STROKE[entablatureStatus]
-                                : '#292524'
-                            }
-                            strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.1}
-                          />
+                          {(() => {
+                            const capH = Math.max(3, kPx);
+                            const capBotY = winY - rPx - fPx;
+                            const capTopY = capBotY - capH;
+                            const innerL = winX - uPx;
+                            const innerR = winX + winWpx + uPx;
+                            const outerL = innerL - kOverhangPx;
+                            const outerR = innerR + kOverhangPx;
+                            return (
+                              <polygon
+                                points={`${outerL},${capTopY} ${outerR},${capTopY} ${innerR},${capBotY} ${innerL},${capBotY}`}
+                                fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#DDD4C0'}
+                                stroke={
+                                  isHi('entablature') || entablatureStatus === 'violation'
+                                    ? STATUS_STROKE[entablatureStatus]
+                                    : '#292524'
+                                }
+                                strokeLinejoin="miter"
+                                strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.1}
+                              />
+                            );
+                          })()}
                         </g>
                       )}
 

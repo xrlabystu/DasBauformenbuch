@@ -1263,5 +1263,30 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       assert.ok((parsed.modelSpace?.entities.count ?? 0) >= 8, `Plate ${plateId} should contain geometry`);
     }
   });
+
+  it('33. Карниз сандрика экспортируется и отображается как трапеция (верхнее основание шире нижнего)', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const richParams = { ...base, withFraming: true };
+    const summary = evaluateFacadeSummary(richParams, { expertMode: true });
+    const cad = buildFacadeCadDocument(richParams, summary);
+    const openingPolys = Array.from(cad.modelSpace?.entities ?? []).filter((ent) => {
+      if (ent.layer?.name !== '05_WINDOWS_DOORS') return false;
+      const verts = (ent as unknown as { vertices?: Array<{ location: { x: number; y: number } }> }).vertices;
+      return Boolean(verts && verts.length === 4);
+    });
+    const trapezoids = openingPolys.filter((ent) => {
+      const verts = (ent as unknown as { vertices: Array<{ location: { x: number; y: number } }> }).vertices;
+      const ys = verts.map((v) => v.location.y);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const botPts = verts.filter((v) => Math.abs(v.location.y - minY) < 1e-3);
+      const topPts = verts.filter((v) => Math.abs(v.location.y - maxY) < 1e-3);
+      if (botPts.length !== 2 || topPts.length !== 2) return false;
+      const botW = Math.abs(botPts[1].location.x - botPts[0].location.x);
+      const topW = Math.abs(topPts[1].location.x - topPts[0].location.x);
+      return topW > botW + 10;
+    });
+    assert.equal(trapezoids.length, richParams.axesCount);
+  });
 });
 
