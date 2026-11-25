@@ -3012,7 +3012,9 @@ export function CalculatorModules({
         )}
 
         {/* 4.4 Обрамление окна */}
-        {activeModule === 'framing' && (
+        {activeModule === 'framing' && (() => {
+          const isSandrikDisabled = Boolean(params.withoutSandrik) || params.framingRatio[2] === 0;
+          return (
           <div className="space-y-4">
             <div>
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
@@ -3038,12 +3040,14 @@ export function CalculatorModules({
                   { id: 'by_K', label: 'От модуля K' },
                 ] as const
               ).map((m) => {
-                const isFZeroDisabled = m.id === 'by_F' && params.framingRatio[1] === 0;
+                const isDisabled =
+                  (m.id === 'by_F' && params.framingRatio[1] === 0) ||
+                  (m.id === 'by_K' && isSandrikDisabled);
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    disabled={isFZeroDisabled}
+                    disabled={isDisabled}
                     onClick={() => {
                       setFramingInputMode(m.id);
                       if (m.id === 'by_R') setModuleValue(summary.framingResult.R);
@@ -3062,7 +3066,7 @@ export function CalculatorModules({
               })}
             </div>
 
-            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2">
+            <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2.5">
               <div className="flex items-center gap-2">
                 <label className="block text-xs font-medium text-[#1C1917]">
                   Отношение R : F : K (из текста S. 8)
@@ -3087,6 +3091,7 @@ export function CalculatorModules({
                       disabled={isParamLocked(lockedParams, 'framingRatio')}
                       onClick={() => {
                         const nextRatio: [number, number, number] = [fr.r, fr.f, fr.k];
+                        const effectiveK = params.withoutSandrik ? 0 : fr.k;
                         if (framingInputMode === 'by_F' && fr.f === 0) {
                           setFramingInputMode('by_T');
                           onUpdateParams({ framingRatio: nextRatio });
@@ -3094,7 +3099,7 @@ export function CalculatorModules({
                         }
                         if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
                           const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
-                          const res = framing_from_module(moduleValue, part, fr.r, fr.f, fr.k);
+                          const res = framing_from_module(moduleValue, part, fr.r, fr.f, effectiveK);
                           onUpdateParams({ framingRatio: nextRatio, T: res.T });
                         } else {
                           onUpdateParams({ framingRatio: nextRatio });
@@ -3111,12 +3116,55 @@ export function CalculatorModules({
                   );
                 })}
               </div>
+
+              <label className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5DFD3] text-xs text-[#1C1917] cursor-pointer">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSandrikDisabled}
+                    disabled={isParamLocked(lockedParams, 'withoutSandrik')}
+                    onChange={(e) => {
+                      const disableK = e.target.checked;
+                      const [r, f, k] = params.framingRatio;
+                      if (disableK && framingInputMode === 'by_K') {
+                        setFramingInputMode('by_T');
+                      }
+                      if (!disableK && k === 0) {
+                        onUpdateParams({
+                          withoutSandrik: false,
+                          framingRatio: [r, f, 8],
+                        });
+                        return;
+                      }
+                      if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
+                        const part = framingInputMode === 'by_R' ? 'R' : 'F';
+                        const res = framing_from_module(moduleValue, part, r, f, disableK ? 0 : k);
+                        onUpdateParams({ withoutSandrik: disableK, T: res.T });
+                      } else {
+                        onUpdateParams({ withoutSandrik: disableK });
+                      }
+                    }}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Отключить сандрик (K = 0 — без венчающего карниза)</span>
+                </span>
+                <LockToggleButton
+                  lockKey="withoutSandrik"
+                  locked={isParamLocked(lockedParams, 'withoutSandrik')}
+                  onToggleLock={onToggleLock}
+                  label="Отключение сандрика (K=0)"
+                />
+              </label>
             </div>
 
             {framingInputMode === 'by_T' ? (
               <MeterControl
                 id="calc-T"
-                label="Общая высота сандрика T = R + F + K"
+                label={
+                  isSandrikDisabled
+                    ? 'Общая высота обрамления T = R + F (K = 0)'
+                    : 'Общая высота сандрика T = R + F + K'
+                }
                 value={params.T}
                 min={0.3}
                 max={2.0}
@@ -3137,47 +3185,56 @@ export function CalculatorModules({
                   setModuleValue(val);
                   const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
                   const [r, f, k] = params.framingRatio;
-                  const res = framing_from_module(val, part, r, f, k);
+                  const effectiveK = params.withoutSandrik ? 0 : k;
+                  const res = framing_from_module(val, part, r, f, effectiveK);
                   onUpdateParams({ T: res.T, withFraming: true });
                 }}
               />
             )}
 
-            <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={params.withConsoles}
-                onChange={(e) => onUpdateParams({ withConsoles: e.target.checked })}
-                className="accent-[#9A3412]"
-              />
-              <span>Поддержка карниза консолями (вынос уменьшается до 5/6 · K)</span>
-            </label>
+            {!isSandrikDisabled ? (
+              <>
+                <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.withConsoles}
+                    onChange={(e) => onUpdateParams({ withConsoles: e.target.checked })}
+                    className="accent-[#9A3412]"
+                  />
+                  <span>Поддержка карниза консолями (вынос уменьшается до 5/6 · K)</span>
+                </label>
 
-            {params.withConsoles && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <MeterControl
-                  id="calc-a-front"
-                  label="Отступ спереди a_front"
-                  value={params.a_front}
-                  min={0.01}
-                  max={0.25}
-                  lockKey="a_front"
-                  locked={isParamLocked(lockedParams, 'a_front')}
-                  onToggleLock={onToggleLock}
-                  onChange={(a_front) => onUpdateParams({ a_front })}
-                />
-                <MeterControl
-                  id="calc-a-side"
-                  label="Отступ с боков a_side"
-                  value={params.a_side}
-                  min={0.01}
-                  max={0.25}
-                  lockKey="a_side"
-                  locked={isParamLocked(lockedParams, 'a_side')}
-                  onToggleLock={onToggleLock}
-                  onChange={(a_side) => onUpdateParams({ a_side })}
-                />
-              </div>
+                {params.withConsoles && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <MeterControl
+                      id="calc-a-front"
+                      label="Отступ спереди a_front"
+                      value={params.a_front}
+                      min={0.01}
+                      max={0.25}
+                      lockKey="a_front"
+                      locked={isParamLocked(lockedParams, 'a_front')}
+                      onToggleLock={onToggleLock}
+                      onChange={(a_front) => onUpdateParams({ a_front })}
+                    />
+                    <MeterControl
+                      id="calc-a-side"
+                      label="Отступ с боков a_side"
+                      value={params.a_side}
+                      min={0.01}
+                      max={0.25}
+                      lockKey="a_side"
+                      locked={isParamLocked(lockedParams, 'a_side')}
+                      onToggleLock={onToggleLock}
+                      onChange={(a_side) => onUpdateParams({ a_side })}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[11px] text-[#78716C] bg-[#FBF9F5] border border-[#E5DFD3] px-2.5 py-1.5">
+                Сандрик отключён (K = 0): вынос венчающего карниза и консоли не применяются.
+              </p>
             )}
 
             <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
@@ -3191,14 +3248,19 @@ export function CalculatorModules({
               </div>
               <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
                 <span className="block text-[10px] text-[#78716C]">K (Kranz)</span>
-                <strong>{formatMeters(summary.framingResult.K)} м</strong>
+                <strong>
+                  {formatMeters(summary.framingResult.K)} м
+                  {isSandrikDisabled && <span className="ml-1 text-[10px] text-[#78716C]">(откл.)</span>}
+                </strong>
               </div>
             </div>
 
-            <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5] font-mono text-xs flex flex-wrap justify-between gap-2">
-              <span>Вынос 45°: <strong>{formatMeters(projection_45(summary.framingResult.K))} м</strong></span>
-              <span>С консолями (5/6 K): <strong>{formatMeters(projection_console(summary.framingResult.K))} м</strong></span>
-            </div>
+            {!isSandrikDisabled && (
+              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5] font-mono text-xs flex flex-wrap justify-between gap-2">
+                <span>Вынос 45°: <strong>{formatMeters(projection_45(summary.framingResult.K))} м</strong></span>
+                <span>С консолями (5/6 K): <strong>{formatMeters(projection_console(summary.framingResult.K))} м</strong></span>
+              </div>
+            )}
 
             <WhyBlock
               ruleId="framing_rfk"
@@ -3208,7 +3270,7 @@ export function CalculatorModules({
               explanation={summary.framingResult.explanation}
               onOpenBookPage={onOpenBookPage}
             />
-            {params.withConsoles && (
+            {params.withConsoles && !isSandrikDisabled && (
               <WhyBlock
                 ruleId="console_offset"
                 status={summary.offsetCheck.status}
@@ -3219,7 +3281,8 @@ export function CalculatorModules({
               />
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* 4.5 Пилястр */}
         {activeModule === 'pilaster' && (() => {

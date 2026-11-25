@@ -926,8 +926,9 @@ export function framing_from_T(
   const F = s * f;
   const K = s * k;
   const ratioLabel = `${r}:${f}:${k}`;
-  const isDirectCornice = f === 0;
-  const requiresIncreasedProjection = !isDirectCornice && f > k;
+  const isCorniceAbsent = k <= EPS;
+  const isDirectCornice = !isCorniceAbsent && f <= EPS;
+  const requiresIncreasedProjection = !isCorniceAbsent && !isDirectCornice && f > k;
   const directCorniceNeedsStrongerK = isDirectCornice && k <= r + EPS;
   const status: ValidationStatus =
     T <= 0 || sum <= 0
@@ -938,14 +939,18 @@ export function framing_from_T(
 
   const explanation =
     T <= 0
-      ? 'Общая высота сандрика T должна быть положительной.'
-      : isDirectCornice
-        ? directCorniceNeedsStrongerK
-          ? `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): при узком наличнике карниз должен быть сильнее него (K > R; сейчас K = ${formatMeters(K)} м vs R = ${formatMeters(R)} м).`
-          : `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): R = ${formatMeters(R)} м, K = ${formatMeters(K)} м (> R).`
-        : requiresIncreasedProjection
-          ? `Отношение ${ratioLabel} (фриз выше карниза) допустимо по Brausewetter (S. 8) при условии увеличенного выноса венчающего карниза.`
-          : `При T = ${formatMeters(T)} м и отношении ${ratioLabel} (сумма ${sum}, модуль s = ${formatMeters(s, 5)} м): R = ${formatMeters(R)} м, F = ${formatMeters(F)} м, K = ${formatMeters(K)} м.`;
+      ? 'Общая высота обрамления T должна быть положительной.'
+      : isCorniceAbsent
+        ? f <= EPS
+          ? `Сандрик (венчающий карниз) отключён (K = 0): окно имеет только наличник R = ${formatMeters(R)} м (F = 0, K = 0).`
+          : `Сандрик (венчающий карниз) отключён (K = 0): при T = ${formatMeters(T)} м и отношении ${ratioLabel} наличник R = ${formatMeters(R)} м, фриз F = ${formatMeters(F)} м.`
+        : isDirectCornice
+          ? directCorniceNeedsStrongerK
+            ? `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): при узком наличнике карниз должен быть сильнее него (K > R; сейчас K = ${formatMeters(K)} м vs R = ${formatMeters(R)} м).`
+            : `Карниз уложен прямо на наличник без фриза (F = 0, S. 7–8): R = ${formatMeters(R)} м, K = ${formatMeters(K)} м (> R).`
+          : requiresIncreasedProjection
+            ? `Отношение ${ratioLabel} (фриз выше карниза) допустимо по Brausewetter (S. 8) при условии увеличенного выноса венчающего карниза.`
+            : `При T = ${formatMeters(T)} м и отношении ${ratioLabel} (сумма ${sum}, модуль s = ${formatMeters(s, 5)} м): R = ${formatMeters(R)} м, F = ${formatMeters(F)} м, K = ${formatMeters(K)} м.`;
 
   return {
     R,
@@ -957,9 +962,11 @@ export function framing_from_T(
     requiresIncreasedProjection,
     status,
     explanation,
-    formula: isDirectCornice
-      ? 'F = 0 (карниз прямо по наличнику); K > R при R ≈ w/6 (S. 7–8)'
-      : 's = T / (r + f + k); R = s·r, F = s·f, K = s·k',
+    formula: isCorniceAbsent
+      ? 'K = 0 (сандрик отключён); s = T / (r + f); R = s·r, F = s·f'
+      : isDirectCornice
+        ? 'F = 0 (карниз прямо по наличнику); K > R при R ≈ w/6 (S. 7–8)'
+        : 's = T / (r + f + k); R = s·r, F = s·f, K = s·k',
     page: 'S. 7–8',
   };
 }
@@ -4053,6 +4060,7 @@ export interface FacadeParameters {
   risalitWidth: number;
   T: number;
   framingRatio: [number, number, number];
+  withoutSandrik?: boolean;
   withConsoles: boolean;
   a_front: number;
   a_side: number;
@@ -4303,7 +4311,8 @@ export function evaluateFacadeSummary(
   );
 
   const [r, f, k] = params.framingRatio;
-  const framingResult = framing_from_T(params.T, r, f, k);
+  const effectiveKRatio = params.withoutSandrik ? 0 : k;
+  const framingResult = framing_from_T(params.T, r, f, effectiveKRatio);
   const offsetCheck = check_offset(params.a_front, params.a_side);
 
   const floorCountForPilasters = params.levels.floors.length;
@@ -4637,11 +4646,17 @@ export function evaluateFacadeSummary(
           },
           {
             id: 'framing_rfk',
-            title: 'Сандрик окна (R : F : K и вынос)',
+            title:
+              framingResult.K <= 0
+                ? 'Обрамление окна (сандрик K = 0 отключён)'
+                : 'Сандрик окна (R : F : K и вынос)',
             page: 'S. 7–8',
-            formula: params.withConsoles
-              ? 'R:F:K; v_console = (5/6)·K'
-              : 'R:F:K; v_proj = K (45°)',
+            formula:
+              framingResult.K <= 0
+                ? framingResult.formula
+                : params.withConsoles
+                  ? 'R:F:K; v_console = (5/6)·K'
+                  : 'R:F:K; v_proj = K (45°)',
             valueText: `R=${formatMeters(framingResult.R)}, F=${formatMeters(framingResult.F)}, K=${formatMeters(framingResult.K)} м`,
             status: framingResult.status,
             sourceStatus: 'explicit-verified' as SourceStatus,
@@ -4649,7 +4664,7 @@ export function evaluateFacadeSummary(
             explanation: framingResult.explanation,
             targetElement: 'entablature' as FacadeTargetElement,
           },
-          ...(params.withConsoles
+          ...(params.withConsoles && framingResult.K > 0
             ? [
                 {
                   id: 'console_offset',
@@ -5447,6 +5462,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     risalitWidth: 5.0,
     T: d.T,
     framingRatio: [6, 7, 8],
+    withoutSandrik: false,
     withConsoles: false,
     a_front: 0.06,
     a_side: 0.06,

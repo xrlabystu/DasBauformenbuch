@@ -577,7 +577,7 @@ export function buildFacadeCadDocument(
           );
         }
         // Консоли
-        if (params.withConsoles) {
+        if (params.withConsoles && kMm > 0.5) {
           const consW = Math.max(70, uMm * 0.7);
           const consH = Math.max(80, effectiveFMm + rMm * 0.5);
           const consY = winYMm + winHMm + rMm + effectiveFMm - consH;
@@ -592,23 +592,25 @@ export function buildFacadeCadDocument(
           );
         }
         // Карниз сандрика (трапеция в габаритах выноса)
-        const capBotYMm = winYMm + winHMm + rMm + effectiveFMm;
-        const capTopYMm = capBotYMm + Math.max(50, kMm);
-        const capInnerLMm = winXMm - uMm;
-        const capInnerRMm = winXMm + winWMm + uMm;
-        const capOuterLMm = capInnerLMm - kOverhangMm;
-        const capOuterRMm = capInnerRMm + kOverhangMm;
-        addPolylinePoints(
-          doc,
-          layerOpenings,
-          [
-            [capInnerLMm, capBotYMm],
-            [capInnerRMm, capBotYMm],
-            [capOuterRMm, capTopYMm],
-            [capOuterLMm, capTopYMm],
-          ],
-          true
-        );
+        if (kMm > 0.5) {
+          const capBotYMm = winYMm + winHMm + rMm + effectiveFMm;
+          const capTopYMm = capBotYMm + Math.max(50, kMm);
+          const capInnerLMm = winXMm - uMm;
+          const capInnerRMm = winXMm + winWMm + uMm;
+          const capOuterLMm = capInnerLMm - kOverhangMm;
+          const capOuterRMm = capInnerRMm + kOverhangMm;
+          addPolylinePoints(
+            doc,
+            layerOpenings,
+            [
+              [capInnerLMm, capBotYMm],
+              [capInnerRMm, capBotYMm],
+              [capOuterRMm, capTopYMm],
+              [capOuterLMm, capTopYMm],
+            ],
+            true
+          );
+        }
       } else if (params.withFraming && uMm > 0) {
         addRect(
           doc,
@@ -665,11 +667,11 @@ export function buildFacadeCadDocument(
   const leftChainX = -420;
   const leftShelfX = -1120;
   const datum0M = floorOffsetsM[0] ?? groundToFloor1;
-  const topFloorLvlMm = (floorOffsetsM[floorOffsetsM.length - 1] ?? datum0M) * MM;
+  const wallTopMm = wallTopM * MM;
   const tickSz = 65;
 
-  // Вертикальная связующая линия цепочки отметок
-  addLine(doc, layerDims, leftChainX, 0, leftChainX, topFloorLvlMm);
+  // Вертикальная связующая линия цепочки отметок (от уровня земли до верха верхнего этажа)
+  addLine(doc, layerDims, leftChainX, 0, leftChainX, wallTopMm);
 
   // Отметка уровня земли (отрицательная относительно пола 1-го этажа)
   addLine(doc, layerDims, leftShelfX, 0, 0, 0);
@@ -697,10 +699,10 @@ export function buildFacadeCadDocument(
     }
   );
 
-  // Отметки уровня пола 1-го, 2-го и последующих этажей
-  floorOffsetsM.forEach((floorStartM, flIdx) => {
-    const yLvlMm = floorStartM * MM;
-    const relM = floorStartM - datum0M;
+  // Отметки уровня пола 1-го, 2-го и последующих этажей + верхняя граница верхнего этажа
+  [...floorOffsetsM, wallTopM].forEach((lvlM) => {
+    const yLvlMm = lvlM * MM;
+    const relM = lvlM - datum0M;
     const elevLabel =
       Math.abs(relM) < 0.005 ? '0.00' : `+${formatMeters(relM, 2)}`;
 
@@ -719,6 +721,16 @@ export function buildFacadeCadDocument(
     addText(doc, layerDims, elevLabel, leftChainX - 280, yLvlMm + 70, 130, {
       hAlign: TextHorizontalAlignment.Right,
       vAlign: TextVerticalAlignmentType.Baseline,
+    });
+  });
+
+  // Высоты каждого этажа в размерной цепочке (включая верхний этаж и 1-й в одноэтажном доме)
+  floorOffsetsM.forEach((floorStartM, flIdx) => {
+    const flH = floorHeightsM[flIdx] ?? safeH;
+    const midYMm = (floorStartM + flH / 2) * MM;
+    addText(doc, layerDims, `${formatMeters(flH, 2)} м`, leftChainX - 100, midYMm, 115, {
+      hAlign: TextHorizontalAlignment.Right,
+      vAlign: TextVerticalAlignmentType.Middle,
     });
   });
 

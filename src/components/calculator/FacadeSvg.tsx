@@ -1493,7 +1493,7 @@ export function FacadeSvg({
                               strokeWidth={entablatureStatus === 'violation' ? 1.4 : 0.95}
                             />
                           )}
-                          {params.withConsoles && (
+                          {params.withConsoles && K > 1e-6 && (
                             <>
                               <rect
                                 x={winX - uPx - 3}
@@ -1523,7 +1523,7 @@ export function FacadeSvg({
                               />
                             </>
                           )}
-                          {(() => {
+                          {kPx > 0.01 && (() => {
                             const capH = Math.max(3, kPx);
                             const capBotY = winY - rPx - fPx;
                             const capTopY = capBotY - capH;
@@ -1698,22 +1698,23 @@ export function FacadeSvg({
             const chainX = xM(0) - 18;
             const shelfLeftX = xM(0) - 70;
             const datum0M = floorOffsetsM[0] ?? groundToFloor1;
-            const topFloorY = yFromGroundM(floorOffsetsM[floorOffsetsM.length - 1] ?? datum0M);
+            const chainTopY = yFromGroundM(wallTopM);
             const formatElev = (relM: number) => {
               if (Math.abs(relM) < 0.005) return '0.00';
               const val = formatMeters(Math.abs(relM), 2);
               return relM > 0 ? `+${val}` : `-${val}`;
             };
             const groundElevText = formatElev(-datum0M);
+            const levelHeightsM = [...floorOffsetsM, wallTopM];
 
             return (
               <g aria-label="Размерная цепочка высот слева от фасада">
-                {/* Непрерывная вертикальная линия размерной цепочки от уровня земли до уровня верхнего пола */}
+                {/* Непрерывная вертикальная линия размерной цепочки от уровня земли до верха верхнего этажа */}
                 <line
                   x1={chainX}
                   y1={groundY}
                   x2={chainX}
-                  y2={topFloorY}
+                  y2={chainTopY}
                   stroke="#57534E"
                   strokeWidth={1.05}
                 />
@@ -1763,14 +1764,14 @@ export function FacadeSvg({
                   </text>
                 </g>
 
-                {/* Отметки уровня пола 1-го, 2-го и последующих этажей */}
-                {floorOffsetsM.map((floorStartM, flIdx) => {
-                  const yLvl = yFromGroundM(floorStartM);
-                  const isFloor1 = flIdx === 0;
-                  const elevText = formatElev(floorStartM - datum0M);
+                {/* Отметки уровня пола 1-го, 2-го и последующих этажей + верхняя граница верхнего этажа */}
+                {levelHeightsM.map((lvlM, lvlIdx) => {
+                  const yLvl = yFromGroundM(lvlM);
+                  const isFloor1 = lvlIdx === 0;
+                  const elevText = formatElev(lvlM - datum0M);
                   const strokeCol = isFloor1 ? '#9A3412' : '#44403C';
                   return (
-                    <g key={`elev-lvl-${flIdx}`}>
+                    <g key={`elev-lvl-${lvlIdx}`}>
                       <line
                         x1={shelfLeftX}
                         y1={yLvl}
@@ -1813,6 +1814,38 @@ export function FacadeSvg({
                         fill={strokeCol}
                       >
                         {elevText}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Высота каждого этажа по размерной цепочке (включая верхний этаж и 1-й в одноэтажном доме) */}
+                {floorOffsetsM.map((floorStartM, flIdx) => {
+                  const flH = floorHeightsM[flIdx] ?? safeH;
+                  const yBot = yFromGroundM(floorStartM);
+                  const yTop = yFromGroundM(floorStartM + flH);
+                  const floorPxH = Math.abs(yBot - yTop);
+                  if (floorPxH < 18) return null;
+                  const segY = Math.min((yBot + yTop) / 2 + 3, yBot - 15);
+                  return (
+                    <g key={`elev-seg-h-${flIdx}`}>
+                      <rect
+                        x={chainX - 42}
+                        y={segY - 8.5}
+                        width={37}
+                        height={10.5}
+                        fill="#FBF9F5"
+                        fillOpacity={0.92}
+                      />
+                      <text
+                        x={chainX - 6}
+                        y={segY}
+                        textAnchor="end"
+                        fontSize="8"
+                        fontFamily="IBM Plex Mono, monospace"
+                        fill="#57534E"
+                      >
+                        {formatMeters(flH, 2)} м
                       </text>
                     </g>
                   );

@@ -1397,7 +1397,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(closedBeltPolys.length, 1);
   });
 
-  it('39. Размерная цепочка высот слева от фасада: уровень пола 1-го этажа = 0.00, земля < 0, этажи 2+ > 0', () => {
+  it('39. Размерная цепочка высот слева от фасада: уровень пола 1-го этажа = 0.00, верх верхнего этажа и высоты всех этажей (в т.ч. в 1-этажном)', () => {
     const urban = createDefaultParamsForTypology('urban_house');
     const sum = evaluateFacadeSummary(urban, { expertMode: true });
     const vg = resolveScaledVerticalGeometry(urban, sum.derivedGeometry);
@@ -1417,6 +1417,43 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.ok(
       dimTexts.includes(`+${floor2Rel.toFixed(2)}`),
       `Left datum chain must include 2nd floor +${floor2Rel.toFixed(2)}, got: ${dimTexts.join(', ')}`
+    );
+    const wallTopRel = vg.wallTopM - vg.floorOffsetsM[0];
+    assert.ok(
+      dimTexts.includes(`+${wallTopRel.toFixed(2)}`),
+      `Left datum chain must include top of upper floor +${wallTopRel.toFixed(2)}, got: ${dimTexts.join(', ')}`
+    );
+    for (let flIdx = 0; flIdx < vg.floorHeightsM.length; flIdx += 1) {
+      const flLabel = `${vg.floorHeightsM[flIdx].toFixed(2)} м`;
+      assert.ok(
+        dimTexts.includes(flLabel),
+        `Left floor chain must include floor ${flIdx + 1} height ${flLabel}, got: ${dimTexts.join(', ')}`
+      );
+    }
+
+    // Одноэтажный дом: цепочка также доходит до верха 1-го этажа и содержит размер 1-го этажа
+    const oneStory = {
+      ...urban,
+      ...applyBuildingVariantPreset(urban, 'one-story', 'general'),
+    };
+    const oneSum = evaluateFacadeSummary(oneStory, { expertMode: true });
+    const oneVg = resolveScaledVerticalGeometry(oneStory, oneSum.derivedGeometry);
+    const oneCad = buildFacadeCadDocument(oneStory, oneSum);
+    const oneDimTexts = Array.from(oneCad.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as unknown as { value?: string }).value)
+      .filter((val): val is string => typeof val === 'string');
+
+    assert.ok(oneDimTexts.includes('0.00'));
+    const oneTopRel = oneVg.wallTopM - oneVg.floorOffsetsM[0];
+    assert.ok(
+      oneDimTexts.includes(`+${oneTopRel.toFixed(2)}`),
+      `One-story left chain must include top of 1st floor +${oneTopRel.toFixed(2)}, got: ${oneDimTexts.join(', ')}`
+    );
+    const oneFloor1Label = `${oneVg.floorHeightsM[0].toFixed(2)} м`;
+    assert.ok(
+      oneDimTexts.includes(oneFloor1Label),
+      `One-story left chain must include 1st floor height ${oneFloor1Label}, got: ${oneDimTexts.join(', ')}`
     );
   });
 
@@ -1625,6 +1662,58 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       assert.ok(patch45.beltFloors?.every((v) => !v));
       assert.ok(patch45.pilasterFloors?.every((v) => !v));
     }
+  });
+
+  it('44. Отдельное отключение сандрика (K = 0): расчёт R и F, отсутствие ложных нарушений и трапеций в DWG', () => {
+    const noSandrikWithF = framing_from_T(1.3, 6, 7, 0);
+    assertClose(noSandrikWithF.R, 0.6);
+    assertClose(noSandrikWithF.F, 0.7);
+    assertClose(noSandrikWithF.K, 0);
+    assert.equal(noSandrikWithF.status, 'ok');
+
+    const noSandrikOnlyR = framing_from_T(0.8, 4, 0, 0);
+    assertClose(noSandrikOnlyR.R, 0.8);
+    assertClose(noSandrikOnlyR.F, 0);
+    assertClose(noSandrikOnlyR.K, 0);
+    assert.equal(noSandrikOnlyR.status, 'ok');
+
+    const urban = createDefaultParamsForTypology('urban_house');
+    const paramsNoSandrik = {
+      ...urban,
+      withFraming: true,
+      withoutSandrik: true,
+      T: 1.3,
+      framingRatio: [6, 7, 8] as [number, number, number],
+      withConsoles: true,
+      a_front: 0.02,
+      a_side: 0.08, // не должно давать console_offset при K=0
+    };
+    const sum = evaluateFacadeSummary(paramsNoSandrik, { expertMode: true });
+    assertClose(sum.framingResult.K, 0);
+    assertClose(sum.framingResult.R, 0.6);
+    assertClose(sum.framingResult.F, 0.7);
+    assert.equal(sum.framingResult.status, 'ok');
+    assert.equal(sum.checks.some((c) => c.id === 'console_offset'), false);
+
+    const cad = buildFacadeCadDocument(paramsNoSandrik, sum);
+    const openingPolys = Array.from(cad.modelSpace?.entities ?? []).filter((ent) => {
+      if (ent.layer?.name !== '05_WINDOWS_DOORS') return false;
+      const verts = (ent as unknown as { vertices?: Array<{ location: { x: number; y: number } }> }).vertices;
+      return Boolean(verts && verts.length === 4);
+    });
+    const trapezoids = openingPolys.filter((ent) => {
+      const verts = (ent as unknown as { vertices: Array<{ location: { x: number; y: number } }> }).vertices;
+      const ys = verts.map((v) => v.location.y);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const botPts = verts.filter((v) => Math.abs(v.location.y - minY) < 1e-3);
+      const topPts = verts.filter((v) => Math.abs(v.location.y - maxY) < 1e-3);
+      if (botPts.length !== 2 || topPts.length !== 2) return false;
+      const botW = Math.abs(botPts[1].location.x - botPts[0].location.x);
+      const topW = Math.abs(topPts[1].location.x - topPts[0].location.x);
+      return topW > botW + 10;
+    });
+    assert.equal(trapezoids.length, 0, 'With K=0 no sandrik trapezoids should be emitted in DWG');
   });
 });
 
