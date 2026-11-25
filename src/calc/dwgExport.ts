@@ -282,7 +282,7 @@ export function buildFacadeCadDocument(
 
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const levelFloors = params.levels.floors;
-  const safeFloors = Math.min(6, Math.max(1, levelFloors.length));
+  const safeFloors = Math.min(10, Math.max(1, levelFloors.length));
   const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
   const totalWidthM = summary.derivedGeometry.facadeWidth;
 
@@ -903,7 +903,7 @@ export function downloadFacadeDwg(
   summary: FacadeSummary
 ): void {
   const bytes = exportFacadeToDwg(params, summary);
-  const safeFloors = Math.min(6, Math.max(1, params.levels.floors.length));
+  const safeFloors = Math.min(10, Math.max(1, params.levels.floors.length));
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const fileName = `brausewetter-facade-${safeFloors}et-${safeAxesCount}ax.dwg`;
 

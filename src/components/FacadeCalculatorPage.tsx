@@ -4,13 +4,10 @@ import {
   D_from_A,
   RULES_DATA,
   applyBuildingVariantPreset,
-  buildDefaultLevels,
-  computeDerivedGeometry,
   createDefaultParamsForTypology,
   evaluateFacadeSummary,
   formatMeters,
   getTypology,
-  syncLevelsWithH,
   type BuildingTypeId,
   type BuildingVariant,
   type FacadeParameters,
@@ -19,9 +16,8 @@ import {
   type RuleRecord,
 } from '../calc/rules';
 import {
+  computeNextFacadeParams,
   countLockedParams,
-  filterUnlockedPatch,
-  isParamLocked,
   type LockedParamsMap,
 } from '../calc/paramLocks';
 import type { RuleBookExcerpt } from '../calc/ruleBookRefs';
@@ -90,101 +86,7 @@ const ELEMENT_TO_PLATE: Partial<Record<FacadeTargetElement, AnalyticalPlateId>> 
   belt: 'belt',
 };
 
-function computeNextParams(
-  prev: FacadeParameters,
-  rawPatch: Partial<FacadeParameters>,
-  lockedParams: LockedParamsMap
-): FacadeParameters {
-  const patch = filterUnlockedPatch(prev, rawPatch, lockedParams);
-  if (Object.keys(patch).length === 0) return prev;
-
-  const next: FacadeParameters = { ...prev, ...patch };
-  const isHLocked = isParamLocked(lockedParams, 'H');
-  const isFloorsLocked = isParamLocked(lockedParams, 'floors');
-  const isTotalHeightLocked =
-    isParamLocked(lockedParams, 'totalHeight') ||
-    isParamLocked(lockedParams, 'levels.manualTotalHeight');
-
-  if (patch.levels === undefined) {
-    if (!isFloorsLocked && patch.floors !== undefined && patch.floors !== prev.floors) {
-      const baseLevels = buildDefaultLevels(
-        Math.max(1, Math.round(patch.floors)),
-        isHLocked ? prev.H : next.H,
-        prev.levels.groundToFloor1
-      );
-      next.levels =
-        filterUnlockedPatch(prev, { levels: baseLevels }, lockedParams).levels ?? baseLevels;
-    } else if (!isHLocked && patch.H !== undefined && patch.H !== prev.H) {
-      const synced = syncLevelsWithH(prev.levels, patch.H);
-      next.levels = filterUnlockedPatch(prev, { levels: synced }, lockedParams).levels ?? synced;
-    }
-
-    if (
-      !isTotalHeightLocked &&
-      patch.totalHeight !== undefined &&
-      patch.totalHeight !== prev.totalHeight
-    ) {
-      next.levels = {
-        ...next.levels,
-        manualTotalHeight: patch.totalHeight,
-      };
-    }
-  }
-
-  const D = next.isRisalitCentered ? next.risalitWidth / 2 : D_from_A(next.A, next.k_D);
-  const dg = computeDerivedGeometry(next.levels, next.A, D, next.axesCount, next.hMain);
-
-  if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
-    next.H = dg.H_max;
-  }
-  if (!isFloorsLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
-    next.floors = next.levels.floors.length;
-  }
-  if (!isTotalHeightLocked && (patch.totalHeight === undefined || patch.levels !== undefined)) {
-    next.totalHeight = dg.totalHeight;
-  }
-  if (
-    !isParamLocked(lockedParams, 'beltUpperFloorHeight') &&
-    next.levels.floors[1] &&
-    patch.beltUpperFloorHeight === undefined
-  ) {
-    next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
-  }
-
-  // Синхронизируем массив пилястр по этажам при изменении этажности
-  if (next.pilasterFloors && next.pilasterFloors.length !== next.levels.floors.length) {
-    const hasActivePilaster = next.pilasterFloors.some(Boolean);
-    const resized = Array.from({ length: next.levels.floors.length }, (_, idx) => {
-      if (next.pilastersOnlyOnUpperFloor && next.levels.floors.length >= 2) {
-        return idx === next.levels.floors.length - 1;
-      }
-      if (idx < next.pilasterFloors!.length) return next.pilasterFloors![idx];
-      return hasActivePilaster;
-    });
-    next.pilasterFloors = resized;
-  }
-
-  // Синхронизируем поэтажные межэтажные ленты (только между этажами: длина floors - 1)
-  const boundaryCount = Math.max(0, next.levels.floors.length - 1);
-  if (next.beltFloors && next.beltFloors.length !== boundaryCount) {
-    const resizedBelts = Array.from({ length: boundaryCount }, (_, idx) =>
-      idx < next.beltFloors!.length ? Boolean(next.beltFloors![idx]) : false
-    );
-    next.beltFloors = resizedBelts;
-    if (patch.beltIsAbsent === undefined && patch.beltFloors === undefined) {
-      next.beltIsAbsent = !resizedBelts.some(Boolean);
-    }
-  }
-
-  // Синхронизируем поэтажные высоты подоконников окон
-  if (next.windowSillHeights && next.windowSillHeights.length !== next.levels.floors.length) {
-    next.windowSillHeights = Array.from({ length: next.levels.floors.length }, (_, idx) =>
-      idx < next.windowSillHeights!.length ? next.windowSillHeights![idx] : undefined
-    );
-  }
-
-  return next;
-}
+const computeNextParams = computeNextFacadeParams;
 
 export function FacadeCalculatorPage({
   onOpenBookPage,

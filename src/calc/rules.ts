@@ -253,7 +253,7 @@ export function buildDefaultLevels(
   clearH: number,
   groundToFloor1: number
 ): BuildingLevelsInput {
-  const safeCount = Math.max(1, Math.round(floorsCount));
+  const safeCount = Math.min(10, Math.max(1, Math.round(floorsCount)));
   const slabThickness = 0.35;
   const floors: FloorLevelInput[] = Array.from({ length: safeCount }, (_, idx) => {
     let ch = clearH;
@@ -2507,7 +2507,7 @@ export function resolveScaledVerticalGeometry(
   params: FacadeParameters,
   derivedGeometry: DerivedGeometry
 ): ScaledVerticalGeometry {
-  const safeFloors = Math.min(6, Math.max(1, params.levels.floors.length));
+  const safeFloors = Math.min(10, Math.max(1, params.levels.floors.length));
   const rawGround = Math.max(0.25, params.levels.groundToFloor1);
   const rawFloorHeights = params.levels.floors
     .slice(0, safeFloors)
@@ -4312,7 +4312,10 @@ export function evaluateFacadeSummary(
 
   const [r, f, k] = params.framingRatio;
   const effectiveKRatio = params.withoutSandrik ? 0 : k;
-  const framingResult = framing_from_T(params.T, r, f, effectiveKRatio);
+  const framingResult =
+    r > 0
+      ? framing_from_module(params.u, 'R', r, f, effectiveKRatio)
+      : framing_from_T(params.T, r, f, effectiveKRatio);
   const offsetCheck = check_offset(params.a_front, params.a_side);
 
   const floorCountForPilasters = params.levels.floors.length;
@@ -4657,7 +4660,7 @@ export function evaluateFacadeSummary(
                 : params.withConsoles
                   ? 'R:F:K; v_console = (5/6)·K'
                   : 'R:F:K; v_proj = K (45°)',
-            valueText: `R=${formatMeters(framingResult.R)}, F=${formatMeters(framingResult.F)}, K=${formatMeters(framingResult.K)} м`,
+            valueText: `R=u=${formatMeters(framingResult.R)}, F=${formatMeters(framingResult.F)}, K=${formatMeters(framingResult.K)} м`,
             status: framingResult.status,
             sourceStatus: 'explicit-verified' as SourceStatus,
             priority: 'P0' as RulePriority,
@@ -5377,6 +5380,79 @@ export function applyBuildingVariantPreset(
   };
 }
 
+export function applyFloorCountPreset(
+  prev: FacadeParameters,
+  targetFloors: number
+): Partial<FacadeParameters> {
+  const floors = Math.min(10, Math.max(1, Math.round(targetFloors)));
+  const variant: BuildingVariant =
+    floors === 1 ? 'one-story' : floors === 2 ? 'two-story' : 'multi-story';
+  const multiSub: MultiSub =
+    floors === 3 ? 'three' : floors === 4 || floors === 5 ? 'four-five' : 'general';
+  const preset = getVariantPreset(variant, multiSub);
+
+  const groundInitial =
+    floors === 1 ? Math.max(0.8, prev.levels.groundToFloor1) : Math.max(0.45, prev.levels.groundToFloor1);
+  const levels = buildDefaultLevels(floors, prev.H, groundInitial);
+  const wallTop =
+    levels.groundToFloor1 + levels.floors.reduce((acc, f) => acc + f.floorToFloor, 0);
+
+  const mainShare =
+    preset.rules.mainCornice === 'extrapolated'
+      ? 0.085
+      : (preset.rules.mainCornice.min + preset.rules.mainCornice.max) / 2;
+  const crowningShare =
+    preset.rules.crowning === 'extrapolated'
+      ? 0.06
+      : (preset.rules.crowning.min + preset.rules.crowning.max) / 2;
+  const activeMainShare =
+    prev.corniceVariantMode === 'crowning_only' ? crowningShare : mainShare;
+
+  const totalHeight = wallTop / (1 - activeMainShare);
+  const hMain = totalHeight * activeMainShare;
+  const hSocle = prev.socleMode === 'typical' ? totalHeight / 8 : totalHeight / 6;
+
+  const floor1F2F = levels.floors[0]?.floorToFloor ?? prev.H + 0.35;
+  const hGurt =
+    preset.rules.gurt === null ? 0 : Math.min(floor1F2F / 9, hMain * 0.65);
+
+  const prevHadPilasters =
+    prev.pilasterFloors !== undefined
+      ? prev.pilasterFloors.some(Boolean)
+      : prev.pilastersOnlyOnUpperFloor;
+  const nextPilasterFloors = Array.from({ length: floors }, (_, idx) => {
+    if (prev.pilastersOnlyOnUpperFloor && floors >= 2) {
+      return idx === floors - 1;
+    }
+    if (prev.pilasterFloors !== undefined) {
+      if (idx < prev.pilasterFloors.length) return Boolean(prev.pilasterFloors[idx]);
+      return prevHadPilasters;
+    }
+    return false;
+  });
+
+  const nextBeltFloors = Array.from({ length: Math.max(0, floors - 1) }, (_, idx) =>
+    floors === 1 || prev.beltIsAbsent ? false : Boolean(prev.beltFloors?.[idx])
+  );
+
+  return {
+    buildingVariant: variant,
+    multiSub,
+    floors,
+    levels,
+    totalHeight,
+    hSocle,
+    hMain,
+    hGurt,
+    rustRowHeight: Math.min(0.4, Math.max(0.3, hSocle / 5)),
+    useFullFloorAsSocle: floors === 1 ? false : prev.useFullFloorAsSocle,
+    beltIsAbsent: floors === 1 ? true : !nextBeltFloors.some(Boolean),
+    beltFloors: nextBeltFloors,
+    pilasterFloors: nextPilasterFloors,
+    beltUpperFloorHeight: levels.floors[1]?.floorToFloor ?? floor1F2F,
+  };
+}
+
 export function createDefaultParamsForTypology(type: BuildingTypeId): FacadeParameters {
   const preset = getTypology(type);
   const d = preset.defaults;
@@ -5426,6 +5502,10 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
 
   const effectiveU = d.u > 0 ? d.u : Number(((d.w / 6 + d.w / 5) / 2).toFixed(3));
   const hSill = Number(((d.w / 8 + d.w / 7) / 2).toFixed(3));
+  const defaultFramingRatio: [number, number, number] = [6, 7, 8];
+  const syncedT = Number(
+    framing_from_module(effectiveU, 'R', ...defaultFramingRatio).T.toFixed(4)
+  );
 
   const defaultAxesCount = buildingVariant === 'two-story' ? 5 : 3;
   return {
@@ -5460,8 +5540,8 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     k_D: d.k_D,
     isRisalitCentered: false,
     risalitWidth: 5.0,
-    T: d.T,
-    framingRatio: [6, 7, 8],
+    T: syncedT,
+    framingRatio: defaultFramingRatio,
     withoutSandrik: false,
     withConsoles: false,
     a_front: 0.06,

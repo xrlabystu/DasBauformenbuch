@@ -8,7 +8,7 @@ import {
   Unlock,
   XCircle,
 } from 'lucide-react';
-import { isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
+import { isFramingRLocked, isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
 import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../../utils/termHighlight';
 import {
@@ -25,6 +25,7 @@ import {
   SOURCE_STATUS_LABELS,
   VARIANT_TEXT_GAPS,
   applyBuildingVariantPreset,
+  applyFloorCountPreset,
   beltHeight,
   formatMeters,
   formatPercent,
@@ -401,7 +402,7 @@ export function CalculatorModules({
   const [customWinM, setCustomWinM] = useState(5);
 
   const [framingInputMode, setFramingInputMode] = useState<'by_T' | 'by_R' | 'by_F' | 'by_K'>('by_T');
-  const [moduleValue, setModuleValue] = useState(0.4);
+  const framingRLocked = isFramingRLocked(lockedParams);
 
   const [isEditingManualHeight, setIsEditingManualHeight] = useState(false);
   const [manualHeightDraft, setManualHeightDraft] = useState<string>(() =>
@@ -732,10 +733,16 @@ export function CalculatorModules({
                     value={params.u}
                     min={0.05}
                     max={0.45}
+                    disabled={isParamLocked(lockedParams, 'T')}
                     lockKey="u"
-                    locked={isParamLocked(lockedParams, 'u')}
+                    locked={framingRLocked}
                     onToggleLock={onToggleLock}
                     onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    note={
+                      isParamLocked(lockedParams, 'T')
+                        ? 'Высота сандрика T в разделе 4.4 закреплена замком — снимите замок с T, чтобы менять u (= R).'
+                        : 'Равна высоте элемента R в разделе 4.4 (одно и то же число и общий замок); норма S. 17: w/6…w/5.'
+                    }
                     onChange={(u) => onUpdateParams({ u })}
                   />
                 )}
@@ -1014,6 +1021,71 @@ export function CalculatorModules({
                   </div>
                 </div>
               )}
+
+              <div className="space-y-2 pt-2 border-t border-[#E5DFD3]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    <span>Количество этажей (1–10)</span>
+                    <LockToggleButton
+                      lockKey="floors"
+                      locked={isParamLocked(lockedParams, 'floors')}
+                      onToggleLock={onToggleLock}
+                      label="Количество этажей"
+                    />
+                  </span>
+                  <span className="font-mono text-xs font-semibold text-[#1C1917] tabular-nums">
+                    {params.levels.floors.length} эт.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="range"
+                    aria-label="Количество этажей от 1 до 10"
+                    min={1}
+                    max={10}
+                    step={1}
+                    disabled={isParamLocked(lockedParams, 'floors')}
+                    value={params.levels.floors.length}
+                    onChange={(e) =>
+                      onUpdateParams(applyFloorCountPreset(params, Number(e.target.value)))
+                    }
+                    className="w-full accent-[#9A3412] disabled:opacity-45"
+                  />
+                  <input
+                    type="number"
+                    aria-label="Точное количество этажей"
+                    min={1}
+                    max={10}
+                    step={1}
+                    disabled={isParamLocked(lockedParams, 'floors')}
+                    value={params.levels.floors.length}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (Number.isFinite(val)) {
+                        onUpdateParams(applyFloorCountPreset(params, val));
+                      }
+                    }}
+                    className="w-14 px-2 py-1 text-xs font-mono text-right border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
+                  />
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((fl) => (
+                    <button
+                      key={fl}
+                      type="button"
+                      disabled={isParamLocked(lockedParams, 'floors')}
+                      onClick={() => onUpdateParams(applyFloorCountPreset(params, fl))}
+                      className={`px-2 py-1 text-[11px] font-mono border transition-colors disabled:opacity-45 ${
+                        params.levels.floors.length === fl
+                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                          : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                      }`}
+                    >
+                      {fl} эт.
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {params.buildingVariant === 'multi-story' && params.multiSub === 'three' && (
                 <div>
@@ -3035,7 +3107,7 @@ export function CalculatorModules({
               {(
                 [
                   { id: 'by_T', label: 'По общей высоте T' },
-                  { id: 'by_R', label: 'От модуля R' },
+                  { id: 'by_R', label: 'От модуля R (= u)' },
                   { id: 'by_F', label: 'От модуля F' },
                   { id: 'by_K', label: 'От модуля K' },
                 ] as const
@@ -3048,12 +3120,7 @@ export function CalculatorModules({
                     key={m.id}
                     type="button"
                     disabled={isDisabled}
-                    onClick={() => {
-                      setFramingInputMode(m.id);
-                      if (m.id === 'by_R') setModuleValue(summary.framingResult.R);
-                      if (m.id === 'by_F') setModuleValue(summary.framingResult.F);
-                      if (m.id === 'by_K') setModuleValue(summary.framingResult.K);
-                    }}
+                    onClick={() => setFramingInputMode(m.id)}
                     className={`px-2.5 py-1 text-[11px] font-medium border disabled:opacity-45 ${
                       framingInputMode === m.id
                         ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
@@ -3088,7 +3155,10 @@ export function CalculatorModules({
                     <button
                       key={fr.label}
                       type="button"
-                      disabled={isParamLocked(lockedParams, 'framingRatio')}
+                      disabled={
+                        isParamLocked(lockedParams, 'framingRatio') ||
+                        (framingRLocked && isParamLocked(lockedParams, 'T'))
+                      }
                       onClick={() => {
                         const nextRatio: [number, number, number] = [fr.r, fr.f, fr.k];
                         const effectiveK = params.withoutSandrik ? 0 : fr.k;
@@ -3097,10 +3167,22 @@ export function CalculatorModules({
                           onUpdateParams({ framingRatio: nextRatio });
                           return;
                         }
-                        if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
-                          const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
-                          const res = framing_from_module(moduleValue, part, fr.r, fr.f, effectiveK);
-                          onUpdateParams({ framingRatio: nextRatio, T: res.T });
+                        if (
+                          (framingInputMode === 'by_F' || framingInputMode === 'by_K') &&
+                          !isParamLocked(lockedParams, 'T') &&
+                          !framingRLocked
+                        ) {
+                          const part = framingInputMode === 'by_F' ? 'F' : 'K';
+                          const anchorVal =
+                            framingInputMode === 'by_F'
+                              ? summary.framingResult.F
+                              : summary.framingResult.K;
+                          const res = framing_from_module(anchorVal, part, fr.r, fr.f, effectiveK);
+                          onUpdateParams({
+                            framingRatio: nextRatio,
+                            u: Number(res.R.toFixed(4)),
+                            T: Number(res.T.toFixed(4)),
+                          });
                         } else {
                           onUpdateParams({ framingRatio: nextRatio });
                         }
@@ -3122,7 +3204,10 @@ export function CalculatorModules({
                   <input
                     type="checkbox"
                     checked={isSandrikDisabled}
-                    disabled={isParamLocked(lockedParams, 'withoutSandrik')}
+                    disabled={
+                      isParamLocked(lockedParams, 'withoutSandrik') ||
+                      (framingRLocked && isParamLocked(lockedParams, 'T'))
+                    }
                     onChange={(e) => {
                       const disableK = e.target.checked;
                       const [r, f, k] = params.framingRatio;
@@ -3136,10 +3221,23 @@ export function CalculatorModules({
                         });
                         return;
                       }
-                      if (framingInputMode !== 'by_T' && !isParamLocked(lockedParams, 'T')) {
-                        const part = framingInputMode === 'by_R' ? 'R' : 'F';
-                        const res = framing_from_module(moduleValue, part, r, f, disableK ? 0 : k);
-                        onUpdateParams({ withoutSandrik: disableK, T: res.T });
+                      if (
+                        framingInputMode === 'by_F' &&
+                        !isParamLocked(lockedParams, 'T') &&
+                        !framingRLocked
+                      ) {
+                        const res = framing_from_module(
+                          summary.framingResult.F,
+                          'F',
+                          r,
+                          f,
+                          disableK ? 0 : k
+                        );
+                        onUpdateParams({
+                          withoutSandrik: disableK,
+                          u: Number(res.R.toFixed(4)),
+                          T: Number(res.T.toFixed(4)),
+                        });
                       } else {
                         onUpdateParams({ withoutSandrik: disableK });
                       }
@@ -3165,29 +3263,68 @@ export function CalculatorModules({
                     ? 'Общая высота обрамления T = R + F (K = 0)'
                     : 'Общая высота сандрика T = R + F + K'
                 }
-                value={params.T}
-                min={0.3}
+                value={summary.framingResult.T}
+                min={0.15}
                 max={2.0}
+                disabled={framingRLocked}
                 lockKey="T"
                 locked={isParamLocked(lockedParams, 'T')}
                 onToggleLock={onToggleLock}
+                note={
+                  framingRLocked
+                    ? 'Наличник R (= u) закреплён замком — снимите замок с R / u, чтобы менять общую высоту T.'
+                    : 'Элемент R всегда равен ширине обрамления u (раздел 4.1); изменение T пересчитывает u = R.'
+                }
                 onChange={(T) => onUpdateParams({ T, withFraming: true })}
+              />
+            ) : framingInputMode === 'by_R' ? (
+              <MeterControl
+                id="calc-R-u"
+                label="Высота/ширина наличника R (= u, Rahmen)"
+                value={params.u}
+                min={0.05}
+                max={0.45}
+                disabled={isParamLocked(lockedParams, 'T')}
+                lockKey="u"
+                locked={framingRLocked}
+                onToggleLock={onToggleLock}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                note={
+                  isParamLocked(lockedParams, 'T')
+                    ? 'Общая высота сандрика T закреплена замком — снимите замок с T, чтобы менять R (= u).'
+                    : 'То же число, что и «Ширина обрамления с одной стороны u» в разделе 4.1 (общий замок).'
+                }
+                onChange={(u) => onUpdateParams({ u, withFraming: true })}
               />
             ) : (
               <MeterControl
                 id="calc-module-val"
-                label={`Заданный модуль ${framingInputMode.slice(-1)}`}
-                value={moduleValue}
-                min={0.1}
+                label={`Заданный модуль ${framingInputMode === 'by_F' ? 'F (Fries)' : 'K (Kranz)'}`}
+                value={
+                  framingInputMode === 'by_F'
+                    ? summary.framingResult.F
+                    : summary.framingResult.K
+                }
+                min={0.05}
                 max={1.0}
-                disabled={isParamLocked(lockedParams, 'T')}
+                disabled={isParamLocked(lockedParams, 'T') || framingRLocked}
+                note={
+                  framingRLocked
+                    ? 'Наличник R (= u) закреплён замком — снимите замок с R / u, чтобы масштабировать модули.'
+                    : isParamLocked(lockedParams, 'T')
+                      ? 'Общая высота T закреплена замком — снимите замок с T, чтобы менять модуль.'
+                      : undefined
+                }
                 onChange={(val) => {
-                  setModuleValue(val);
-                  const part = framingInputMode === 'by_R' ? 'R' : framingInputMode === 'by_F' ? 'F' : 'K';
+                  const part = framingInputMode === 'by_F' ? 'F' : 'K';
                   const [r, f, k] = params.framingRatio;
                   const effectiveK = params.withoutSandrik ? 0 : k;
                   const res = framing_from_module(val, part, r, f, effectiveK);
-                  onUpdateParams({ T: res.T, withFraming: true });
+                  onUpdateParams({
+                    u: Number(res.R.toFixed(4)),
+                    T: Number(res.T.toFixed(4)),
+                    withFraming: true,
+                  });
                 }}
               />
             )}
@@ -3238,15 +3375,29 @@ export function CalculatorModules({
             )}
 
             <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
-              <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C]">R (Rahmen)</span>
+              <div
+                className={`p-2 border ${
+                  framingRLocked
+                    ? 'border-[#9A3412]/45 bg-[#9A3412]/[0.05]'
+                    : 'border-[#E5DFD3] bg-[#FBF9F5]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1 mb-0.5">
+                  <span className="text-[10px] text-[#78716C]">R = u (Rahmen)</span>
+                  <LockToggleButton
+                    lockKey="u"
+                    locked={framingRLocked}
+                    onToggleLock={onToggleLock}
+                    label="Наличник R (= u, Rahmen)"
+                  />
+                </div>
                 <strong>{formatMeters(summary.framingResult.R)} м</strong>
               </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+              <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] flex flex-col justify-between">
                 <span className="block text-[10px] text-[#78716C]">F (Fries)</span>
                 <strong>{formatMeters(summary.framingResult.F)} м</strong>
               </div>
-              <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+              <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] flex flex-col justify-between">
                 <span className="block text-[10px] text-[#78716C]">K (Kranz)</span>
                 <strong>
                   {formatMeters(summary.framingResult.K)} м
@@ -3962,15 +4113,15 @@ export function CalculatorModules({
                     label="Число этажей"
                   />
                 </span>
-                <div className="flex flex-wrap gap-1">
-                  {[1, 2, 3, 4, 5].map((fl) => (
+                <div className="grid grid-cols-5 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((fl) => (
                     <button
                       key={fl}
                       type="button"
                       disabled={isParamLocked(lockedParams, 'floors')}
-                      onClick={() => onUpdateParams({ floors: fl })}
-                      className={`px-2.5 py-1 text-[11px] font-mono border disabled:opacity-45 ${
-                        params.floors === fl
+                      onClick={() => onUpdateParams(applyFloorCountPreset(params, fl))}
+                      className={`px-2 py-1 text-[11px] font-mono border disabled:opacity-45 ${
+                        params.levels.floors.length === fl
                           ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
                           : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
                       }`}

@@ -17,6 +17,7 @@ import {
   abkroepfungPreference,
   allowedAxisRatio,
   applyBuildingVariantPreset,
+  applyFloorCountPreset,
   beltAsRustication,
   beltCrowningSplit,
   beltHeight,
@@ -106,7 +107,13 @@ import {
   w_from_h_ratio,
   w_max_from_A,
 } from './rules.ts';
-import { countLockedParams, filterUnlockedPatch, isParamLocked } from './paramLocks.ts';
+import {
+  computeNextFacadeParams,
+  countLockedParams,
+  filterUnlockedPatch,
+  isFramingRLocked,
+  isParamLocked,
+} from './paramLocks.ts';
 import {
   RULE_BOOK_EXCERPTS,
   getExcerptForCatalogRule,
@@ -1682,6 +1689,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       ...urban,
       withFraming: true,
       withoutSandrik: true,
+      u: 0.6,
       T: 1.3,
       framingRatio: [6, 7, 8] as [number, number, number],
       withConsoles: true,
@@ -1714,6 +1722,119 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       return topW > botW + 10;
     });
     assert.equal(trapezoids.length, 0, 'With K=0 no sandrik trapezoids should be emitted in DWG');
+  });
+
+  it('45. Изменение этажности от 1 до 10 этажей (applyFloorCountPreset, геометрия и DWG)', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+
+    // Кламп за пределами 1..10
+    assert.equal(applyFloorCountPreset(base, 0).floors, 1);
+    assert.equal(applyFloorCountPreset(base, 15).floors, 10);
+
+    // 1 этаж
+    const p1 = { ...base, ...applyFloorCountPreset(base, 1) };
+    assert.equal(p1.floors, 1);
+    assert.equal(p1.buildingVariant, 'one-story');
+    assert.equal(p1.levels.floors.length, 1);
+    assert.equal(p1.beltIsAbsent, true);
+
+    // 7 этажей (ранее было ограничено 6 этажами)
+    const p7 = { ...base, ...applyFloorCountPreset(base, 7) };
+    assert.equal(p7.floors, 7);
+    assert.equal(p7.buildingVariant, 'multi-story');
+    assert.equal(p7.multiSub, 'general');
+    const sum7 = evaluateFacadeSummary(p7, { expertMode: true });
+    const vg7 = resolveScaledVerticalGeometry(p7, sum7.derivedGeometry);
+    assert.equal(vg7.floorOffsetsM.length, 7);
+    assert.equal(vg7.floorHeightsM.length, 7);
+
+    // 10 этажей: все 10 этажей строятся и экспортируются в DWG
+    const p10 = { ...base, ...applyFloorCountPreset(base, 10) };
+    assert.equal(p10.floors, 10);
+    assert.equal(p10.levels.floors.length, 10);
+    assert.equal(p10.pilasterFloors?.length, 10);
+    assert.ok(p10.pilasterFloors?.every((v) => !v));
+    assert.equal(p10.beltFloors?.length, 9);
+    assert.ok(p10.beltFloors?.every((v) => !v));
+
+    const sum10 = evaluateFacadeSummary(p10, { expertMode: true });
+    const vg10 = resolveScaledVerticalGeometry(p10, sum10.derivedGeometry);
+    assert.equal(vg10.floorOffsetsM.length, 10);
+    assert.equal(vg10.floorHeightsM.length, 10);
+
+    const cad10 = buildFacadeCadDocument(p10, sum10);
+    const noteTexts = Array.from(cad10.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '09_ANNOTATIONS')
+      .map((ent) => (ent as unknown as { value?: string }).value)
+      .filter((val): val is string => typeof val === 'string');
+    assert.ok(noteTexts.some((t) => t.includes('10 эт.')), 'DWG must include 10th floor tag');
+    assert.ok(noteTexts.some((t) => t.includes('(10 эт.,')), 'DWG footer must state 10 floors');
+  });
+
+  it('46. Элемент R (4.4) всегда равен ширине обрамления u (4.1) в расчётах, пресетах и общих замках', () => {
+    // 1. Все типологии по умолчанию имеют согласованные R === u и T === R + F + K
+    for (const typo of RULES_DATA.typologies) {
+      const def = createDefaultParamsForTypology(typo.id);
+      const sum = evaluateFacadeSummary(def, { expertMode: true });
+      assertClose(sum.framingResult.R, def.u);
+      assertClose(sum.framingResult.T, def.T);
+    }
+
+    // 2. Прямое вычисление в evaluateFacadeSummary всегда берёт R = params.u
+    const base = createDefaultParamsForTypology('urban_house');
+    const directU = { ...base, withFraming: true, u: 0.24 };
+    const directSum = evaluateFacadeSummary(directU, { expertMode: true });
+    assertClose(directSum.framingResult.R, 0.24);
+    assertClose(directSum.framingResult.F, 0.28);
+    assertClose(directSum.framingResult.K, 0.32);
+    assertClose(directSum.framingResult.T, 0.84);
+
+    // 3. Изменение u (4.1 / 4.4) обновляет T; изменение T (4.4) обновляет u = R
+    const afterU = computeNextFacadeParams(base, { u: 0.3 }, {});
+    assertClose(afterU.u, 0.3);
+    assertClose(afterU.T, 1.05);
+    assertClose(evaluateFacadeSummary(afterU).framingResult.R, 0.3);
+
+    const afterT = computeNextFacadeParams(afterU, { T: 1.26 }, {});
+    assertClose(afterT.u, 0.36);
+    assertClose(evaluateFacadeSummary(afterT).framingResult.R, 0.36);
+
+    // 4. Отключение сандрика (K=0) при незакреплённом T сохраняет u = R и уменьшает T до R + F
+    const noSandrik = computeNextFacadeParams(afterU, { withoutSandrik: true }, {});
+    assertClose(noSandrik.u, 0.3);
+    assertClose(noSandrik.T, 0.65);
+    const noSandrikSum = evaluateFacadeSummary(noSandrik);
+    assertClose(noSandrikSum.framingResult.R, 0.3);
+    assertClose(noSandrikSum.framingResult.F, 0.35);
+    assertClose(noSandrikSum.framingResult.K, 0);
+
+    // 5. Общий замок на u / R блокирует изменение и через u, и через T, и при смене типологии
+    const sharedLocks = { u: true };
+    assert.equal(isFramingRLocked(sharedLocks), true);
+    assert.equal(isFramingRLocked({ R: true }), true);
+
+    const lockedTryU = computeNextFacadeParams(afterU, { u: 0.15 }, sharedLocks);
+    assertClose(lockedTryU.u, 0.3);
+
+    const lockedTryT = computeNextFacadeParams(afterU, { T: 1.4 }, sharedLocks);
+    assertClose(lockedTryT.u, 0.3);
+    assertClose(lockedTryT.T, 1.05);
+
+    const palacePreset = createDefaultParamsForTypology('palace');
+    const lockedSwitchTypo = computeNextFacadeParams(afterU, palacePreset, sharedLocks);
+    assertClose(lockedSwitchTypo.u, 0.3);
+    assertClose(lockedSwitchTypo.T, 1.05);
+    assertClose(evaluateFacadeSummary(lockedSwitchTypo).framingResult.R, 0.3);
+
+    // 6. При закреплённом T и свободном u: смена пропорции R:F:K пересчитывает u = R, сохраняя T
+    const tLockedState = computeNextFacadeParams(
+      afterU,
+      { framingRatio: [1, 1, 1] },
+      { T: true }
+    );
+    assertClose(tLockedState.T, 1.05);
+    assertClose(tLockedState.u, 0.35);
+    assertClose(evaluateFacadeSummary(tLockedState).framingResult.R, 0.35);
   });
 });
 

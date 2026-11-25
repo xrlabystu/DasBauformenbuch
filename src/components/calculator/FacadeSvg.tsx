@@ -139,7 +139,7 @@ export function FacadeSvg({
 
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const levelFloors = params.levels.floors;
-  const safeFloors = Math.min(6, Math.max(1, levelFloors.length));
+  const safeFloors = Math.min(10, Math.max(1, levelFloors.length));
   const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
 
   // Общая ширина фасада из DerivedGeometry
@@ -164,7 +164,7 @@ export function FacadeSvg({
   const wallHeightM = wallTopM - groundToFloor1;
 
   const svgW = 928;
-  const svgH = safeFloors >= 4 ? 540 : 470;
+  const svgH = safeFloors >= 7 ? 620 : safeFloors >= 4 ? 540 : 470;
   const padLeft = 152;
   const padRight = 104;
   const padTop = 64;

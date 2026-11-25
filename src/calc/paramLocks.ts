@@ -1,4 +1,14 @@
-import type { BuildingLevelsInput, FacadeParameters, ThreePartSocleParts } from './rules';
+import {
+  D_from_A,
+  buildDefaultLevels,
+  computeDerivedGeometry,
+  framing_from_T,
+  framing_from_module,
+  syncLevelsWithH,
+  type BuildingLevelsInput,
+  type FacadeParameters,
+  type ThreePartSocleParts,
+} from './rules';
 
 export type LockedParamsMap = Record<string, boolean>;
 
@@ -7,6 +17,14 @@ export function isParamLocked(
   key: string
 ): boolean {
   return Boolean(locks && locks[key]);
+}
+
+/**
+ * Единый замок для ширины обрамления u (раздел 4.1) и высоты элемента R (раздел 4.4),
+ * так как R и u — одно и то же число.
+ */
+export function isFramingRLocked(locks: LockedParamsMap | undefined): boolean {
+  return Boolean(locks && (locks['u'] || locks['R']));
 }
 
 export function countLockedParams(locks: LockedParamsMap | undefined): number {
@@ -34,6 +52,9 @@ export function filterUnlockedPatch(
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     if (key === 'levels' || key === 'socleParts') continue;
+    if (key === 'u' && (locks['u'] || locks['R'])) {
+      continue;
+    }
     if (locks[key]) {
       continue;
     }
@@ -146,4 +167,153 @@ export function filterUnlockedPatch(
   }
 
   return nextPatch;
+}
+
+/**
+ * Применяет обновление параметров с учётом всех замков и взаимной
+ * синхронизации уровней, проёмов и пары R (= u) / T.
+ */
+export function computeNextFacadeParams(
+  prev: FacadeParameters,
+  rawPatch: Partial<FacadeParameters>,
+  lockedParams: LockedParamsMap
+): FacadeParameters {
+  const patch = filterUnlockedPatch(prev, rawPatch, lockedParams);
+  if (Object.keys(patch).length === 0) return prev;
+
+  const next: FacadeParameters = { ...prev, ...patch };
+  const isHLocked = isParamLocked(lockedParams, 'H');
+  const isFloorsLocked = isParamLocked(lockedParams, 'floors');
+  const isTotalHeightLocked =
+    isParamLocked(lockedParams, 'totalHeight') ||
+    isParamLocked(lockedParams, 'levels.manualTotalHeight');
+
+  if (patch.levels === undefined) {
+    if (!isFloorsLocked && patch.floors !== undefined && patch.floors !== prev.floors) {
+      const baseLevels = buildDefaultLevels(
+        Math.max(1, Math.round(patch.floors)),
+        isHLocked ? prev.H : next.H,
+        prev.levels.groundToFloor1
+      );
+      next.levels =
+        filterUnlockedPatch(prev, { levels: baseLevels }, lockedParams).levels ?? baseLevels;
+    } else if (!isHLocked && patch.H !== undefined && patch.H !== prev.H) {
+      const synced = syncLevelsWithH(prev.levels, patch.H);
+      next.levels = filterUnlockedPatch(prev, { levels: synced }, lockedParams).levels ?? synced;
+    }
+
+    if (
+      !isTotalHeightLocked &&
+      patch.totalHeight !== undefined &&
+      patch.totalHeight !== prev.totalHeight
+    ) {
+      next.levels = {
+        ...next.levels,
+        manualTotalHeight: patch.totalHeight,
+      };
+    }
+  }
+
+  const D = next.isRisalitCentered ? next.risalitWidth / 2 : D_from_A(next.A, next.k_D);
+  const dg = computeDerivedGeometry(next.levels, next.A, D, next.axesCount, next.hMain);
+
+  if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
+    next.H = dg.H_max;
+  }
+  if (!isFloorsLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
+    next.floors = next.levels.floors.length;
+  }
+  if (!isTotalHeightLocked && (patch.totalHeight === undefined || patch.levels !== undefined)) {
+    next.totalHeight = dg.totalHeight;
+  }
+  if (
+    !isParamLocked(lockedParams, 'beltUpperFloorHeight') &&
+    next.levels.floors[1] &&
+    patch.beltUpperFloorHeight === undefined
+  ) {
+    next.beltUpperFloorHeight = next.levels.floors[1].floorToFloor;
+  }
+
+  // Синхронизируем u (= R) и общую высоту сандрика T = R + F + K с учётом общего замка
+  const uLocked = isFramingRLocked(lockedParams);
+  const tLocked = isParamLocked(lockedParams, 'T');
+  const [r, f, k] = next.framingRatio;
+  const effK = next.withoutSandrik ? 0 : k;
+  const uChanged = patch.u !== undefined && Math.abs(patch.u - prev.u) > 1e-7;
+  const tChanged = patch.T !== undefined && Math.abs(patch.T - prev.T) > 1e-7;
+  const ratioOrSandrikChanged =
+    patch.framingRatio !== undefined || patch.withoutSandrik !== undefined;
+
+  if (r > 0 && (uChanged || tChanged || ratioOrSandrikChanged)) {
+    if (uChanged && !tChanged) {
+      if (tLocked) {
+        next.T = prev.T;
+        const res = framing_from_T(prev.T, r, f, effK);
+        next.u = ratioOrSandrikChanged && res.R > 0 ? Number(res.R.toFixed(4)) : prev.u;
+      } else {
+        next.T = Number(framing_from_module(next.u, 'R', r, f, effK).T.toFixed(4));
+      }
+    } else if (tChanged && !uChanged) {
+      if (uLocked) {
+        next.u = prev.u;
+        next.T = Number(framing_from_module(prev.u, 'R', r, f, effK).T.toFixed(4));
+      } else {
+        const res = framing_from_T(next.T, r, f, effK);
+        if (res.R > 0) next.u = Number(res.R.toFixed(4));
+      }
+    } else if (uChanged && tChanged) {
+      if (uLocked) {
+        next.u = prev.u;
+        next.T = Number(framing_from_module(prev.u, 'R', r, f, effK).T.toFixed(4));
+      } else if (tLocked) {
+        next.T = prev.T;
+        const res = framing_from_T(prev.T, r, f, effK);
+        if (res.R > 0) next.u = Number(res.R.toFixed(4));
+      } else {
+        next.T = Number(framing_from_module(next.u, 'R', r, f, effK).T.toFixed(4));
+      }
+    } else if (ratioOrSandrikChanged) {
+      if (tLocked && !uLocked) {
+        next.T = prev.T;
+        const res = framing_from_T(prev.T, r, f, effK);
+        if (res.R > 0) next.u = Number(res.R.toFixed(4));
+      } else {
+        next.T = Number(framing_from_module(next.u, 'R', r, f, effK).T.toFixed(4));
+      }
+    }
+  }
+
+  // Синхронизируем массив пилястр по этажам при изменении этажности
+  if (next.pilasterFloors && next.pilasterFloors.length !== next.levels.floors.length) {
+    const hasActivePilaster = next.pilasterFloors.some(Boolean);
+    const resized = Array.from({ length: next.levels.floors.length }, (_, idx) => {
+      if (next.pilastersOnlyOnUpperFloor && next.levels.floors.length >= 2) {
+        return idx === next.levels.floors.length - 1;
+      }
+      if (idx < next.pilasterFloors!.length) return next.pilasterFloors![idx];
+      return hasActivePilaster;
+    });
+    next.pilasterFloors = resized;
+  }
+
+  // Синхронизируем поэтажные межэтажные ленты (только между этажами: длина floors - 1)
+  const boundaryCount = Math.max(0, next.levels.floors.length - 1);
+  if (next.beltFloors && next.beltFloors.length !== boundaryCount) {
+    const resizedBelts = Array.from({ length: boundaryCount }, (_, idx) =>
+      idx < next.beltFloors!.length ? Boolean(next.beltFloors![idx]) : false
+    );
+    next.beltFloors = resizedBelts;
+    if (patch.beltIsAbsent === undefined && patch.beltFloors === undefined) {
+      next.beltIsAbsent = !resizedBelts.some(Boolean);
+    }
+  }
+
+  // Синхронизируем поэтажные высоты подоконников окон
+  if (next.windowSillHeights && next.windowSillHeights.length !== next.levels.floors.length) {
+    next.windowSillHeights = Array.from({ length: next.levels.floors.length }, (_, idx) =>
+      idx < next.windowSillHeights!.length ? next.windowSillHeights![idx] : undefined
+    );
+  }
+
+  return next;
 }
