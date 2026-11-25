@@ -13,10 +13,12 @@ import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookR
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../../utils/termHighlight';
 import {
   A_from_H,
+  A_from_pier_wu,
   A_from_pw,
   A_min_from_wu,
   BELT_CLASSES,
   BELT_TEXT_GAPS,
+  D_from_cornerPier,
   H_from_A,
   PHI,
   RULES_DATA,
@@ -32,6 +34,7 @@ import {
   h_from_w_ratio,
   hasAnyActiveBelt,
   isPilasterEnabledOnFloor,
+  kD_from_cornerPier,
   projection_45,
   projection_console,
   resolveBeltFloorsMask,
@@ -681,15 +684,23 @@ export function CalculatorModules({
                 {axesSolveMode === 'find_p_A' && (
                   <MeterControl
                     id="calc-target-p"
-                    label="Заданный простенок p (для A = p + w)"
+                    label={
+                      params.withFraming
+                        ? 'Заданный простенок p_c (для A = p_c + w + 2u)'
+                        : 'Заданный простенок p (для A = p + w)'
+                    }
                     value={targetPierInput}
-                    min={0.6}
+                    min={0.4}
                     max={3.5}
                     disabled={isParamLocked(lockedParams, 'A')}
                     onOpenGlossaryTerm={onOpenGlossaryTerm}
                     onChange={(pVal) => {
                       setTargetPierInput(pVal);
-                      onUpdateParams({ A: A_from_pw(pVal, params.w) });
+                      onUpdateParams({
+                        A: Number(
+                          A_from_pier_wu(pVal, params.w, params.u, params.withFraming).toFixed(3)
+                        ),
+                      });
                     }}
                   />
                 )}
@@ -761,6 +772,123 @@ export function CalculatorModules({
               </div>
             </CollapsibleSection>
 
+            <CollapsibleSection title="Рядовой и угловой простенки">
+              {(() => {
+                const currentOrdinaryPier =
+                  'p_c' in summary.pierResult ? summary.pierResult.p_c : summary.pierResult.p;
+                const currentCornerPier = summary.cornerCheck.p_corner;
+                const aLocked = isParamLocked(lockedParams, 'A');
+                const wLocked = isParamLocked(lockedParams, 'w');
+                const cornerLockKey = params.isRisalitCentered ? 'risalitWidth' : 'k_D';
+                const cornerLocked = isParamLocked(lockedParams, cornerLockKey);
+
+                return (
+                  <div className="space-y-4">
+                    <MeterControl
+                      id="calc-ordinary-pier"
+                      label={
+                        params.withFraming
+                          ? 'Величина рядового простенка p_c (между наличниками)'
+                          : 'Величина рядового простенка p (между окнами)'
+                      }
+                      value={currentOrdinaryPier}
+                      min={0.3}
+                      max={4.0}
+                      disabled={aLocked && wLocked}
+                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      note={
+                        aLocked
+                          ? `Шаг осей A закреплён — изменение рядового простенка пересчитывает ширину окна w (${params.withFraming ? 'w = A − p_c − 2u' : 'w = A − p'}).`
+                          : params.withFraming
+                            ? `Пересчитывает шаг осей A = p_c + w + 2u (норма p_c ≥ w_v = ${formatMeters(params.w + 2 * params.u)} м, S. 5).`
+                            : `Пересчитывает шаг осей A = p + w (норма p ≥ w = ${formatMeters(params.w)} м, S. 5).`
+                      }
+                      onChange={(pierVal) => {
+                        const safePier = Math.max(0.1, pierVal);
+                        setTargetPierInput(safePier);
+                        if (!aLocked) {
+                          const nextA = Number(
+                            Math.max(
+                              0.8,
+                              A_from_pier_wu(safePier, params.w, params.u, params.withFraming)
+                            ).toFixed(3)
+                          );
+                          onUpdateParams({ A: nextA });
+                        } else if (!wLocked) {
+                          const nextW = Number(
+                            Math.max(
+                              0.4,
+                              params.A - safePier - (params.withFraming ? 2 * params.u : 0)
+                            ).toFixed(3)
+                          );
+                          onUpdateParams({ w: nextW });
+                        }
+                      }}
+                    />
+
+                    <MeterControl
+                      id="calc-corner-pier"
+                      label="Величина углового простенка p_corner (от угла до крайнего проёма)"
+                      value={currentCornerPier}
+                      min={0.3}
+                      max={4.5}
+                      disabled={cornerLocked}
+                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      note={
+                        params.isRisalitCentered
+                          ? `Ось привязана к центру ризалита: D = ${formatMeters(summary.cornerCheck.D)} м (ширина = ${formatMeters(params.risalitWidth)} м).`
+                          : `Пересчитывает отступ до 1-й оси D = ${formatMeters(summary.cornerCheck.D)} м и k_D = ${formatMeters(params.k_D, 3)} (норма k_D ∈ 2/3…5/6, S. 4–5).`
+                      }
+                      onChange={(cornerVal) => {
+                        const safeCorner = Math.max(0.1, cornerVal);
+                        const effU = params.withFraming ? params.u : 0;
+                        if (params.isRisalitCentered) {
+                          const nextRisalit = Number(
+                            Math.max(
+                              1.0,
+                              D_from_cornerPier(safeCorner, params.w, effU, params.withFraming) * 2
+                            ).toFixed(3)
+                          );
+                          onUpdateParams({ risalitWidth: nextRisalit });
+                        } else {
+                          const nextKD = Number(
+                            Math.max(
+                              0.15,
+                              kD_from_cornerPier(
+                                safeCorner,
+                                params.A,
+                                params.w,
+                                effU,
+                                params.withFraming
+                              )
+                            ).toFixed(4)
+                          );
+                          onUpdateParams({ k_D: nextKD });
+                        }
+                      }}
+                    />
+
+                    <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-[11px]">
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Рядовой простенок</span>
+                        <strong>{formatMeters(currentOrdinaryPier)} м</strong>
+                      </div>
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Угловой p_corner</span>
+                        <strong>{formatMeters(currentCornerPier)} м</strong>
+                      </div>
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">До 1-й оси D (k_D)</span>
+                        <strong>
+                          {formatMeters(summary.cornerCheck.D)} м ({formatMeters(params.k_D, 2)})
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CollapsibleSection>
+
             <CollapsibleSection title="Проверки шага осей и простенков" subtle>
               <WhyBlock
                 ruleId="axen_ratio"
@@ -779,6 +907,17 @@ export function CalculatorModules({
                 formula={summary.pierResult.formula}
                 page={summary.pierResult.page}
                 explanation={summary.pierResult.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
+              <WhyBlock
+                ruleId="corner_pier"
+                status={summary.cornerCheck.status}
+                sourceStatus={summary.cornerCheck.sourceStatus}
+                isHeuristic={summary.cornerCheck.sourceStatus === 'heuristic'}
+                formula={summary.cornerCheck.formula}
+                page={summary.cornerCheck.page}
+                explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
                 onOpenBookPage={onOpenBookPage}
                 onOpenGlossaryTerm={onOpenGlossaryTerm}
               />
@@ -3139,19 +3278,41 @@ export function CalculatorModules({
                     <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
                       Включение по этажам (низ ≥ верха цоколя)
                     </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onUpdateParams({
-                          pilasterFloors: Array.from({ length: floorCount }, () => true),
-                          pilastersOnlyOnUpperFloor: false,
-                        })
-                      }
-                      className="text-[11px] font-mono text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
-                    >
-                      Все этажи
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateParams({
+                            pilasterFloors: Array.from({ length: floorCount }, () => true),
+                            pilastersOnlyOnUpperFloor: false,
+                          })
+                        }
+                        className="text-[11px] font-mono text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                      >
+                        Все этажи
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateParams({
+                            pilasterFloors: Array.from({ length: floorCount }, () => false),
+                            pilastersOnlyOnUpperFloor: false,
+                          })
+                        }
+                        className="text-[11px] font-mono text-[#78716C] underline underline-offset-4 hover:text-[#1C1917]"
+                      >
+                        Без пилястр
+                      </button>
+                    </div>
                   </div>
+
+                  {!Array.from({ length: floorCount }, (_, idx) =>
+                    isPilasterEnabledOnFloor(params, idx, floorCount)
+                  ).some(Boolean) && (
+                    <p className="text-[11px] text-[#78716C] bg-[#FBF9F5] border border-[#E5DFD3] px-2.5 py-1.5">
+                      Пилястры и лопатки отключены на всех этажах. Отметьте нужные этажи или нажмите «Все этажи».
+                    </p>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                     {Array.from({ length: floorCount }, (_, flIdx) => {

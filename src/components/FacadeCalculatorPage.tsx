@@ -153,11 +153,13 @@ function computeNextParams(
 
   // Синхронизируем массив пилястр по этажам при изменении этажности
   if (next.pilasterFloors && next.pilasterFloors.length !== next.levels.floors.length) {
+    const hasActivePilaster = next.pilasterFloors.some(Boolean);
     const resized = Array.from({ length: next.levels.floors.length }, (_, idx) => {
+      if (next.pilastersOnlyOnUpperFloor && next.levels.floors.length >= 2) {
+        return idx === next.levels.floors.length - 1;
+      }
       if (idx < next.pilasterFloors!.length) return next.pilasterFloors![idx];
-      return next.pilastersOnlyOnUpperFloor
-        ? idx === next.levels.floors.length - 1
-        : true;
+      return hasActivePilaster;
     });
     next.pilasterFloors = resized;
   }

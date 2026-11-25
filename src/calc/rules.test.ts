@@ -2,11 +2,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   A_from_H,
+  A_from_pier_wu,
   A_from_pw,
   A_min_from_wu,
   BELT_CLASSES,
   BELT_TEXT_GAPS,
   D_from_A,
+  D_from_cornerPier,
   H_from_A,
   PHI,
   RULES_DATA,
@@ -76,6 +78,7 @@ import {
   hasAnyActiveBelt,
   isBeltEnabledAboveFloor,
   isKnownGoodRatio,
+  kD_from_cornerPier,
   mergeStatuses,
   nearest_golden_approx,
   p_corner_from_Dwu,
@@ -1050,7 +1053,10 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
   });
 
   it('26. Весь 1-й этаж в цоколь занимает только 1-й этаж, а низ пилястр (с базой и без) не ниже верха цоколя', () => {
-    const base = createDefaultParamsForTypology('miethaus');
+    const base = {
+      ...createDefaultParamsForTypology('miethaus'),
+      pilasterFloors: [true, true, true, true],
+    };
     const summaryFull = evaluateFacadeSummary(base, { expertMode: true });
     const fullBounds = resolveSocleAndPilasterBounds(base, summaryFull.derivedGeometry);
 
@@ -1068,7 +1074,7 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     // 2. С обычным цоколем (hSocle=2.60 > groundToFloor1=0.70), с базой и без базы (Mauerpfeiler)
     const urban = createDefaultParamsForTypology('urban_house');
     for (const isMauerpfeiler of [false, true]) {
-      const p = { ...urban, hSocle: 2.6, isMauerpfeiler };
+      const p = { ...urban, hSocle: 2.6, isMauerpfeiler, pilasterFloors: [true, true, true] };
       const sum = evaluateFacadeSummary(p, { expertMode: true });
       const bounds = resolveSocleAndPilasterBounds(p, sum.derivedGeometry);
       assertClose(bounds.socleTopM, 2.6);
@@ -1534,6 +1540,91 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     );
     // При одной венчающей части: только h_l и h_u = 2 прямоугольника
     assert.equal(crownRects.length, 2);
+  });
+
+  it('42. Прямое задание величин рядового и углового простенков (с обрамлением и без)', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+
+    // Без обрамления: p = 1.45, p_corner = 1.90
+    const nextANoFrame = A_from_pier_wu(1.45, base.w, base.u, false);
+    const nextKDNoFrame = kD_from_cornerPier(1.9, nextANoFrame, base.w, base.u, false);
+    const sumNoFrame = evaluateFacadeSummary({
+      ...base,
+      withFraming: false,
+      A: nextANoFrame,
+      k_D: nextKDNoFrame,
+    });
+    assertClose('p' in sumNoFrame.pierResult ? sumNoFrame.pierResult.p : 0, 1.45);
+    assertClose(sumNoFrame.cornerCheck.p_corner, 1.9);
+
+    // С обрамлением: p_c = 1.55, p_corner = 2.05
+    const nextAWithFrame = A_from_pier_wu(1.55, base.w, base.u, true);
+    const nextKDWithFrame = kD_from_cornerPier(2.05, nextAWithFrame, base.w, base.u, true);
+    const sumWithFrame = evaluateFacadeSummary({
+      ...base,
+      withFraming: true,
+      A: nextAWithFrame,
+      k_D: nextKDWithFrame,
+    });
+    assertClose('p_c' in sumWithFrame.pierResult ? sumWithFrame.pierResult.p_c : 0, 1.55);
+    assertClose(sumWithFrame.cornerCheck.p_corner, 2.05);
+
+    // При ризалите по центру: p_corner -> risalitWidth = 2 * D
+    const targetD = D_from_cornerPier(1.75, base.w, base.u, true);
+    const sumRisalit = evaluateFacadeSummary({
+      ...base,
+      withFraming: true,
+      isRisalitCentered: true,
+      risalitWidth: targetD * 2,
+    });
+    assertClose(sumRisalit.cornerCheck.p_corner, 1.75);
+  });
+
+  it('43. Во всех типах зданий (Typologie) по умолчанию отсутствуют и межэтажные ленты, и пилястры', () => {
+    const types = [
+      'simple_house',
+      'urban_house',
+      'miethaus',
+      'villa',
+      'rich_columnar',
+      'monumental',
+      'palace',
+    ] as const;
+
+    for (const typeId of types) {
+      const def = createDefaultParamsForTypology(typeId);
+      assert.equal(def.beltIsAbsent, true, `${typeId} must default to beltIsAbsent=true`);
+      assert.equal(def.beltHasColumnsBelow, false, `${typeId} must default to beltHasColumnsBelow=false`);
+      assert.equal(hasAnyActiveBelt(def), false, `${typeId} must have no active belts`);
+      assert.ok(resolveBeltFloorsMask(def).every((v) => !v), `${typeId} beltFloors must all be false`);
+
+      assert.equal(def.pilastersOnlyOnUpperFloor, false, `${typeId} must have pilastersOnlyOnUpperFloor=false`);
+      assert.ok(Array.isArray(def.pilasterFloors), `${typeId} must define pilasterFloors array`);
+      assert.equal(def.pilasterFloors.length, def.levels.floors.length);
+      assert.ok(def.pilasterFloors.every((v) => !v), `${typeId} pilasterFloors must all be false`);
+
+      const sum = evaluateFacadeSummary(def, { expertMode: true });
+      assert.equal(resolvePilasterElevationSpans(def, sum.derivedGeometry).length, 0);
+
+      const cad = buildFacadeCadDocument(def, sum);
+      const pilEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+        (ent) => ent.layer?.name === '06_PILASTERS'
+      );
+      assert.equal(pilEnts.length, 0, `${typeId} DWG must have 0 pilaster entities by default`);
+
+      const closedBelts = Array.from(cad.modelSpace?.entities ?? []).filter((ent) => {
+        if (ent.layer?.name !== '04_BELTS') return false;
+        const verts = (ent as unknown as { vertices?: unknown[] }).vertices;
+        return Boolean(verts && verts.length === 4);
+      });
+      assert.equal(closedBelts.length, 0, `${typeId} DWG must have 0 active closed belts by default`);
+
+      // Смена пресета этажности сохраняет отключённые ленты и пилястры
+      const patch45 = applyBuildingVariantPreset(def, 'multi-story', 'four-five');
+      assert.equal(patch45.beltIsAbsent, true);
+      assert.ok(patch45.beltFloors?.every((v) => !v));
+      assert.ok(patch45.pilasterFloors?.every((v) => !v));
+    }
   });
 });
 

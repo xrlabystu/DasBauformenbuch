@@ -484,6 +484,15 @@ export function A_from_pw(p: number, w: number): number {
   return p + w;
 }
 
+export function A_from_pier_wu(
+  pier: number,
+  w: number,
+  u = 0,
+  withFraming = false
+): number {
+  return pier + w + (withFraming ? 2 * u : 0);
+}
+
 export function w_max_from_A(A: number): number {
   return A / 2;
 }
@@ -561,6 +570,26 @@ export function D_from_A(A: number, k_D = 0.8): number {
 
 export function p_corner_from_Dwu(D: number, w: number, u = 0): number {
   return D - w / 2 - u;
+}
+
+export function D_from_cornerPier(
+  pCorner: number,
+  w: number,
+  u = 0,
+  withFraming = false
+): number {
+  return pCorner + w / 2 + (withFraming ? u : 0);
+}
+
+export function kD_from_cornerPier(
+  pCorner: number,
+  A: number,
+  w: number,
+  u = 0,
+  withFraming = false
+): number {
+  if (A <= 0) return 0.8;
+  return D_from_cornerPier(pCorner, w, u, withFraming) / A;
 }
 
 export interface CornerCheckResult {
@@ -4277,12 +4306,26 @@ export function evaluateFacadeSummary(
   const framingResult = framing_from_T(params.T, r, f, k);
   const offsetCheck = check_offset(params.a_front, params.a_side);
 
-  const pilasterCheck = check_pilaster(
+  const floorCountForPilasters = params.levels.floors.length;
+  const activePilasterIndices = Array.from({ length: floorCountForPilasters }, (_, i) => i).filter(
+    (i) => isPilasterEnabledOnFloor(params, i, floorCountForPilasters)
+  );
+  const hasAnyPilaster = activePilasterIndices.length > 0;
+
+  const rawPilasterCheck = check_pilaster(
     params.v,
     params.Wp,
     params.pilasterCharacter,
     params.isMauerpfeiler
   );
+  const pilasterCheck: PilasterCheckResult = hasAnyPilaster
+    ? rawPilasterCheck
+    : {
+        ...rawPilasterCheck,
+        status: 'ok',
+        explanation:
+          'Пилястры и лопатки отключены на всех этажах (проверка выступа v ≤ W_p/4 не применяется).',
+      };
 
   const corniceCheck = cornice_split(params.Tc, params.corniceRatio);
   const corniceChar = cornice_character(params.plateShare);
@@ -4628,8 +4671,10 @@ export function evaluateFacadeSummary(
       id: 'pilaster_check',
       title: 'Выступ пилястра / лопатки (v ≤ W_p/4)',
       page: 'S. 11–12',
-      formula: pilasterCheck.formula,
-      valueText: `W_p = ${formatMeters(params.Wp)} м, v = ${formatMeters(params.v)} м (v_max = ${formatMeters(pilasterCheck.v_max)} м)`,
+      formula: hasAnyPilaster ? pilasterCheck.formula : 'не применяется (пилястры отключены)',
+      valueText: hasAnyPilaster
+        ? `W_p = ${formatMeters(params.Wp)} м, v = ${formatMeters(params.v)} м (v_max = ${formatMeters(pilasterCheck.v_max)} м)`
+        : 'Пилястры / лопатки отключены на всех этажах',
       status: pilasterCheck.status,
       sourceStatus: 'explicit-verified',
       priority: 'P0',
@@ -5028,10 +5073,6 @@ export function evaluateFacadeSummary(
   }
 
   // N18–N19 (P2): многоярусное размещение пилястр (учитывает также поэтажные флаги pilasterFloors)
-  const floorCountForPilasters = params.levels.floors.length;
-  const activePilasterIndices = Array.from({ length: floorCountForPilasters }, (_, i) => i).filter(
-    (i) => isPilasterEnabledOnFloor(params, i, floorCountForPilasters)
-  );
   const derivedOnlyUpperFromFloors =
     params.pilasterFloors !== undefined &&
     floorCountForPilasters >= 2 &&
@@ -5083,13 +5124,17 @@ export function evaluateFacadeSummary(
       id: 'n20_pilaster_vs_wall',
       title: 'N20 (Эксперт): Пилястр уже простенка стены',
       page: n20.page,
-      formula: n20.formula,
-      valueText: `W_p = ${formatMeters(params.Wp)} < W_стены = ${formatMeters(params.wpWallPier)} м`,
-      status: n20.status,
+      formula: hasAnyPilaster ? n20.formula : 'не применяется (пилястры отключены)',
+      valueText: hasAnyPilaster
+        ? `W_p = ${formatMeters(params.Wp)} < W_стены = ${formatMeters(params.wpWallPier)} м`
+        : 'Пилястры отключены',
+      status: hasAnyPilaster ? n20.status : 'ok',
       sourceStatus: n20.sourceStatus,
       priority: 'P3',
       isExpertOnly: true,
-      explanation: n20.explanation,
+      explanation: hasAnyPilaster
+        ? n20.explanation
+        : 'Пилястры и лопатки отключены на всех этажах (проверка ширины пилястра относительно простенка не активна).',
       targetElement: 'pilaster',
     });
 
@@ -5262,6 +5307,21 @@ export function applyBuildingVariantPreset(
   const isEmbeddedInRow =
     prev.buildingType === 'urban_house' || prev.buildingType === 'miethaus';
 
+  const prevHadPilasters =
+    prev.pilasterFloors !== undefined
+      ? prev.pilasterFloors.some(Boolean)
+      : prev.pilastersOnlyOnUpperFloor;
+  const nextPilasterFloors = Array.from({ length: floors }, (_, idx) => {
+    if (prev.pilastersOnlyOnUpperFloor && floors >= 2) {
+      return idx === floors - 1;
+    }
+    if (prev.pilasterFloors !== undefined) {
+      if (idx < prev.pilasterFloors.length) return Boolean(prev.pilasterFloors[idx]);
+      return prevHadPilasters;
+    }
+    return false;
+  });
+
   const keepEntranceDisabled = prev.hasEntrance === false;
   return {
     buildingVariant: variant,
@@ -5295,6 +5355,7 @@ export function applyBuildingVariantPreset(
         ? false
         : Boolean(prev.beltFloors?.[idx])
     ),
+    pilasterFloors: nextPilasterFloors,
     beltIsSillCornice: false,
     beltOnlySillUnderSecond: false,
     beltUpperFloorHeight: alignedLevels.floors[1]?.floorToFloor ?? prev.H + 0.35,
@@ -5427,7 +5488,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     beltCrowningRatio: 1.0,
     beltEffect: type === 'monumental' || type === 'palace' ? 'heavy' : 'neutral',
     beltConsoleMode: 'none',
-    beltHasColumnsBelow: type === 'palace' || type === 'rich_columnar',
+    beltHasColumnsBelow: false,
     beltAsRusticationMode: false,
     beltRusticationHasBaseProfile: true,
     beltIsAbsent: true,
@@ -5456,6 +5517,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     pilasterAdjacentSameHeight: false,
     pilasterHeightDiffPct: 0.18,
     pilastersOnlyOnUpperFloor: false,
+    pilasterFloors: Array.from({ length: floors }, () => false),
     pilasterPlacement: 'edges',
     atticOverRisalit: false,
     atticOverWing: false,
