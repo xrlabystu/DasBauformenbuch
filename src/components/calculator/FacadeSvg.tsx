@@ -28,6 +28,7 @@ import {
   mergeStatuses,
   resolveBeltFloorsMask,
   resolveEntranceGeometry,
+  resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
@@ -533,19 +534,29 @@ export function FacadeSvg({
       : 1;
   const corniceOverhangPx =
     Math.min(26, Math.max(8, corniceM * scale * 0.55)) * boostMult;
-  const tcSumM = Math.max(0.05, summary.corniceCheck.h_u + summary.corniceCheck.h_l);
-  const hasCorniceFrieze = corniceM > tcSumM + 0.04;
-  const corniceFriezeM = hasCorniceFrieze ? corniceM - tcSumM : 0;
-  const huM = hasCorniceFrieze
-    ? summary.corniceCheck.h_u
-    : corniceM * (summary.corniceCheck.h_u / tcSumM);
-  const hlM = hasCorniceFrieze
-    ? summary.corniceCheck.h_l
-    : Math.max(0, corniceM - huM);
+  const corniceLayers = resolveMainCorniceLayers(
+    corniceM,
+    summary.corniceCheck.h_u,
+    summary.corniceCheck.h_l,
+    params.corniceVariantMode,
+    params.corniceFullStyle ?? 'frieze_architrave'
+  );
   const totalCornicePx = Math.max(8, corniceM * scale);
-  const huPx = Math.max(3, (huM / corniceM) * totalCornicePx);
-  const hlPx = Math.max(3, (hlM / corniceM) * totalCornicePx);
-  const friezePx = hasCorniceFrieze ? Math.max(2, totalCornicePx - huPx - hlPx) : 0;
+  const huPx = Math.max(3, (corniceLayers.huM / corniceLayers.totalM) * totalCornicePx);
+  const hlPx = Math.max(3, (corniceLayers.hlM / corniceLayers.totalM) * totalCornicePx);
+  const hasLowerCornice = corniceLayers.middleM + corniceLayers.bottomBandM > 0.005;
+  const lowerCornicePx = hasLowerCornice ? Math.max(4, totalCornicePx - huPx - hlPx) : 0;
+  const middleCornicePx =
+    hasLowerCornice && corniceLayers.middleM + corniceLayers.bottomBandM > 0
+      ? Math.max(
+          2,
+          lowerCornicePx *
+            (corniceLayers.middleM / (corniceLayers.middleM + corniceLayers.bottomBandM))
+        )
+      : 0;
+  const bottomBandCornicePx = hasLowerCornice
+    ? Math.max(1.5, lowerCornicePx - middleCornicePx)
+    : 0;
 
   // Позиция и геометрия входа (дверного проёма)
   const entranceGeo = resolveEntranceGeometry(params, totalWidthM, axesM);
@@ -1316,24 +1327,59 @@ export function FacadeSvg({
               }
               strokeWidth={corniceStatus === 'violation' ? 1.6 : 1.1}
             />
-            {friezePx > 0 && (
-              <rect
-                x={xM(0) - corniceOverhangPx * 0.16}
-                y={yFromGroundM(corniceTopM) + huPx + hlPx}
-                width={facadePxW + corniceOverhangPx * 0.32}
-                height={friezePx}
-                fill={
-                  isHi('cornice') || corniceStatus === 'violation'
-                    ? STATUS_FILL[corniceStatus]
-                    : '#F0EAD8'
-                }
-                stroke={
-                  isHi('cornice') || corniceStatus === 'violation'
-                    ? STATUS_STROKE[corniceStatus]
-                    : '#292524'
-                }
-                strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.05}
-              />
+            {hasLowerCornice && (
+              <>
+                <rect
+                  x={
+                    xM(0) -
+                    corniceOverhangPx * (corniceLayers.fullStyle === 'neck_band' ? 0.04 : 0.12)
+                  }
+                  y={yFromGroundM(corniceTopM) + huPx + hlPx}
+                  width={
+                    facadePxW +
+                    corniceOverhangPx * (corniceLayers.fullStyle === 'neck_band' ? 0.08 : 0.24)
+                  }
+                  height={middleCornicePx}
+                  fill={
+                    isHi('cornice') || corniceStatus === 'violation'
+                      ? STATUS_FILL[corniceStatus]
+                      : corniceLayers.fullStyle === 'neck_band'
+                        ? '#F4EFE2'
+                        : '#F0EAD8'
+                  }
+                  stroke={
+                    isHi('cornice') || corniceStatus === 'violation'
+                      ? STATUS_STROKE[corniceStatus]
+                      : '#292524'
+                  }
+                  strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.0}
+                />
+                <rect
+                  x={
+                    xM(0) -
+                    corniceOverhangPx * (corniceLayers.fullStyle === 'neck_band' ? 0.28 : 0.22)
+                  }
+                  y={yFromGroundM(corniceTopM) + huPx + hlPx + middleCornicePx}
+                  width={
+                    facadePxW +
+                    corniceOverhangPx * (corniceLayers.fullStyle === 'neck_band' ? 0.56 : 0.44)
+                  }
+                  height={bottomBandCornicePx}
+                  fill={
+                    isHi('cornice') || corniceStatus === 'violation'
+                      ? STATUS_FILL[corniceStatus]
+                      : corniceLayers.fullStyle === 'neck_band'
+                        ? '#DAD0BA'
+                        : '#E2DAC5'
+                  }
+                  stroke={
+                    isHi('cornice') || corniceStatus === 'violation'
+                      ? STATUS_STROKE[corniceStatus]
+                      : '#292524'
+                  }
+                  strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.05}
+                />
+              </>
             )}
           </g>
 

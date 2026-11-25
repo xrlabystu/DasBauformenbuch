@@ -52,6 +52,7 @@ import {
   type BuildingVariant,
   type ColumnProfileType,
   type CompositionKind,
+  type CorniceCompositionStyle,
   type CorniceVariantMode,
   type EntrancePlacement,
   type EntrancePosition,
@@ -424,7 +425,7 @@ export function CalculatorModules({
     { id: 'corner', label: 'Угол (D)' },
     { id: 'framing', label: 'Обрамление' },
     { id: 'pilaster', label: 'Пилястр' },
-    { id: 'cornice', label: 'Карниз' },
+    { id: 'cornice', label: 'Главный карниз' },
     { id: 'socle', label: 'Цоколь' },
     { id: 'belt', label: 'Лента (пояс)' },
     {
@@ -1306,28 +1307,57 @@ export function CalculatorModules({
 
               <div className="pt-2 border-t border-[#E5DFD3]">
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
-                  Режим оценки главного карниза (S. 16)
+                  Состав и режим оценки главного карниза (S. 16)
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {(
                     [
-                      { id: 'full_entablature', label: 'Полный антаблемент (архитрав+фриз+карниз)' },
-                      { id: 'crowning_only', label: 'Только венчающая часть (Kranz)' },
-                    ] as { id: CorniceVariantMode; label: string }[]
-                  ).map((cm) => (
-                    <button
-                      key={cm.id}
-                      type="button"
-                      onClick={() => onUpdateParams({ corniceVariantMode: cm.id })}
-                      className={`px-2.5 py-1 text-[11px] border ${
-                        params.corniceVariantMode === cm.id
-                          ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
-                          : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                      }`}
-                    >
-                      {cm.label}
-                    </button>
-                  ))}
+                      {
+                        label: 'С фризом и архитравом (1 вар.)',
+                        mode: 'full_entablature',
+                        style: 'frieze_architrave',
+                      },
+                      {
+                        label: 'С шейкой и пояском (2 вар.)',
+                        mode: 'full_entablature',
+                        style: 'neck_band',
+                      },
+                      {
+                        label: 'Только венчающая часть (Kranz)',
+                        mode: 'crowning_only',
+                      },
+                    ] as {
+                      label: string;
+                      mode: CorniceVariantMode;
+                      style?: CorniceCompositionStyle;
+                    }[]
+                  ).map((cm) => {
+                    const activeStyle = params.corniceFullStyle ?? 'frieze_architrave';
+                    const isSelected =
+                      cm.mode === 'crowning_only'
+                        ? params.corniceVariantMode === 'crowning_only'
+                        : params.corniceVariantMode === 'full_entablature' &&
+                          activeStyle === cm.style;
+                    return (
+                      <button
+                        key={cm.label}
+                        type="button"
+                        onClick={() =>
+                          onUpdateParams({
+                            corniceVariantMode: cm.mode,
+                            ...(cm.style ? { corniceFullStyle: cm.style } : {}),
+                          })
+                        }
+                        className={`px-2.5 py-1 text-[11px] border ${
+                          isSelected
+                            ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                            : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                        }`}
+                      >
+                        {cm.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </CollapsibleSection>
@@ -3401,112 +3431,282 @@ export function CalculatorModules({
           );
         })()}
 
-        {/* 4.6 Карниз */}
-        {activeModule === 'cornice' && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-display text-2xl font-medium text-[#1C1917]">
-                <TextWithGlossaryLinks
-                  text="4.6. Венчающая часть карниза (Kranz)"
+        {/* 4.6 Главный карниз */}
+        {activeModule === 'cornice' && (() => {
+          const totalH = Math.max(0.01, summary.derivedGeometry.totalHeight);
+          const effectiveSocleH = params.useFullFloorAsSocle
+            ? summary.derivedGeometry.floor1FullHeight
+            : params.hSocle;
+          const activeStyle = params.corniceFullStyle ?? 'frieze_architrave';
+          const corniceBotM = Math.max(0, totalH - params.hMain);
+          const shareDenom = totalH / Math.max(0.01, params.hMain);
+          const [rMin, rMax] = summary.mainCorniceCheck.range;
+          const midTarget = (() => {
+            const mid = (rMin + rMax) / 2;
+            const capped = params.useFullFloorAsSocle
+              ? mid
+              : Math.min(mid, Math.max(rMin, effectiveSocleH - 0.05));
+            return Number(Math.max(0.15, Math.min(2.5, capped)).toFixed(3));
+          })();
+
+          return (
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-display text-2xl font-medium text-[#1C1917]">
+                  <TextWithGlossaryLinks
+                    text="4.6. Главный карниз (Hauptgesims)"
+                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  />
+                </h3>
+                <p className="mt-1 text-xs text-[#57534E]">
+                  Выбор состава, общей высоты главного карниза h_main от H_зд вниз (S. 9, 16) и деления венчающей части h_u : h_l (S. 10–11).
+                </p>
+              </div>
+
+              <CollapsibleSection title="Общая высота главного карниза">
+                <div className="space-y-2">
+                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    Выбор варианта состава главного карниза
+                  </span>
+                  <div className="flex flex-col gap-1.5">
+                    {(
+                      [
+                        {
+                          key: 'frieze_architrave',
+                          label: 'Венчающая часть с фризом и архитравом (1 вариант)',
+                          desc: 'Полный главный карниз: 1/8–1/12 H_зд (2 эт.) или 1/12–1/15 H_зд (многоэт.) и < цоколя.',
+                          mode: 'full_entablature',
+                          style: 'frieze_architrave',
+                        },
+                        {
+                          key: 'neck_band',
+                          label: 'Венчающая часть с шейкой и пояском (2 вариант)',
+                          desc: 'Полный главный карниз (Hals и Halsband): 1/8–1/12 H_зд (2 эт.) или 1/12–1/15 H_зд (многоэт.) и < цоколя.',
+                          mode: 'full_entablature',
+                          style: 'neck_band',
+                        },
+                        {
+                          key: 'crowning_only',
+                          label: 'Только венчающая часть (Kranz — при небольшой высоте)',
+                          desc: 'Дом 1–2 эт.: 1/15–1/16 высоты; многоэтажный городской дом: 1/16–1/20 высоты до верхнего обреза.',
+                          mode: 'crowning_only',
+                        },
+                      ] as {
+                        key: string;
+                        label: string;
+                        desc: string;
+                        mode: CorniceVariantMode;
+                        style?: CorniceCompositionStyle;
+                      }[]
+                    ).map((opt) => {
+                      const isSelected =
+                        opt.mode === 'crowning_only'
+                          ? params.corniceVariantMode === 'crowning_only'
+                          : params.corniceVariantMode === 'full_entablature' &&
+                            activeStyle === opt.style;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() =>
+                            onUpdateParams({
+                              corniceVariantMode: opt.mode,
+                              ...(opt.style ? { corniceFullStyle: opt.style } : {}),
+                            })
+                          }
+                          className={`text-left px-3 py-2 border transition-colors ${
+                            isSelected
+                              ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                              : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                          }`}
+                        >
+                          <div className="text-xs font-medium">{opt.label}</div>
+                          <div
+                            className={`mt-0.5 text-[10px] ${
+                              isSelected ? 'text-[#E7E5E4]' : 'text-[#78716C]'
+                            }`}
+                          >
+                            {opt.desc}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <MeterControl
+                  id="calc-cornice-h-main"
+                  label="Высота главного карниза h_main (отсчитывается от H_зд вниз)"
+                  value={params.hMain}
+                  min={0.15}
+                  max={2.5}
+                  lockKey="hMain"
+                  locked={isParamLocked(lockedParams, 'hMain')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  note={
+                    summary.mainCorniceCheck.notApplicable
+                      ? 'Весь 1-й этаж включён в цоколь — правило главного карниза (1/8–1/12, 1/12–1/15 и < цоколя) не работает (S. 16, 22).'
+                      : summary.mainCorniceCheck.isExtrapolated
+                        ? `1-эт. экстраполяция от 2-эт. (≥ ${formatMeters(rMin)} м) и строго < цоколя (${formatMeters(effectiveSocleH)} м).`
+                        : `Норма «${summary.variantInfo.shortLabelRu}»: ${formatMeters(rMin)}–${formatMeters(rMax)} м и строго < цоколя (${formatMeters(effectiveSocleH)} м).`
+                  }
+                  onChange={(hMain) => onUpdateParams({ hMain })}
+                />
+
+                <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-[11px]">
+                  <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Верх (H_зд)</span>
+                    <strong>{formatMeters(totalH)} м</strong>
+                  </div>
+                  <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Низ (H_зд − h_main)</span>
+                    <strong>{formatMeters(corniceBotM)} м</strong>
+                  </div>
+                  <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Доля от H_зд</span>
+                    <strong>
+                      1 / {shareDenom.toFixed(1)} ({((params.hMain / totalH) * 100).toFixed(1)} %)
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    disabled={isParamLocked(lockedParams, 'hMain')}
+                    onClick={() => onUpdateParams({ hMain: midTarget })}
+                    className="px-2.5 py-1 text-[11px] border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-45"
+                  >
+                    Подогнать h_main к середине нормы ({formatMeters(midTarget)} м)
+                  </button>
+                </div>
+
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-[11px] text-[#44403C] space-y-1">
+                  <div className="font-mono uppercase text-[10px] text-[#9A3412]">
+                    Нормы высоты главного карниза (S. 16):
+                  </div>
+                  <p>
+                    • Полный главный карниз (1 или 2 вариант): меньше цоколя; в 2-этажном доме 1/8–1/12, в многоэтажном 1/12–1/15 общей высоты H_зд (не применяется, если весь 1-й этаж включён в цоколь).
+                  </p>
+                  <p>
+                    • При небольшой высоте (1–2 этажный дом), одна венчающая часть: 1/15–1/16 высоты (для 1 этажа — экстраполяция от 2-этажного).
+                  </p>
+                  <p>
+                    • В многоэтажном городском доме одна венчающая часть: 1/16–1/20 высоты от уровня земли до верхнего обреза главного карниза (H_зд).
+                  </p>
+                </div>
+
+                <WhyBlock
+                  ruleId="main_cornice_subordination"
+                  status={summary.mainCorniceCheck.status}
+                  sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
+                  formula={summary.mainCorniceCheck.formula}
+                  page={summary.mainCorniceCheck.page}
+                  isHeuristic={summary.mainCorniceCheck.isExtrapolated}
+                  explanation={summary.mainCorniceCheck.explanation}
+                  onOpenBookPage={onOpenBookPage}
                   onOpenGlossaryTerm={onOpenGlossaryTerm}
                 />
-              </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                Деление на верхние и нижние обломы h_u : h_l в пределах от 1:2 до 2:1 (норма 1:1, S. 10–11).
-              </p>
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Пропорции T_c и отношение h_u:h_1">
+                <MeterControl
+                  id="calc-Tc"
+                  label="Общая высота венчающей части T_c"
+                  value={params.Tc}
+                  min={0.2}
+                  max={1.2}
+                  lockKey="Tc"
+                  locked={isParamLocked(lockedParams, 'Tc')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  note={
+                    params.corniceVariantMode === 'full_entablature' && params.Tc >= params.hMain - 0.02
+                      ? `В полном карнизе венчающая часть T_c обычно меньше h_main (${formatMeters(params.hMain)} м), оставляя место для нижних элементов.`
+                      : undefined
+                  }
+                  onChange={(Tc) => onUpdateParams({ Tc })}
+                />
+
+                <MeterControl
+                  id="calc-cornice-ratio"
+                  label="Отношение h_u : h_l (норма 1:1, допустимо 0.50…2.00)"
+                  value={params.corniceRatio}
+                  min={0.3}
+                  max={2.5}
+                  step={0.05}
+                  unit=":1"
+                  lockKey="corniceRatio"
+                  locked={isParamLocked(lockedParams, 'corniceRatio')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
+                />
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Характер профиля и доля плиты" badge="эвристика" subtle>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: 'Тяжёлый (≥75 %)', share: 0.8 },
+                    { label: 'Нейтральный (60 %)', share: 0.6 },
+                    { label: 'Лёгкий (≤50 %)', share: 0.42 },
+                  ].map((pr) => (
+                    <button
+                      key={pr.label}
+                      type="button"
+                      disabled={isParamLocked(lockedParams, 'plateShare')}
+                      onClick={() => onUpdateParams({ plateShare: pr.share })}
+                      className={`px-2.5 py-1 text-[11px] border disabled:opacity-45 ${
+                        Math.abs(params.plateShare - pr.share) < 0.05
+                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                          : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE]'
+                      }`}
+                    >
+                      {pr.label}
+                    </button>
+                  ))}
+                </div>
+                <MeterControl
+                  id="calc-plate-share"
+                  label="Доля плиты в верхнем обломе (UX-пресет)"
+                  value={params.plateShare * 100}
+                  min={20}
+                  max={95}
+                  step={1}
+                  unit="%"
+                  lockKey="plateShare"
+                  locked={isParamLocked(lockedParams, 'plateShare')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  note="Процентные пороги ≥75 % и ≤50 % — интерпретационное допущение UX поверх качественного описания S. 10–11."
+                  onChange={(pct) => onUpdateParams({ plateShare: pct / 100 })}
+                />
+              </CollapsibleSection>
+
+              <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Верхние обломы h_u</span>
+                  <strong>{formatMeters(summary.corniceCheck.h_u)} м</strong>
+                </div>
+                <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                  <span className="block text-[10px] text-[#78716C] uppercase">Нижние обломы h_l</span>
+                  <strong>{formatMeters(summary.corniceCheck.h_l)} м</strong>
+                </div>
+              </div>
+
+              <WhyBlock
+                ruleId="cornice_split"
+                status={summary.corniceCheck.status}
+                formula={summary.corniceCheck.formula}
+                page={summary.corniceCheck.page}
+                explanation={summary.corniceCheck.explanation}
+                onOpenBookPage={onOpenBookPage}
+                onOpenGlossaryTerm={onOpenGlossaryTerm}
+              />
             </div>
-
-            <CollapsibleSection title="Высота карниза T_c и отношение h_u : h_l">
-              <MeterControl
-                id="calc-Tc"
-                label="Общая высота венчающей части T_c"
-                value={params.Tc}
-                min={0.2}
-                max={1.2}
-                lockKey="Tc"
-                locked={isParamLocked(lockedParams, 'Tc')}
-                onToggleLock={onToggleLock}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-                onChange={(Tc) => onUpdateParams({ Tc })}
-              />
-
-              <MeterControl
-                id="calc-cornice-ratio"
-                label="Отношение h_u : h_l (норма 1:1, допустимо 0.50…2.00)"
-                value={params.corniceRatio}
-                min={0.3}
-                max={2.5}
-                step={0.05}
-                unit=":1"
-                lockKey="corniceRatio"
-                locked={isParamLocked(lockedParams, 'corniceRatio')}
-                onToggleLock={onToggleLock}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-                onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
-              />
-            </CollapsibleSection>
-
-            <CollapsibleSection title="Характер профиля и доля плиты" badge="эвристика" subtle>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  { label: 'Тяжёлый (≥75 %)', share: 0.8 },
-                  { label: 'Нейтральный (60 %)', share: 0.6 },
-                  { label: 'Лёгкий (≤50 %)', share: 0.42 },
-                ].map((pr) => (
-                  <button
-                    key={pr.label}
-                    type="button"
-                    disabled={isParamLocked(lockedParams, 'plateShare')}
-                    onClick={() => onUpdateParams({ plateShare: pr.share })}
-                    className={`px-2.5 py-1 text-[11px] border disabled:opacity-45 ${
-                      Math.abs(params.plateShare - pr.share) < 0.05
-                        ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                        : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE]'
-                    }`}
-                  >
-                    {pr.label}
-                  </button>
-                ))}
-              </div>
-              <MeterControl
-                id="calc-plate-share"
-                label="Доля плиты в верхнем обломе (UX-пресет)"
-                value={params.plateShare * 100}
-                min={20}
-                max={95}
-                step={1}
-                unit="%"
-                lockKey="plateShare"
-                locked={isParamLocked(lockedParams, 'plateShare')}
-                onToggleLock={onToggleLock}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-                note="Процентные пороги ≥75 % и ≤50 % — интерпретационное допущение UX поверх качественного описания S. 10–11."
-                onChange={(pct) => onUpdateParams({ plateShare: pct / 100 })}
-              />
-            </CollapsibleSection>
-
-            <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">Верхние обломы h_u</span>
-                <strong>{formatMeters(summary.corniceCheck.h_u)} м</strong>
-              </div>
-              <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                <span className="block text-[10px] text-[#78716C] uppercase">Нижние обломы h_l</span>
-                <strong>{formatMeters(summary.corniceCheck.h_l)} м</strong>
-              </div>
-            </div>
-
-            <WhyBlock
-              ruleId="cornice_split"
-              status={summary.corniceCheck.status}
-              formula={summary.corniceCheck.formula}
-              page={summary.corniceCheck.page}
-              explanation={summary.corniceCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
-              onOpenGlossaryTerm={onOpenGlossaryTerm}
-            />
-          </div>
-        )}
+          );
+        })()}
 
         {/* 4.7 Цоколь и поэтажная иерархия */}
         {activeModule === 'socle' && (

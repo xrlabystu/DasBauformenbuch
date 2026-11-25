@@ -29,6 +29,7 @@ import {
   projection_45,
   projection_console,
   resolveEntranceGeometry,
+  resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
@@ -439,27 +440,51 @@ export function buildFacadeCadDocument(
       ? Math.max(1, params.mainCorniceProjectionBoost)
       : 1;
   const corniceOverhangMm = Math.min(600, Math.max(160, corniceM * MM * 0.55)) * boostMult;
-  const tcSumM = Math.max(0.05, summary.corniceCheck.h_u + summary.corniceCheck.h_l);
-  const hasCorniceFrieze = corniceM > tcSumM + 0.04;
-  const corniceFriezeMm = hasCorniceFrieze ? (corniceM - tcSumM) * MM : 0;
-  const huMm = Math.max(
-    40,
-    (hasCorniceFrieze ? summary.corniceCheck.h_u : corniceM * (summary.corniceCheck.h_u / tcSumM)) * MM
+  const corniceLayers = resolveMainCorniceLayers(
+    corniceM,
+    summary.corniceCheck.h_u,
+    summary.corniceCheck.h_l,
+    params.corniceVariantMode,
+    params.corniceFullStyle ?? 'frieze_architrave'
   );
-  const hlMm = Math.max(40, corniceM * MM - corniceFriezeMm - huMm);
+  const huMm = Math.max(40, corniceLayers.huM * MM);
+  const hlMm = Math.max(40, corniceLayers.hlM * MM);
+  const hasLowerCornice = corniceLayers.middleM + corniceLayers.bottomBandM > 0.005;
+  const lowerCorniceMm = hasLowerCornice ? Math.max(40, corniceM * MM - huMm - hlMm) : 0;
+  const middleCorniceMm =
+    hasLowerCornice && corniceLayers.middleM + corniceLayers.bottomBandM > 0
+      ? Math.max(
+          20,
+          lowerCorniceMm *
+            (corniceLayers.middleM / (corniceLayers.middleM + corniceLayers.bottomBandM))
+        )
+      : 0;
+  const bottomBandCorniceMm = hasLowerCornice
+    ? Math.max(15, lowerCorniceMm - middleCorniceMm)
+    : 0;
 
-  const friezeBottomMm = wallTopM * MM;
-  if (corniceFriezeMm > 0) {
+  const bottomBandBottomMm = wallTopM * MM;
+  if (hasLowerCornice) {
+    const bandOverhangRatio = corniceLayers.fullStyle === 'neck_band' ? 0.28 : 0.22;
+    const midOverhangRatio = corniceLayers.fullStyle === 'neck_band' ? 0.04 : 0.12;
     addRect(
       doc,
       layerCornice,
-      -corniceOverhangMm * 0.16,
-      friezeBottomMm,
-      totalWidthM * MM + corniceOverhangMm * 0.32,
-      corniceFriezeMm
+      -corniceOverhangMm * bandOverhangRatio,
+      bottomBandBottomMm,
+      totalWidthM * MM + corniceOverhangMm * bandOverhangRatio * 2,
+      bottomBandCorniceMm
+    );
+    addRect(
+      doc,
+      layerCornice,
+      -corniceOverhangMm * midOverhangRatio,
+      bottomBandBottomMm + bottomBandCorniceMm,
+      totalWidthM * MM + corniceOverhangMm * midOverhangRatio * 2,
+      middleCorniceMm
     );
   }
-  const hlBottomMm = friezeBottomMm + corniceFriezeMm;
+  const hlBottomMm = bottomBandBottomMm + bottomBandCorniceMm + middleCorniceMm;
   const huBottomMm = hlBottomMm + hlMm;
 
   addRect(

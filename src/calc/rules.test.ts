@@ -89,6 +89,7 @@ import {
   resolveBeltFloorsMask,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
@@ -1461,6 +1462,78 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(lockedPatch.windowSillHeights?.[0], 1.2);
     assert.equal(lockedPatch.windowSillHeights?.[1], 0.9);
     assert.equal(lockedPatch.windowSillHeights?.[2], 1.2);
+  });
+
+  it('41. Главный карниз: 1 и 2 варианты состава, одна венчающая часть (1/15–1/16, 1/16–1/20), отсчёт от H_зд вниз и DWG', () => {
+    // 1) Два этажа, полный главный карниз (1 вариант: фриз+архитрав, 2 вариант: шейка+поясок): 1/12..1/8 H_зд и < цоколя
+    const twoFrieze = checkMainCorniceWithVariant(1.6, 1.0, 9.6, 'two-story', 'general', 'full_entablature', false, 'frieze_architrave');
+    assert.equal(twoFrieze.status, 'ok');
+    assert.equal(twoFrieze.corniceFullStyle, 'frieze_architrave');
+    assert.ok(twoFrieze.explanation.includes('1 вариант'));
+
+    const twoNeck = checkMainCorniceWithVariant(1.6, 1.0, 9.6, 'two-story', 'general', 'full_entablature', false, 'neck_band');
+    assert.equal(twoNeck.status, 'ok');
+    assert.equal(twoNeck.corniceFullStyle, 'neck_band');
+    assert.ok(twoNeck.explanation.includes('2 вариант'));
+
+    // Превышение цоколя (hMain >= hSocle) даёт violation даже в диапазоне 1/8–1/12
+    const twoOverSocle = checkMainCorniceWithVariant(0.95, 1.0, 9.6, 'two-story', 'general', 'full_entablature', false, 'neck_band');
+    assert.equal(twoOverSocle.belowSocle, false);
+    assert.equal(twoOverSocle.status, 'violation');
+
+    // 2) Одна венчающая часть: 2 этажа -> 1/15..1/16; многоэтажный -> 1/16..1/20
+    const twoCrownOk = checkMainCorniceWithVariant(1.6, 0.62, 9.6, 'two-story', 'general', 'crowning_only');
+    assert.equal(twoCrownOk.status, 'ok');
+    const twoCrownBad = checkMainCorniceWithVariant(1.6, 0.9, 9.6, 'two-story', 'general', 'crowning_only');
+    assert.equal(twoCrownBad.status, 'violation');
+
+    const multiCrownOk = checkMainCorniceWithVariant(2.5, 0.9, 16.0, 'multi-story', 'general', 'crowning_only');
+    assert.equal(multiCrownOk.status, 'ok'); // 16/20=0.80 .. 16/16=1.00
+    const multiCrownBad = checkMainCorniceWithVariant(2.5, 1.2, 16.0, 'multi-story', 'general', 'crowning_only');
+    assert.equal(multiCrownBad.status, 'violation');
+
+    // 3) Раскладка слоёв главного карниза и отсчёт от H_зд вниз
+    const layersVar1 = resolveMainCorniceLayers(1.1, 0.275, 0.275, 'full_entablature', 'frieze_architrave');
+    const layersVar2 = resolveMainCorniceLayers(1.1, 0.275, 0.275, 'full_entablature', 'neck_band');
+    const layersCrown = resolveMainCorniceLayers(0.62, 0.275, 0.275, 'crowning_only', 'frieze_architrave');
+    assertClose(layersVar1.huM + layersVar1.hlM + layersVar1.middleM + layersVar1.bottomBandM, 1.1);
+    assertClose(layersVar2.huM + layersVar2.hlM + layersVar2.middleM + layersVar2.bottomBandM, 1.1);
+    assert.ok(layersVar1.middleM > 0 && layersVar1.bottomBandM > 0);
+    assert.ok(layersVar2.middleM > layersVar1.middleM); // у шейки доля чуть больше
+    assert.equal(layersCrown.middleM, 0);
+    assert.equal(layersCrown.bottomBandM, 0);
+    assertClose(layersCrown.huM + layersCrown.hlM, 0.62);
+
+    // 4) Отсчёт главного карниза от H_зд вниз при фиксированной manualTotalHeight и экспорт в DWG
+    const base = createDefaultParamsForTypology('urban_house');
+    const fixedTotalParams = {
+      ...base,
+      corniceVariantMode: 'full_entablature' as const,
+      corniceFullStyle: 'neck_band' as const,
+      hMain: 1.0,
+      levels: { ...base.levels, manualTotalHeight: 14.0 },
+    };
+    const sum = evaluateFacadeSummary(fixedTotalParams, { expertMode: true });
+    const vg = resolveScaledVerticalGeometry(fixedTotalParams, sum.derivedGeometry);
+    assertClose(vg.totalHeightM, 14.0);
+    assertClose(vg.corniceTopM, 14.0);
+    assertClose(vg.wallTopM, 13.0);
+
+    const cad = buildFacadeCadDocument(fixedTotalParams, sum);
+    const corniceRects = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '03_CORNICE'
+    );
+    // В полном варианте (шейка+поясок) на слое 03_CORNICE: поясок, шейка, h_l, h_u = 4 прямоугольника
+    assert.equal(corniceRects.length, 4);
+
+    const crownParams = { ...fixedTotalParams, corniceVariantMode: 'crowning_only' as const, hMain: 0.8 };
+    const crownSum = evaluateFacadeSummary(crownParams, { expertMode: true });
+    const crownCad = buildFacadeCadDocument(crownParams, crownSum);
+    const crownRects = Array.from(crownCad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '03_CORNICE'
+    );
+    // При одной венчающей части: только h_l и h_u = 2 прямоугольника
+    assert.equal(crownRects.length, 2);
   });
 });
 

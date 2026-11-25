@@ -1664,6 +1664,7 @@ export type MultiSub = 'three' | 'four-five' | 'general';
 export type FiveStoryScheme = 'standard' | 'rich_1_2_unified';
 export type ThreeStoryGurtMode = 'both_gurt' | 'third_sohlbank' | 'unified_upper';
 export type CorniceVariantMode = 'full_entablature' | 'crowning_only';
+export type CorniceCompositionStyle = 'frieze_architrave' | 'neck_band';
 export type EntrancePosition = 'center' | 'left' | 'right' | 'none';
 export type EntrancePlacement = 'facade_center' | 'axis';
 
@@ -1963,6 +1964,7 @@ export interface VariantMainCorniceResult extends MainCorniceCheckResult {
   notApplicable: boolean;
   isExtrapolated: boolean;
   corniceMode: CorniceVariantMode;
+  corniceFullStyle: CorniceCompositionStyle;
 }
 
 export function checkMainCorniceWithVariant(
@@ -1972,7 +1974,8 @@ export function checkMainCorniceWithVariant(
   variant: BuildingVariant,
   multiSub: MultiSub = 'three',
   corniceMode: CorniceVariantMode = 'full_entablature',
-  useFullFloorAsSocle = false
+  useFullFloorAsSocle = false,
+  corniceFullStyle: CorniceCompositionStyle = 'frieze_architrave'
 ): VariantMainCorniceResult {
   const preset = getVariantPreset(variant, multiSub);
   const rawSpec =
@@ -1998,6 +2001,7 @@ export function checkMainCorniceWithVariant(
       note: 'При включении всего 1-го этажа в цоколь правило не работает (S. 16, 22).',
       isExtrapolated: false,
       corniceMode,
+      corniceFullStyle,
       explanation:
         'Правило не работает: весь 1-й этаж включён в цоколь (S. 16, 22), поэтому доли главного карниза (1/8–1/12 для 2 эт., 1/12–1/15 для многоэтажных) и сравнение h_main < h_socle с самостоятельным цоколем не применяются.',
       formula: 'useFullFloorAsSocle = true ⇒ правило не работает (S. 16, 22)',
@@ -2019,7 +2023,19 @@ export function checkMainCorniceWithVariant(
   let status: ValidationStatus = 'ok';
   let explanation = '';
   const modeLabel =
-    corniceMode === 'crowning_only' ? 'венчающая часть (Kranz)' : 'главный карниз с фризом/архитравом';
+    corniceMode === 'crowning_only'
+      ? 'одна венчающая часть (Kranz)'
+      : corniceFullStyle === 'neck_band'
+        ? 'главный карниз с шейкой и пояском (2 вариант)'
+        : 'главный карниз с фризом и архитравом (1 вариант)';
+  const shareLabel =
+    corniceMode === 'crowning_only'
+      ? variant === 'multi-story'
+        ? '1/16–1/20 высоты H_зд'
+        : '1/15–1/16 высоты H_зд'
+      : variant === 'multi-story'
+        ? '1/12–1/15 общей высоты H_зд'
+        : '1/8–1/12 общей высоты H_зд';
 
   if (!belowSocle) {
     status = 'violation';
@@ -2027,14 +2043,14 @@ export function checkMainCorniceWithVariant(
   } else if (isExtrapolated) {
     status = inRange ? 'approx' : 'violation';
     explanation = inRange
-      ? `Для 1-этажного дома в тексте S. 16 нет числового предела: h_main = ${formatMeters(hMain)} м условно согласован по экстраполяции ≥ норм 2-этажного (${formatMeters(range[0])}…${formatMeters(range[1])} м) и < цоколя.`
-      : `Для 1-этажного дома h_main = ${formatMeters(hMain)} м ниже экстраполированного минимума 2-этажного (${formatMeters(range[0])} м).`;
+      ? `Для 1-этажного дома в тексте S. 16 нет отдельного числа: ${modeLabel} h_main = ${formatMeters(hMain)} м согласован по экстраполяции от норм 2-этажного (${shareLabel}: ${formatMeters(range[0])}…${formatMeters(range[1])} м) и < цоколя.`
+      : `Для 1-этажного дома ${modeLabel} h_main = ${formatMeters(hMain)} м ниже экстраполированного минимума 2-этажного (${formatMeters(range[0])} м).`;
   } else if (inRange) {
     status = 'ok';
-    explanation = `${corniceMode === 'crowning_only' ? 'Венчающая часть' : 'Главный карниз'} h_main = ${formatMeters(hMain)} м входит в норму варианта «${preset.shortLabelRu}» ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м) и меньше цоколя (${formatMeters(hSocle)} м).`;
+    explanation = `${corniceMode === 'crowning_only' ? 'Одна венчающая часть (Kranz)' : corniceFullStyle === 'neck_band' ? 'Главный карниз с шейкой и пояском (2 вариант)' : 'Главный карниз с фризом и архитравом (1 вариант)'} h_main = ${formatMeters(hMain)} м входит в норму ${shareLabel} ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м при H_зд = ${formatMeters(totalHeight)} м) и меньше цоколя (${formatMeters(hSocle)} м).`;
   } else {
     status = 'violation';
-    explanation = `${corniceMode === 'crowning_only' ? 'Венчающая часть' : 'Главный карниз'} h_main = ${formatMeters(hMain)} м выходит за диапазон [${formatMeters(range[0])}, ${formatMeters(range[1])}] м для варианта «${preset.shortLabelRu}» (S. 16).`;
+    explanation = `${corniceMode === 'crowning_only' ? 'Одна венчающая часть (Kranz)' : corniceFullStyle === 'neck_band' ? 'Главный карниз с шейкой и пояском (2 вариант)' : 'Главный карниз с фризом и архитравом (1 вариант)'} h_main = ${formatMeters(hMain)} м выходит за норму ${shareLabel} ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м при H_зд = ${formatMeters(totalHeight)} м, S. 16).`;
   }
 
   return {
@@ -2047,10 +2063,11 @@ export function checkMainCorniceWithVariant(
     note,
     isExtrapolated,
     corniceMode,
+    corniceFullStyle,
     explanation,
     formula: isExtrapolated
-      ? `1-эт. (экстраполяция): h_main ≥ ${formatMeters(shareRange[0], 4)}·H_total; h_main < h_socle`
-      : `${preset.shortLabelRu} (${corniceMode === 'crowning_only' ? 'Kranz' : 'полный'}): h_main ∈ [${formatMeters(shareRange[0], 4)}, ${formatMeters(shareRange[1], 4)}]·H_total; < h_socle`,
+      ? `1-эт. (экстраполяция ${shareLabel}): h_main ≥ ${formatMeters(shareRange[0], 4)}·H_зд; h_main < h_socle`
+      : `${preset.shortLabelRu} (${corniceMode === 'crowning_only' ? 'одна венч. часть' : corniceFullStyle === 'neck_band' ? 'шейка+поясок' : 'фриз+архитрав'}): h_main ∈ [${formatMeters(shareRange[0], 4)}, ${formatMeters(shareRange[1], 4)}]·H_зд; < h_socle`,
     page: 'S. 16',
   };
 }
@@ -2493,6 +2510,67 @@ export function resolveScaledVerticalGeometry(
     corniceTopM,
     totalHeightM: derivedGeometry.usesManualTotalHeight ? targetTotal : corniceTopM,
     verticalScale,
+  };
+}
+
+export interface MainCorniceLayers {
+  mode: CorniceVariantMode;
+  fullStyle: CorniceCompositionStyle;
+  huM: number;
+  hlM: number;
+  middleM: number;
+  bottomBandM: number;
+  totalM: number;
+}
+
+/**
+ * Раскладывает общую высоту главного карниза (h_main, отсчитывается от H_зд вниз)
+ * на слои по выбранному составу (S. 9, 16):
+ * - full_entablature + frieze_architrave: венчающая часть (h_u + h_l) + фриз + архитрав;
+ * - full_entablature + neck_band: венчающая часть (h_u + h_l) + шейка (Hals) + поясок (Halsband);
+ * - crowning_only: только венчающая часть (h_u + h_l).
+ */
+export function resolveMainCorniceLayers(
+  corniceM: number,
+  tcHu: number,
+  tcHl: number,
+  mode: CorniceVariantMode = 'full_entablature',
+  fullStyle: CorniceCompositionStyle = 'frieze_architrave'
+): MainCorniceLayers {
+  const totalM = Math.max(0.05, corniceM);
+  const tcSum = Math.max(0.05, tcHu + tcHl);
+  const huShare = Math.min(0.85, Math.max(0.15, tcHu / tcSum));
+
+  if (mode === 'crowning_only') {
+    const huM = totalM * huShare;
+    const hlM = Math.max(0, totalM - huM);
+    return {
+      mode,
+      fullStyle,
+      huM,
+      hlM,
+      middleM: 0,
+      bottomBandM: 0,
+      totalM,
+    };
+  }
+
+  const kranzM = totalM > tcSum + 0.08 ? tcSum : totalM * 0.56;
+  const huM = kranzM * huShare;
+  const hlM = Math.max(0, kranzM - huM);
+  const lowerM = Math.max(0, totalM - kranzM);
+  const middleShare = fullStyle === 'neck_band' ? 0.72 : 0.68;
+  const middleM = lowerM * middleShare;
+  const bottomBandM = Math.max(0, lowerM - middleM);
+
+  return {
+    mode,
+    fullStyle,
+    huM,
+    hlM,
+    middleM,
+    bottomBandM,
+    totalM,
   };
 }
 
@@ -3924,6 +4002,7 @@ export interface FacadeParameters {
   entranceHeightM: number;
   entranceWidthM: number;
   corniceVariantMode: CorniceVariantMode;
+  corniceFullStyle?: CorniceCompositionStyle;
   fiveStoryScheme: FiveStoryScheme;
   mainCorniceProjectionBoost: number;
   threeStoryGurtMode: ThreeStoryGurtMode;
@@ -4216,7 +4295,8 @@ export function evaluateFacadeSummary(
     params.buildingVariant,
     params.multiSub,
     params.corniceVariantMode,
-    params.useFullFloorAsSocle
+    params.useFullFloorAsSocle,
+    params.corniceFullStyle ?? 'frieze_architrave'
   );
   const gurtCheckRaw = checkGurtWithVariant(
     params.hGurt,
@@ -5285,6 +5365,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     entranceHeightM: Number(Math.max(2.1, Math.min(3.0, d.H * 0.66)).toFixed(2)),
     entranceWidthM: Number(Math.max(1.0, d.w * 1.05).toFixed(2)),
     corniceVariantMode: 'full_entablature',
+    corniceFullStyle: 'frieze_architrave',
     fiveStoryScheme: type === 'miethaus' ? 'standard' : 'rich_1_2_unified',
     mainCorniceProjectionBoost: type === 'miethaus' ? 1.0 : 1.2,
     threeStoryGurtMode: 'both_gurt',

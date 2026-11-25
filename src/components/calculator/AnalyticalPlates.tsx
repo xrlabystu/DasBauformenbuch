@@ -1152,6 +1152,20 @@ function CorniceProfilePlate({
       <div className="xl:col-span-4 space-y-2.5 text-xs text-[#44403C]">
         <p className="font-display text-lg font-medium text-[#1C1917]">Профиль и вынос карниза</p>
         <dl className="divide-y divide-[#E5DFD3] font-mono tabular-nums text-[11px]">
+          <div className="py-1.5 flex justify-between gap-2">
+            <dt className="text-[#78716C]">Состав:</dt>
+            <dd className="font-medium text-[#1C1917] text-right">
+              {params.corniceVariantMode === 'crowning_only'
+                ? 'Одна венчающая часть'
+                : (params.corniceFullStyle ?? 'frieze_architrave') === 'neck_band'
+                  ? 'Шейка + поясок (2 вар.)'
+                  : 'Фриз + архитрав (1 вар.)'}
+            </dd>
+          </div>
+          <div className="py-1.5 flex justify-between">
+            <dt className="text-[#78716C]">Главный карниз h_main:</dt>
+            <dd className="font-medium text-[#1C1917]">{formatMeters(params.hMain)} м</dd>
+          </div>
           <div className="py-1.5 flex justify-between">
             <dt className="text-[#78716C]">Деление h_u : h_l</dt>
             <dd className="font-medium text-[#1C1917]">{formatMeters(params.corniceRatio, 2)} : 1</dd>
