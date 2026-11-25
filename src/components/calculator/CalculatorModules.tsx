@@ -30,13 +30,16 @@ import {
   getAxesGroupingHint,
   gurtModeFromSchemeNumber,
   h_from_w_ratio,
+  hasAnyActiveBelt,
   isPilasterEnabledOnFloor,
   projection_45,
   projection_console,
+  resolveBeltFloorsMask,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowSillHeightM,
   schemeNumberFromGurtMode,
   socleHeight,
   threeStoryBeltScheme,
@@ -980,8 +983,14 @@ export function CalculatorModules({
               />
 
               <div className="space-y-2 pt-1 border-t border-[#E5DFD3]">
-                {params.levels.floors.map((fl, idx) => {
+                {(() => {
+                  const vgLevels = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+                  const datum0 = vgLevels.floorOffsetsM[0] ?? vgLevels.groundToFloor1;
+                  return params.levels.floors.map((fl, idx) => {
                   const derivedClear = fl.floorToFloor - fl.slabThickness;
+                  const flElev = (vgLevels.floorOffsetsM[idx] ?? datum0) - datum0;
+                  const flDatumText =
+                    Math.abs(flElev) < 0.005 ? '0.00' : `+${formatMeters(flElev, 2)}`;
                   const f2fKey = `levels.floor.${idx}.floorToFloor`;
                   const slabKey = `levels.floor.${idx}.slabThickness`;
                   const f2fLocked = isParamLocked(lockedParams, f2fKey) || isParamLocked(lockedParams, 'H');
@@ -992,7 +1001,7 @@ export function CalculatorModules({
                       className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/35 grid grid-cols-1 sm:grid-cols-3 gap-2 items-center text-[11px] font-mono"
                     >
                       <span className="font-medium text-[#1C1917]">
-                        Этаж {idx + 1} (в свету {formatMeters(derivedClear, 2)} м)
+                        Этаж {idx + 1} (отм. {flDatumText}, в свету {formatMeters(derivedClear, 2)} м)
                       </span>
                       <div className="flex items-center justify-between gap-1 text-[#57534E]">
                         <span className="inline-flex items-center gap-1">
@@ -1066,7 +1075,8 @@ export function CalculatorModules({
                       </div>
                     </div>
                   );
-                })}
+                });
+                })()}
               </div>
 
               <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -2464,6 +2474,158 @@ export function CalculatorModules({
               </label>
             </div>
 
+            <CollapsibleSection
+              title="Высота окон относительно уровня пола по этажам"
+              badge={`${params.levels.floors.length} эт.`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#57534E]">
+                <span>
+                  Отметка низа окна (подоконника) от уровня пола каждого этажа. Отметка 0.00 — пол 1-го этажа.
+                </span>
+                {params.windowSillHeights?.some((v) => v !== undefined) && (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateParams({ windowSillHeights: undefined })}
+                    className="font-mono text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12] shrink-0"
+                  >
+                    Сбросить все (авто)
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2.5">
+                {(() => {
+                  const vgWin = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+                  const datum0 = vgWin.floorOffsetsM[0] ?? vgWin.groundToFloor1;
+                  const totalFl = params.levels.floors.length;
+                  return params.levels.floors.map((fl, flIdx) => {
+                    const flH = vgWin.floorHeightsM[flIdx] ?? fl.floorToFloor;
+                    const clearH =
+                      fl.clearHeight ?? Math.max(2.0, fl.floorToFloor - fl.slabThickness);
+                    const scaledClearH = clearH * vgWin.verticalScale;
+                    const isTopSmallest =
+                      totalFl >= 3 &&
+                      flIdx === totalFl - 1 &&
+                      summary.variantInfo.rules.upperFloorSmallest;
+                    const winHThisFloor = isTopSmallest
+                      ? Math.min(params.h * 0.78, scaledClearH * 0.64)
+                      : Math.min(params.h, scaledClearH * 0.72);
+                    const maxSillM = Math.max(0.1, clearH - winHThisFloor / Math.max(0.2, vgWin.verticalScale));
+                    const effectiveSillScaled = resolveWindowSillHeightM(
+                      params,
+                      flIdx,
+                      scaledClearH,
+                      winHThisFloor,
+                      vgWin.verticalScale
+                    );
+                    const customVal = params.windowSillHeights?.[flIdx];
+                    const displaySillM =
+                      customVal !== undefined && Number.isFinite(customVal)
+                        ? customVal
+                        : effectiveSillScaled / Math.max(0.2, vgWin.verticalScale);
+                    const flDatumM = (vgWin.floorOffsetsM[flIdx] ?? datum0) - datum0;
+                    const flDatumLabel =
+                      Math.abs(flDatumM) < 0.005 ? '0.00' : `+${formatMeters(flDatumM, 2)}`;
+                    const sillLockKey = `windowSillHeights.${flIdx}`;
+                    const sillLocked = isParamLocked(lockedParams, sillLockKey);
+                    const winTopRelFloorM = effectiveSillScaled + winHThisFloor;
+
+                    return (
+                      <div
+                        key={`win-sill-${flIdx}`}
+                        className={`p-2.5 border text-xs space-y-1.5 ${
+                          sillLocked
+                            ? 'border-[#9A3412]/40 bg-[#9A3412]/[0.04]'
+                            : 'border-[#E5DFD3] bg-[#F3EFE6]/35'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium text-[#1C1917]">
+                              {flIdx + 1}-й этаж
+                            </span>
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#57534E]">
+                              пол {flDatumLabel} м
+                            </span>
+                            <LockToggleButton
+                              lockKey={sillLockKey}
+                              locked={sillLocked}
+                              onToggleLock={onToggleLock}
+                              label={`Высота окна от пола (${flIdx + 1} эт.)`}
+                            />
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[11px]">
+                            <input
+                              type="number"
+                              min={0}
+                              max={Number(maxSillM.toFixed(2))}
+                              step={0.05}
+                              disabled={sillLocked}
+                              aria-label={`Высота окна от уровня пола, ${flIdx + 1}-й этаж (м)`}
+                              value={Number(displaySillM.toFixed(2))}
+                              onChange={(e) => {
+                                const parsed = parseFloat(e.target.value);
+                                if (!Number.isFinite(parsed)) return;
+                                const clamped = Math.min(Math.max(0, parsed), maxSillM);
+                                const nextArr = Array.from({ length: totalFl }, (_, idx) =>
+                                  idx === flIdx ? Number(clamped.toFixed(2)) : params.windowSillHeights?.[idx]
+                                );
+                                onUpdateParams({ windowSillHeights: nextArr });
+                              }}
+                              className="w-20 px-2 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-right text-[#1C1917] disabled:bg-[#F3EFE6] disabled:text-[#78716C]"
+                            />
+                            <span className="text-[#78716C]">м от пола</span>
+                            {customVal !== undefined && !sillLocked && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextArr = Array.from({ length: totalFl }, (_, idx) =>
+                                    idx === flIdx ? undefined : params.windowSillHeights?.[idx]
+                                  );
+                                  const hasAny = nextArr.some((v) => v !== undefined);
+                                  onUpdateParams({
+                                    windowSillHeights: hasAny ? nextArr : undefined,
+                                  });
+                                }}
+                                className="text-[10px] text-[#9A3412] underline underline-offset-2"
+                              >
+                                авто
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <input
+                          type="range"
+                          min={0}
+                          max={Number(maxSillM.toFixed(2))}
+                          step={0.05}
+                          disabled={sillLocked}
+                          aria-label={`Ползунок высоты окна от пола, ${flIdx + 1}-й этаж`}
+                          value={Math.min(Math.max(0, displaySillM), maxSillM)}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            const nextArr = Array.from({ length: totalFl }, (_, idx) =>
+                              idx === flIdx ? Number(val.toFixed(2)) : params.windowSillHeights?.[idx]
+                            );
+                            onUpdateParams({ windowSillHeights: nextArr });
+                          }}
+                          className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-50"
+                        />
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-[#78716C]">
+                          <span>
+                            низ: +{formatMeters(effectiveSillScaled, 2)} м · верх: +{formatMeters(winTopRelFloorM, 2)} м от пола эт. (высота эт. {formatMeters(flH, 2)} м)
+                          </span>
+                          <span>{customVal === undefined ? 'авто' : 'вручную'}</span>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </CollapsibleSection>
+
             <WhyBlock
               ruleId="window_range"
               status={summary.windowCheck.rangeCheck.status}
@@ -3531,7 +3693,7 @@ export function CalculatorModules({
                 onToggleLock={onToggleLock}
                 note={
                   summary.gurtCheck.notRequired
-                    ? 'Для 1-этажного дома междуэтажный поясной карниз отсутствует (gurt = null).'
+                    ? summary.gurtCheck.explanation
                     : `От высоты 1-го этажа ${formatMeters(params.useFloorToFloorForBelt ? summary.derivedGeometry.floor1FloorToFloor : summary.derivedGeometry.H_max)} м (1/12…1/6): ${formatMeters(summary.gurtCheck.range[0])}–${formatMeters(summary.gurtCheck.range[1])} м.`
                 }
                 onChange={(hGurt) => onUpdateParams({ hGurt })}
@@ -3855,6 +4017,119 @@ export function CalculatorModules({
               </p>
             </div>
 
+            {/* Размещение лент по этажам (над каждым, кроме верхнего) */}
+            <CollapsibleSection
+              title="Размещение лент по этажам (кроме верхнего)"
+              badge={
+                params.levels.floors.length <= 1 || params.buildingVariant === 'one-story'
+                  ? '1 этаж'
+                  : `${resolveBeltFloorsMask(params).filter(Boolean).length} из ${Math.max(0, params.levels.floors.length - 1)}`
+              }
+            >
+              {(() => {
+                const floorCount = Math.max(1, params.levels.floors.length);
+                const boundaryCount = Math.max(0, floorCount - 1);
+                const currentMask = resolveBeltFloorsMask(params, floorCount);
+
+                if (boundaryCount === 0 || params.buildingVariant === 'one-story') {
+                  return (
+                    <p className="text-xs text-[#57534E]">
+                      Для 1-этажного здания межэтажные ленты не предусмотрены — над единственным этажом располагается главный венчающий карниз.
+                    </p>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] text-[#57534E]">
+                        Выберите этажи, над которыми проходит межэтажный карниз (лента):
+                      </span>
+                      <div className="flex items-center gap-3 font-mono text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateParams({
+                              beltFloors: Array.from({ length: boundaryCount }, () => true),
+                              beltIsAbsent: false,
+                            })
+                          }
+                          className="text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                        >
+                          Включить все
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateParams({
+                              beltFloors: Array.from({ length: boundaryCount }, () => false),
+                              beltIsAbsent: true,
+                              beltAsRusticationMode: false,
+                            })
+                          }
+                          className="text-[#57534E] underline underline-offset-4 hover:text-[#1C1917]"
+                        >
+                          Отключить все
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {Array.from({ length: boundaryCount }, (_, flIdx) => {
+                        const enabled = Boolean(currentMask[flIdx]);
+                        const lockKey = `beltFloors.${flIdx}`;
+                        const locked = isParamLocked(lockedParams, lockKey);
+                        return (
+                          <label
+                            key={`belt-fl-${flIdx}`}
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs border cursor-pointer transition-colors ${
+                              enabled
+                                ? 'border-[#1C1917]/40 bg-[#F3EFE6]/80 text-[#1C1917]'
+                                : 'border-[#E5DFD3] bg-[#FBF9F5] text-[#78716C]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                disabled={locked}
+                                checked={enabled}
+                                onChange={() => {
+                                  const nextMask = currentMask.map((v, idx) =>
+                                    idx === flIdx ? !enabled : v
+                                  );
+                                  const anyOn = nextMask.some(Boolean);
+                                  onUpdateParams({
+                                    beltFloors: nextMask,
+                                    beltIsAbsent: !anyOn,
+                                    beltAsRusticationMode: anyOn ? params.beltAsRusticationMode : false,
+                                  });
+                                }}
+                                className="accent-[#9A3412]"
+                              />
+                              <span>
+                                Над {flIdx + 1}-м этажом ({flIdx + 1}→{flIdx + 2} эт.)
+                              </span>
+                            </span>
+                            <LockToggleButton
+                              lockKey={lockKey}
+                              locked={locked}
+                              onToggleLock={onToggleLock}
+                              label={`Лента над ${flIdx + 1}-м эт.`}
+                            />
+                          </label>
+                        );
+                      })}
+
+                      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs border border-dashed border-[#D6CEBE] bg-[#F3EFE6]/30 text-[#78716C]">
+                        <span>Над {floorCount}-м эт. (верхний)</span>
+                        <span className="font-mono text-[10px]">венчающий карниз</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CollapsibleSection>
+
             {/* Входные высоты и иерархия */}
             <CollapsibleSection title="Входные высоты и иерархия ленты" subtle>
               <div className="flex flex-wrap gap-4 text-xs text-[#1C1917]">
@@ -3950,7 +4225,14 @@ export function CalculatorModules({
                       hasColumnsBelow: params.beltHasColumnsBelow,
                       hasRustication: params.beltAsRusticationMode,
                     });
-                    onUpdateParams({ hGurt: mid.h, beltIsAbsent: false });
+                    onUpdateParams({
+                      hGurt: mid.h,
+                      beltIsAbsent: false,
+                      beltFloors:
+                        hasAnyActiveBelt(params)
+                          ? resolveBeltFloorsMask(params)
+                          : Array.from({ length: Math.max(0, params.levels.floors.length - 1) }, () => true),
+                    });
                   }}
                   className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#9A3412] hover:bg-[#EAE3D5] disabled:opacity-45"
                 >
@@ -3964,7 +4246,7 @@ export function CalculatorModules({
                 value={params.hGurt}
                 min={0.12}
                 max={1.2}
-                disabled={params.beltIsAbsent || params.buildingVariant === 'one-story'}
+                disabled={!hasAnyActiveBelt(params) || params.buildingVariant === 'one-story'}
                 lockKey="hGurt"
                 locked={isParamLocked(lockedParams, 'hGurt')}
                 onToggleLock={onToggleLock}
@@ -4158,12 +4440,19 @@ export function CalculatorModules({
                   <input
                     type="checkbox"
                     checked={params.beltAsRusticationMode}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      const boundaryCount = Math.max(0, params.levels.floors.length - 1);
+                      const ensureMask = hasAnyActiveBelt(params)
+                        ? resolveBeltFloorsMask(params)
+                        : Array.from({ length: boundaryCount }, () => true);
                       onUpdateParams({
-                        beltAsRusticationMode: e.target.checked,
-                        beltIsAbsent: e.target.checked ? false : params.beltIsAbsent,
-                      })
-                    }
+                        beltAsRusticationMode: checked,
+                        ...(checked
+                          ? { beltIsAbsent: false, beltFloors: ensureMask }
+                          : {}),
+                      });
+                    }}
                     className="accent-[#9A3412]"
                   />
                   <span>Лента заменена рустовкой / шовным членением (S. 16)</span>
@@ -4186,18 +4475,21 @@ export function CalculatorModules({
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={params.beltIsAbsent}
-                    onChange={(e) =>
+                    checked={!hasAnyActiveBelt(params)}
+                    onChange={(e) => {
+                      const absent = e.target.checked;
+                      const boundaryCount = Math.max(0, params.levels.floors.length - 1);
                       onUpdateParams({
-                        beltIsAbsent: e.target.checked,
-                        beltAsRusticationMode: e.target.checked
+                        beltIsAbsent: absent,
+                        beltFloors: Array.from({ length: boundaryCount }, () => !absent),
+                        beltAsRusticationMode: absent
                           ? false
                           : params.beltAsRusticationMode,
-                      })
-                    }
+                      });
+                    }}
                     className="accent-[#9A3412]"
                   />
-                  <span>Лента отсутствует — этажи читаются как единое целое</span>
+                  <span>Все ленты отключены — этажи читаются как единое целое</span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -4267,7 +4559,8 @@ export function CalculatorModules({
                             multiSub: 'three',
                             floors: 3,
                             threeStoryGurtMode: gurtModeFromSchemeNumber(num),
-                            beltIsAbsent: num === 3 ? false : params.beltIsAbsent,
+                            beltIsAbsent: false,
+                            beltFloors: num === 3 ? [true, false] : [true, true],
                           })
                         }
                         className={`px-2.5 py-1.5 text-left text-[11px] border transition-colors ${

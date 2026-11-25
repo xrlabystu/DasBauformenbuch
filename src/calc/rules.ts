@@ -2520,6 +2520,80 @@ export function isPilasterEnabledOnFloor(
 }
 
 /**
+ * Возвращает булеву маску межэтажных лент (Gurtgesims) по межэтажным границам:
+ * индекс i = лента над (i + 1)-м этажом (между i+1 и i+2 этажами).
+ * Над самым верхним этажом лента никогда не создаётся (там предусмотрен главный карниз).
+ */
+export function resolveBeltFloorsMask(
+  params: FacadeParameters,
+  totalFloors = params.levels.floors.length
+): boolean[] {
+  const boundaryCount = Math.max(0, totalFloors - 1);
+  if (boundaryCount === 0 || params.buildingVariant === 'one-story') {
+    return [];
+  }
+  if (params.beltFloors !== undefined) {
+    return Array.from({ length: boundaryCount }, (_, idx) => Boolean(params.beltFloors![idx]));
+  }
+  if (params.beltIsAbsent) {
+    return Array.from({ length: boundaryCount }, () => false);
+  }
+  return Array.from({ length: boundaryCount }, (_, idx) => {
+    const upperFloorNum = idx + 2;
+    if (
+      params.buildingVariant === 'multi-story' &&
+      params.multiSub === 'three' &&
+      upperFloorNum === 3 &&
+      params.threeStoryGurtMode === 'unified_upper'
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function isBeltEnabledAboveFloor(
+  params: FacadeParameters,
+  lowerFloorIdx: number,
+  totalFloors = params.levels.floors.length
+): boolean {
+  if (lowerFloorIdx < 0 || lowerFloorIdx >= totalFloors - 1) {
+    return false;
+  }
+  const mask = resolveBeltFloorsMask(params, totalFloors);
+  return Boolean(mask[lowerFloorIdx]);
+}
+
+export function hasAnyActiveBelt(
+  params: FacadeParameters,
+  totalFloors = params.levels.floors.length
+): boolean {
+  return resolveBeltFloorsMask(params, totalFloors).some(Boolean);
+}
+
+/**
+ * Возвращает высоту низа окна (подоконника) относительно уровня пола этажа (в метрах).
+ * Если пользователь задал отметку в windowSillHeights[floorIndex], используется она (с клампингом в габарите этажа),
+ * иначе — стандартное автоматическое центрирование (clearH - winH) * 0.36.
+ */
+export function resolveWindowSillHeightM(
+  params: FacadeParameters,
+  floorIndex: number,
+  clearHeightM: number,
+  winHeightM: number,
+  verticalScale = 1
+): number {
+  const autoSill = Math.max(0.22, (clearHeightM - winHeightM) * 0.36);
+  const custom = params.windowSillHeights?.[floorIndex];
+  if (custom === undefined || !Number.isFinite(custom)) {
+    return autoSill;
+  }
+  const scaledCustom = custom * verticalScale;
+  const maxSill = Math.max(0.05, clearHeightM - winHeightM);
+  return Math.min(Math.max(0, scaledCustom), maxSill);
+}
+
+/**
  * Разрешает поэтажные вертикальные диапазоны пилястр / лопаток:
  * - учитывает включение/отключение на каждом этаже;
  * - низ любого фрагмента пилястра (с базой или без) строго >= верха цоколя;
@@ -3913,9 +3987,11 @@ export interface FacadeParameters {
   beltAsRusticationMode: boolean;
   beltRusticationHasBaseProfile: boolean;
   beltIsAbsent: boolean;
+  beltFloors?: boolean[];
   beltIsSillCornice: boolean;
   beltOnlySillUnderSecond: boolean;
   beltAlignsWithRecesses: boolean;
+  windowSillHeights?: Array<number | undefined>;
   // N4–N26 композиция, рустика, ордер и экспертные поля P3
   hasWallRustication: boolean;
   cornerRustRows: number;
@@ -4195,10 +4271,11 @@ export function evaluateFacadeSummary(
     hasRustication: params.beltAsRusticationMode,
   };
   const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];
+  const hasBelts = hasAnyActiveBelt(params, params.levels.floors.length);
   const beltActiveForHeight =
     params.buildingVariant !== 'one-story' &&
     params.levels.floors.length > 1 &&
-    !params.beltIsAbsent;
+    hasBelts;
 
   const rawBeltHeightCheck: BeltHeightResult = !beltActiveForHeight
     ? {
@@ -4212,10 +4289,10 @@ export function evaluateFacadeSummary(
           inRange: true,
           note: null,
         },
-        explanation: params.beltIsAbsent
-          ? 'Лента отсутствует: смежные этажи читаются как единое целое.'
+        explanation: !hasBelts && params.buildingVariant !== 'one-story' && params.levels.floors.length > 1
+          ? 'Межэтажные ленты отключены: смежные этажи читаются как единое целое.'
           : 'Для 1-этажного дома межэтажная лента не применяется.',
-        formula: 'не применяется (1 этаж или лента отключена)',
+        formula: 'не применяется (1 этаж или ленты отключены)',
         page: 'S. 16, 22',
       }
     : beltHeight(beltInput, params.hGurt, {
@@ -4236,8 +4313,25 @@ export function evaluateFacadeSummary(
         sourceStatus: 'explicit-verified',
       };
 
-  const gurtCheck: VariantGurtCheckResult =
-    !gurtCheckRaw.notRequired && !params.useFloorToFloorForBelt
+  const gurtCheck: VariantGurtCheckResult = !beltActiveForHeight
+    ? {
+        inRange: true,
+        belowMain: true,
+        belowSocle: true,
+        range: [effectiveBeltFloorH / 12, effectiveBeltFloorH / 6],
+        notRequired: true,
+        status: 'ok',
+        explanation:
+          params.buildingVariant === 'one-story' || params.levels.floors.length <= 1
+            ? gurtCheckRaw.explanation
+            : 'Межэтажные ленты отключены (этажи читаются как единое целое).',
+        formula:
+          params.buildingVariant === 'one-story' || params.levels.floors.length <= 1
+            ? gurtCheckRaw.formula
+            : 'не применяется (межэтажные ленты отключены)',
+        page: 'S. 16, 22',
+      }
+    : !gurtCheckRaw.notRequired && !params.useFloorToFloorForBelt
       ? {
           ...gurtCheckRaw,
           status: mergeStatuses(gurtCheckRaw.status, 'approx'),
@@ -4252,17 +4346,14 @@ export function evaluateFacadeSummary(
     params.beltEffect,
     params.beltConsoleMode
   );
-  const beltColumnsCheck =
-    params.buildingVariant === 'one-story' ||
-    params.levels.floors.length <= 1 ||
-    params.beltIsAbsent
-      ? beltWithColumns(params.hGurt, params.hMain, effectiveSocleH, false)
-      : beltWithColumns(
-          params.hGurt,
-          params.hMain,
-          effectiveSocleH,
-          params.beltHasColumnsBelow
-        );
+  const beltColumnsCheck = !beltActiveForHeight
+    ? beltWithColumns(params.hGurt, params.hMain, effectiveSocleH, false)
+    : beltWithColumns(
+        params.hGurt,
+        params.hMain,
+        effectiveSocleH,
+        params.beltHasColumnsBelow
+      );
   const beltRusticationCheck = beltAsRustication(
     params.beltRusticationHasBaseProfile,
     effectiveBeltFloorH
@@ -4273,7 +4364,7 @@ export function evaluateFacadeSummary(
     floors: params.levels.floors.length,
     floorHeight: effectiveBeltFloorH,
     totalHeight: effectiveTotalHeight,
-    isAbsent: params.beltIsAbsent,
+    isAbsent: !hasBelts,
     isSillCornice: params.beltIsSillCornice,
     onlySillUnderSecond: params.beltOnlySillUnderSecond,
     alignsWithRecesses: params.beltAlignsWithRecesses,
@@ -4282,12 +4373,14 @@ export function evaluateFacadeSummary(
     threeStoryGurtMode: params.threeStoryGurtMode,
   });
 
-  const beltAggregateStatus = mergeStatuses(
-    beltHeightCheck.status,
-    beltCrowningCheck.status,
-    beltColumnsCheck.status,
-    beltSpecialCheck.status
-  );
+  const beltAggregateStatus = beltActiveForHeight
+    ? mergeStatuses(
+        beltHeightCheck.status,
+        beltCrowningCheck.status,
+        beltColumnsCheck.status,
+        beltSpecialCheck.status
+      )
+    : beltSpecialCheck.status;
 
   const checks: SummaryCheckItem[] = [
     {
@@ -5116,7 +5209,12 @@ export function applyBuildingVariantPreset(
     rustRowHeight: Math.min(0.4, Math.max(0.3, alignedHSocle / 5)),
     useFullFloorAsSocle: isMiethausFourFive,
     isEmbeddedInRow,
-    beltIsAbsent: variant === 'one-story',
+    beltIsAbsent: variant === 'one-story' ? true : prev.beltIsAbsent,
+    beltFloors: Array.from({ length: Math.max(0, floors - 1) }, (_, idx) =>
+      variant === 'one-story' || prev.beltIsAbsent
+        ? false
+        : Boolean(prev.beltFloors?.[idx])
+    ),
     beltIsSillCornice: false,
     beltOnlySillUnderSecond: false,
     beltUpperFloorHeight: alignedLevels.floors[1]?.floorToFloor ?? prev.H + 0.35,
@@ -5251,7 +5349,8 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     beltHasColumnsBelow: type === 'palace' || type === 'rich_columnar',
     beltAsRusticationMode: false,
     beltRusticationHasBaseProfile: true,
-    beltIsAbsent: false,
+    beltIsAbsent: true,
+    beltFloors: Array.from({ length: Math.max(0, floors - 1) }, () => false),
     beltIsSillCornice: false,
     beltOnlySillUnderSecond: false,
     beltAlignsWithRecesses: true,

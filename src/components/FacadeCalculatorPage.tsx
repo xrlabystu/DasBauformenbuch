@@ -162,6 +162,25 @@ function computeNextParams(
     next.pilasterFloors = resized;
   }
 
+  // Синхронизируем поэтажные межэтажные ленты (только между этажами: длина floors - 1)
+  const boundaryCount = Math.max(0, next.levels.floors.length - 1);
+  if (next.beltFloors && next.beltFloors.length !== boundaryCount) {
+    const resizedBelts = Array.from({ length: boundaryCount }, (_, idx) =>
+      idx < next.beltFloors!.length ? Boolean(next.beltFloors![idx]) : false
+    );
+    next.beltFloors = resizedBelts;
+    if (patch.beltIsAbsent === undefined && patch.beltFloors === undefined) {
+      next.beltIsAbsent = !resizedBelts.some(Boolean);
+    }
+  }
+
+  // Синхронизируем поэтажные высоты подоконников окон
+  if (next.windowSillHeights && next.windowSillHeights.length !== next.levels.floors.length) {
+    next.windowSillHeights = Array.from({ length: next.levels.floors.length }, (_, idx) =>
+      idx < next.windowSillHeights!.length ? next.windowSillHeights![idx] : undefined
+    );
+  }
+
   return next;
 }
 

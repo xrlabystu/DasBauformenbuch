@@ -133,5 +133,17 @@ export function filterUnlockedPatch(
     }
   }
 
+  if (patch.windowSillHeights) {
+    nextPatch.windowSillHeights = patch.windowSillHeights.map((val, idx) =>
+      locks[`windowSillHeights.${idx}`] ? prev.windowSillHeights?.[idx] : val
+    );
+  }
+
+  if (patch.beltFloors) {
+    nextPatch.beltFloors = patch.beltFloors.map((val, idx) =>
+      locks[`beltFloors.${idx}`] ? Boolean(prev.beltFloors?.[idx]) : val
+    );
+  }
+
   return nextPatch;
 }

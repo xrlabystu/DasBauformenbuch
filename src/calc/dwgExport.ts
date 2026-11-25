@@ -24,6 +24,8 @@ import {
   PHI,
   RULES_DATA,
   formatMeters,
+  hasAnyActiveBelt,
+  isBeltEnabledAboveFloor,
   projection_45,
   projection_console,
   resolveEntranceGeometry,
@@ -31,6 +33,7 @@ import {
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowSillHeightM,
   type FacadeParameters,
   type FacadeSummary,
 } from './rules';
@@ -349,18 +352,9 @@ export function buildFacadeCadDocument(
       const upperFloorNum = idx + 2;
       const upperFloorH = floorHeightsM[idx + 1] ?? floorHeightsM[0] ?? safeH;
       const isUpperBelt = upperFloorNum === 3;
+      const beltEnabledHere = isBeltEnabledAboveFloor(params, idx, safeFloors);
 
-      if (
-        params.buildingVariant === 'multi-story' &&
-        params.multiSub === 'three' &&
-        isUpperBelt &&
-        params.threeStoryGurtMode === 'unified_upper'
-      ) {
-        addLine(doc, layerBelts, 0, floorStartM * MM, totalWidthM * MM, floorStartM * MM);
-        return;
-      }
-
-      if (params.beltIsAbsent) {
+      if (!beltEnabledHere) {
         addLine(doc, layerBelts, 0, floorStartM * MM, totalWidthM * MM, floorStartM * MM);
         return;
       }
@@ -503,14 +497,21 @@ export function buildFacadeCadDocument(
       const clearH =
         levelFloors[flIdx]?.clearHeight ??
         Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
+      const scaledClearH = clearH * verticalGeo.verticalScale;
       const isTopSmallest =
         safeFloors >= 3 &&
         flIdx === safeFloors - 1 &&
         summary.variantInfo.rules.upperFloorSmallest;
       const winHThisFloor = isTopSmallest
-        ? Math.min(safeWinH * 0.78, clearH * 0.64)
-        : Math.min(safeWinH, clearH * 0.72);
-      const sillM = Math.max(0.22, (clearH - winHThisFloor) * 0.36);
+        ? Math.min(safeWinH * 0.78, scaledClearH * 0.64)
+        : Math.min(safeWinH, scaledClearH * 0.72);
+      const sillM = resolveWindowSillHeightM(
+        params,
+        flIdx,
+        scaledClearH,
+        winHThisFloor,
+        verticalGeo.verticalScale
+      );
       const winBotM = floorStartM + sillM;
 
       const winXMm = (axisM - safeW / 2) * MM;
@@ -635,7 +636,68 @@ export function buildFacadeCadDocument(
     }
   }
 
-  // 8. Отметки этажей слева
+  // 8. Размерная цепочка высот слева (0.00 = уровень пола 1-го этажа) и подписи этажей
+  const leftChainX = -420;
+  const leftShelfX = -1120;
+  const datum0M = floorOffsetsM[0] ?? groundToFloor1;
+  const topFloorLvlMm = (floorOffsetsM[floorOffsetsM.length - 1] ?? datum0M) * MM;
+  const tickSz = 65;
+
+  // Вертикальная связующая линия цепочки отметок
+  addLine(doc, layerDims, leftChainX, 0, leftChainX, topFloorLvlMm);
+
+  // Отметка уровня земли (отрицательная относительно пола 1-го этажа)
+  addLine(doc, layerDims, leftShelfX, 0, 0, 0);
+  addLine(doc, layerDims, leftChainX - tickSz, -tickSz, leftChainX + tickSz, tickSz);
+  addPolylinePoints(
+    doc,
+    layerDims,
+    [
+      [leftChainX - 180, 0],
+      [leftChainX - 250, 120],
+      [leftChainX - 110, 120],
+    ],
+    true
+  );
+  addText(
+    doc,
+    layerDims,
+    `-${formatMeters(datum0M, 2)} (земля)`,
+    leftChainX - 100,
+    -175,
+    120,
+    {
+      hAlign: TextHorizontalAlignment.Right,
+      vAlign: TextVerticalAlignmentType.Baseline,
+    }
+  );
+
+  // Отметки уровня пола 1-го, 2-го и последующих этажей
+  floorOffsetsM.forEach((floorStartM, flIdx) => {
+    const yLvlMm = floorStartM * MM;
+    const relM = floorStartM - datum0M;
+    const elevLabel =
+      Math.abs(relM) < 0.005 ? '0.00' : `+${formatMeters(relM, 2)}`;
+
+    addLine(doc, layerDims, leftShelfX, yLvlMm, 0, yLvlMm);
+    addLine(doc, layerDims, leftChainX - tickSz, yLvlMm - tickSz, leftChainX + tickSz, yLvlMm + tickSz);
+    addPolylinePoints(
+      doc,
+      layerDims,
+      [
+        [leftChainX - 180, yLvlMm],
+        [leftChainX - 250, yLvlMm + 120],
+        [leftChainX - 110, yLvlMm + 120],
+      ],
+      true
+    );
+    addText(doc, layerDims, elevLabel, leftChainX - 280, yLvlMm + 70, 130, {
+      hAlign: TextHorizontalAlignment.Right,
+      vAlign: TextVerticalAlignmentType.Baseline,
+    });
+  });
+
+  // Подписи этажей слева от размерной цепочки отметок
   floorOffsetsM.forEach((floorStartM, flIdx) => {
     const flNum = flIdx + 1;
     const midYMm = (floorStartM + floorHeightsM[flIdx] / 2) * MM;
@@ -652,7 +714,7 @@ export function buildFacadeCadDocument(
     else if (safeFloors >= 3 && flNum === safeFloors && summary.variantInfo.rules.upperFloorSmallest) {
       tag = `${flNum} эт. (мал.)`;
     }
-    addText(doc, layerNotes, tag, -350, midYMm, 140, {
+    addText(doc, layerNotes, tag, -1280, midYMm, 140, {
       hAlign: TextHorizontalAlignment.Right,
       vAlign: TextVerticalAlignmentType.Middle,
     });
@@ -1065,8 +1127,9 @@ export function buildDetailPlateCadDocument(
     const wallW = 450;
     const reachMm = params.beltMode === 'crowning' ? Math.max(220, totalMm * 0.7) : Math.max(160, totalMm * 0.52);
 
+    const anyBeltOn = hasAnyActiveBelt(params);
     addRect(doc, layerGeom, -wallW, -400, wallW, totalMm + 800);
-    if (!params.beltIsAbsent && !params.beltAsRusticationMode) {
+    if (anyBeltOn && !params.beltAsRusticationMode) {
       // Венчающие верхние обломы
       addRect(doc, layerGeom, 0, totalMm - upperMm, reachMm, upperMm);
       // Нижние обломы венца
@@ -1093,6 +1156,9 @@ export function buildDetailPlateCadDocument(
       if (params.beltRusticationHasBaseProfile) {
         addRect(doc, layerGuides, 0, -90, 240, 90);
       }
+    } else {
+      addLine(doc, layerGuides, -wallW, totalMm / 2, 180, totalMm / 2);
+      addText(doc, layerNotes, 'Межэтажная лента отключена', 80, totalMm / 2 + 80, 95);
     }
     addVerticalDimension(doc, layerDims, 0, totalMm, -wallW - 240, -wallW, `H_ленты = ${formatMeters(params.hGurt, 2)} м`);
     addText(

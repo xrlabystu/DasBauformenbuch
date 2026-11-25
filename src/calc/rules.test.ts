@@ -73,6 +73,8 @@ import {
   getTypology,
   getVariantPreset,
   h_from_w_ratio,
+  hasAnyActiveBelt,
+  isBeltEnabledAboveFloor,
   isKnownGoodRatio,
   mergeStatuses,
   nearest_golden_approx,
@@ -84,12 +86,14 @@ import {
   projection_45,
   projection_console,
   ratio_from_AH,
+  resolveBeltFloorsMask,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowSillHeightM,
   rusticationRows,
   socleHeight,
   syncLevelsWithH,
@@ -1121,6 +1125,8 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     const urban = createDefaultParamsForTypology('urban_house');
     const summaryClearBelt = evaluateFacadeSummary({
       ...urban,
+      beltIsAbsent: false,
+      beltFloors: [true, true],
       useFloorToFloorForBelt: false,
       hGurt: 0.4,
     });
@@ -1342,5 +1348,120 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(largeFullSocle.mainCorniceCheck.status, 'ok');
     assert.equal(largeFullSocle.mainCorniceCheck.notApplicable, true);
   });
+
+  it('37. По умолчанию у всех типов зданий межэтажные ленты отключены без ложных нарушений', () => {
+    const types = ['simple_house', 'urban_house', 'miethaus', 'villa', 'rich_columnar', 'monumental', 'palace'] as const;
+    for (const typeId of types) {
+      const def = createDefaultParamsForTypology(typeId);
+      assert.equal(def.beltIsAbsent, true, `${typeId} must default to beltIsAbsent=true`);
+      assert.equal(hasAnyActiveBelt(def), false, `${typeId} must default to no active belts`);
+      const mask = resolveBeltFloorsMask(def);
+      assert.equal(mask.length, Math.max(0, def.levels.floors.length - 1));
+      assert.ok(mask.every((v) => !v), `${typeId} beltFloors must all be false`);
+      const sum = evaluateFacadeSummary(def, { expertMode: true });
+      assert.equal(sum.beltHeightCheck.notRequired, true);
+      assert.equal(sum.gurtCheck.notRequired, true);
+    }
+  });
+
+  it('38. Поэтажные ленты: настройка над каждым этажом кроме верхнего и экспорт в DWG', () => {
+    const urban = createDefaultParamsForTypology('urban_house'); // 3 этажа -> 2 межэтажные границы
+    const customBeltParams = {
+      ...urban,
+      beltIsAbsent: false,
+      beltFloors: [false, true], // лента только над 2-м этажом (между 2 и 3), над 3-м (верхним) никогда нет
+    };
+    assert.equal(isBeltEnabledAboveFloor(customBeltParams, 0, 3), false);
+    assert.equal(isBeltEnabledAboveFloor(customBeltParams, 1, 3), true);
+    assert.equal(isBeltEnabledAboveFloor(customBeltParams, 2, 3), false); // верхний этаж: запрещено
+    assert.equal(hasAnyActiveBelt(customBeltParams, 3), true);
+
+    const sum = evaluateFacadeSummary(customBeltParams, { expertMode: true });
+    const cad = buildFacadeCadDocument(customBeltParams, sum);
+    const beltEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '04_BELTS'
+    );
+    // 1 граница без ленты (линия) + 1 граница с лентой (прямоугольник-полилиния)
+    assert.equal(beltEnts.length, 2);
+    const closedBeltPolys = beltEnts.filter((ent) => {
+      const verts = (ent as unknown as { vertices?: unknown[] }).vertices;
+      return Boolean(verts && verts.length === 4);
+    });
+    assert.equal(closedBeltPolys.length, 1);
+  });
+
+  it('39. Размерная цепочка высот слева от фасада: уровень пола 1-го этажа = 0.00, земля < 0, этажи 2+ > 0', () => {
+    const urban = createDefaultParamsForTypology('urban_house');
+    const sum = evaluateFacadeSummary(urban, { expertMode: true });
+    const vg = resolveScaledVerticalGeometry(urban, sum.derivedGeometry);
+    const cad = buildFacadeCadDocument(urban, sum);
+    const dimTexts = Array.from(cad.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as unknown as { value?: string }).value)
+      .filter((val): val is string => typeof val === 'string');
+
+    assert.ok(dimTexts.includes('0.00'), 'Left datum chain must include 0.00 at 1st floor');
+    const expectedGround = `-${vg.groundToFloor1.toFixed(2)} (земля)`;
+    assert.ok(
+      dimTexts.some((t) => t.startsWith(`-${vg.groundToFloor1.toFixed(2)}`)),
+      `Left datum chain must include ground elevation ${expectedGround}, got: ${dimTexts.join(', ')}`
+    );
+    const floor2Rel = vg.floorOffsetsM[1] - vg.floorOffsetsM[0];
+    assert.ok(
+      dimTexts.includes(`+${floor2Rel.toFixed(2)}`),
+      `Left datum chain must include 2nd floor +${floor2Rel.toFixed(2)}, got: ${dimTexts.join(', ')}`
+    );
+  });
+
+  it('40. Поэтажная настройка высоты окна относительно уровня пола этажа (SVG/DWG и замочки)', () => {
+    const urban = createDefaultParamsForTypology('urban_house'); // 3 этажа, 3 оси
+    const customSillParams = {
+      ...urban,
+      windowSillHeights: [0.4, 0.9, 1.1],
+    };
+    const sum = evaluateFacadeSummary(customSillParams, { expertMode: true });
+    const vg = resolveScaledVerticalGeometry(customSillParams, sum.derivedGeometry);
+    const cad = buildFacadeCadDocument(customSillParams, sum);
+
+    // Обычные 4-вершинные прямоугольники проёмов (переплёты — Line, обрамления шире w)
+    const winFrameRects = Array.from(cad.modelSpace?.entities ?? []).filter((ent) => {
+      if (ent.layer?.name !== '05_WINDOWS_DOORS') return false;
+      const verts = (ent as unknown as { vertices?: Array<{ location: { x: number; y: number } }> }).vertices;
+      if (!verts || verts.length !== 4) return false;
+      const xs = verts.map((v) => v.location.x);
+      const widthMm = Math.max(...xs) - Math.min(...xs);
+      return Math.abs(widthMm - customSillParams.w * 1000) < 5;
+    });
+
+    // На первой оси должно быть 3 окна с разными низами: floorStartM + sillM
+    const ysBotMm = Array.from(
+      new Set(
+        winFrameRects.map((ent) => {
+          const verts = (ent as unknown as { vertices: Array<{ location: { y: number } }> }).vertices;
+          return Math.round(Math.min(...verts.map((v) => v.location.y)));
+        })
+      )
+    ).sort((a, b) => a - b);
+
+    assert.equal(ysBotMm.length, 3);
+    assertClose(ysBotMm[0] / 1000, vg.floorOffsetsM[0] + 0.4);
+    assertClose(ysBotMm[1] / 1000, vg.floorOffsetsM[1] + 0.9);
+    // 3-й этаж проверяем через helper на клампинг
+    const fl3Clear = customSillParams.levels.floors[2].clearHeight ?? 3.5;
+    const fl3WinH = Math.min(customSillParams.h * 0.78, fl3Clear * 0.64);
+    const expectedFl3Sill = resolveWindowSillHeightM(customSillParams, 2, fl3Clear, fl3WinH, 1);
+    assertClose(ysBotMm[2] / 1000, vg.floorOffsetsM[2] + expectedFl3Sill);
+
+    // Замочек поэтажной высоты окна защищает конкретный этаж при обновлении
+    const lockedPatch = filterUnlockedPatch(
+      customSillParams,
+      { windowSillHeights: [1.2, 1.2, 1.2] },
+      { 'windowSillHeights.1': true }
+    );
+    assert.equal(lockedPatch.windowSillHeights?.[0], 1.2);
+    assert.equal(lockedPatch.windowSillHeights?.[1], 0.9);
+    assert.equal(lockedPatch.windowSillHeights?.[2], 1.2);
+  });
 });
+
 

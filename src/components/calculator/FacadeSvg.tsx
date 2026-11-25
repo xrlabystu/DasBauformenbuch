@@ -23,12 +23,16 @@ import {
 } from 'lucide-react';
 import {
   formatMeters,
+  hasAnyActiveBelt,
+  isBeltEnabledAboveFloor,
   mergeStatuses,
+  resolveBeltFloorsMask,
   resolveEntranceGeometry,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowSillHeightM,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
@@ -158,9 +162,9 @@ export function FacadeSvg({
     : Math.max(0.25, params.hSocle);
   const wallHeightM = wallTopM - groundToFloor1;
 
-  const svgW = 860;
+  const svgW = 928;
   const svgH = safeFloors >= 4 ? 540 : 470;
-  const padLeft = 84;
+  const padLeft = 152;
   const padRight = 104;
   const padTop = 64;
   const padBottom = 86;
@@ -1000,91 +1004,70 @@ export function FacadeSvg({
 
           {/* Belt Cornices / Gurtgesimse (S. 16, 22) */}
           {safeFloors >= 2 &&
-            floorOffsetsM.slice(1).map((floorStartM, idx) => {
-              const upperFloorNum = idx + 2; // 2nd, 3rd...
-              const upperFloorH = floorHeightsM[idx + 1] ?? floorHeightsM[0] ?? safeH;
-              const isUpperBelt = upperFloorNum === 3;
+            (() => {
+              const beltMask = resolveBeltFloorsMask(params, safeFloors);
+              const anyBeltsOn = hasAnyActiveBelt(params, safeFloors);
+              const firstActiveBoundaryIdx = beltMask.findIndex(Boolean);
+              return floorOffsetsM.slice(1).map((floorStartM, idx) => {
+                const upperFloorNum = idx + 2; // 2nd, 3rd...
+                const upperFloorH = floorHeightsM[idx + 1] ?? floorHeightsM[0] ?? safeH;
+                const isUpperBelt = upperFloorNum === 3;
+                const beltEnabledHere = isBeltEnabledAboveFloor(params, idx, safeFloors);
 
-              // При 3-этажном режиме вариант 'unified_upper' не прерывает 2 и 3 этажи карнизом
-              if (
-                params.buildingVariant === 'multi-story' &&
-                params.multiSub === 'three' &&
-                isUpperBelt &&
-                params.threeStoryGurtMode === 'unified_upper'
-              ) {
-                return (
-                  <g
-                    key={`gurt-absent-${upperFloorNum}`}
-                    className="cursor-pointer"
-                    onClick={() => onSelectElement?.('belt')}
-                    {...violationHoverProps('belt')}
-                  >
-                    <rect
-                      x={xM(0)}
-                      y={yFromGroundM(floorStartM) - 8}
-                      width={facadePxW}
-                      height={16}
-                      fill={beltStatus === 'violation' ? 'rgba(185, 28, 28, 0.08)' : 'transparent'}
-                    />
-                    <line
-                      x1={xM(0)}
-                      y1={yFromGroundM(floorStartM)}
-                      x2={xM(0) + facadePxW}
-                      y2={yFromGroundM(floorStartM)}
-                      stroke={isHi('belt') ? STATUS_STROKE[beltStatus] : '#A8A29E'}
-                      strokeWidth={0.9}
-                      strokeDasharray="4 4"
-                    />
-                  </g>
-                );
-              }
-
-              // Если лента полностью отключена ('без ленты')
-              if (params.beltIsAbsent) {
-                return (
-                  <g
-                    key={`gurt-off-${upperFloorNum}`}
-                    className="cursor-pointer"
-                    onClick={() => onSelectElement?.('belt')}
-                    {...violationHoverProps('belt')}
-                  >
-                    <rect
-                      x={xM(0)}
-                      y={yFromGroundM(floorStartM) - 10}
-                      width={facadePxW}
-                      height={20}
-                      fill={beltStatus === 'violation' ? 'rgba(185, 28, 28, 0.10)' : 'transparent'}
-                    />
-                    <line
-                      x1={xM(0)}
-                      y1={yFromGroundM(floorStartM)}
-                      x2={xM(0) + facadePxW}
-                      y2={yFromGroundM(floorStartM)}
-                      stroke={
-                        isHi('belt') || beltStatus !== 'ok'
-                          ? STATUS_STROKE[beltStatus]
-                          : '#A8A29E'
-                      }
-                      strokeWidth={beltStatus === 'violation' ? 1.5 : 1}
-                      strokeDasharray="5 4"
-                    />
-                    {upperFloorNum === 2 && (
-                      <text
-                        x={xM(0) + facadePxW / 2}
-                        y={yFromGroundM(floorStartM) - 4}
-                        textAnchor="middle"
-                        fontSize="8.5"
-                        fontFamily="IBM Plex Mono, monospace"
-                        fill={beltStatus === 'violation' ? '#B91C1C' : beltStatus === 'approx' ? '#B45309' : '#57534E'}
-                      >
-                        {params.beltOnlySillUnderSecond
-                          ? '▲ только подоконник под 2 эт. (редко, S. 22)'
-                          : 'Без ленты — этажи единым целым'}
-                      </text>
-                    )}
-                  </g>
-                );
-              }
+                if (!beltEnabledHere) {
+                  return (
+                    <g
+                      key={`gurt-off-${upperFloorNum}`}
+                      className="cursor-pointer"
+                      onClick={() => onSelectElement?.('belt')}
+                      {...violationHoverProps('belt')}
+                    >
+                      <rect
+                        x={xM(0)}
+                        y={yFromGroundM(floorStartM) - 8}
+                        width={facadePxW}
+                        height={16}
+                        fill={beltStatus === 'violation' && !anyBeltsOn ? 'rgba(185, 28, 28, 0.08)' : 'transparent'}
+                      />
+                      <line
+                        x1={xM(0)}
+                        y1={yFromGroundM(floorStartM)}
+                        x2={xM(0) + facadePxW}
+                        y2={yFromGroundM(floorStartM)}
+                        stroke={
+                          isHi('belt') || (!anyBeltsOn && beltStatus !== 'ok')
+                            ? STATUS_STROKE[beltStatus]
+                            : '#A8A29E'
+                        }
+                        strokeOpacity={isHi('belt') || (!anyBeltsOn && beltStatus !== 'ok') ? 0.9 : 0.45}
+                        strokeWidth={!anyBeltsOn && beltStatus === 'violation' ? 1.5 : 0.9}
+                        strokeDasharray="5 4"
+                      />
+                      {upperFloorNum === 2 &&
+                        !anyBeltsOn &&
+                        (isHi('belt') || beltStatus !== 'ok' || params.beltOnlySillUnderSecond) && (
+                          <text
+                            x={xM(0) + facadePxW / 2}
+                            y={yFromGroundM(floorStartM) - 4}
+                            textAnchor="middle"
+                            fontSize="8.5"
+                            fontFamily="IBM Plex Mono, monospace"
+                            fill={
+                              beltStatus === 'violation'
+                                ? '#B91C1C'
+                                : beltStatus === 'approx'
+                                  ? '#B45309'
+                                  : '#57534E'
+                            }
+                          >
+                            {params.beltOnlySillUnderSecond
+                              ? '▲ только подоконник под 2 эт. (редко, S. 22)'
+                              : 'Без ленты — этажи единым целым'}
+                          </text>
+                        )}
+                    </g>
+                  );
+                }
 
               const isThirdSohlbank =
                 params.buildingVariant === 'multi-story' &&
@@ -1195,7 +1178,7 @@ export function FacadeSvg({
                     strokeWidth={isHi('belt') || beltStatus === 'violation' ? 1.5 : 1}
                     strokeDasharray={isSillMode ? '4 2' : undefined}
                   />
-                  {upperFloorNum === 2 && (
+                  {idx === firstActiveBoundaryIdx && (
                     <g>
                       <rect
                         x={xM(0) + facadePxW - 142}
@@ -1221,7 +1204,8 @@ export function FacadeSvg({
                   )}
                 </g>
               );
-            })}
+            });
+            })()}
 
           {/* Pilasters / Mauerpfeiler (поэтажные диапазоны >= верха цоколя; по краям или в каждом простенке) */}
           {(() => {
@@ -1388,15 +1372,24 @@ export function FacadeSvg({
                     return null;
                   }
                   const flH = floorHeightsM[flIdx];
-                  const clearH = levelFloors[flIdx]?.clearHeight ?? Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
+                  const clearH =
+                    levelFloors[flIdx]?.clearHeight ??
+                    Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
+                  const scaledClearH = clearH * verticalGeo.verticalScale;
                   const isTopSmallest =
                     safeFloors >= 3 &&
                     flIdx === safeFloors - 1 &&
                     summary.variantInfo.rules.upperFloorSmallest;
                   const winHThisFloor = isTopSmallest
-                    ? Math.min(safeWinH * 0.78, clearH * 0.64)
-                    : Math.min(safeWinH, clearH * 0.72);
-                  const sillM = Math.max(0.22, (clearH - winHThisFloor) * 0.36);
+                    ? Math.min(safeWinH * 0.78, scaledClearH * 0.64)
+                    : Math.min(safeWinH, scaledClearH * 0.72);
+                  const sillM = resolveWindowSillHeightM(
+                    params,
+                    flIdx,
+                    scaledClearH,
+                    winHThisFloor,
+                    verticalGeo.verticalScale
+                  );
                   const winTopThisM = floorStartM + sillM + winHThisFloor;
 
                   const winX = xM(axisM - safeW / 2);
@@ -1654,7 +1647,134 @@ export function FacadeSvg({
               );
             })()}
 
-          {/* LEFT FLOOR TAGS & 5-STORY UNIFIED 1+2 BRACKET */}
+          {/* LEFT VERTICAL ELEVATION DATUM CHAIN (0.00 = 1st floor) & FLOOR TAGS */}
+          {(() => {
+            const chainX = xM(0) - 18;
+            const shelfLeftX = xM(0) - 70;
+            const datum0M = floorOffsetsM[0] ?? groundToFloor1;
+            const topFloorY = yFromGroundM(floorOffsetsM[floorOffsetsM.length - 1] ?? datum0M);
+            const formatElev = (relM: number) => {
+              if (Math.abs(relM) < 0.005) return '0.00';
+              const val = formatMeters(Math.abs(relM), 2);
+              return relM > 0 ? `+${val}` : `-${val}`;
+            };
+            const groundElevText = formatElev(-datum0M);
+
+            return (
+              <g aria-label="Размерная цепочка высот слева от фасада">
+                {/* Непрерывная вертикальная линия размерной цепочки от уровня земли до уровня верхнего пола */}
+                <line
+                  x1={chainX}
+                  y1={groundY}
+                  x2={chainX}
+                  y2={topFloorY}
+                  stroke="#57534E"
+                  strokeWidth={1.05}
+                />
+
+                {/* Отметка уровня земли */}
+                <g>
+                  <line
+                    x1={shelfLeftX}
+                    y1={groundY}
+                    x2={xM(0)}
+                    y2={groundY}
+                    stroke="#57534E"
+                    strokeWidth={0.85}
+                    strokeDasharray="3 2"
+                  />
+                  <line
+                    x1={chainX - 3.5}
+                    y1={groundY + 3.5}
+                    x2={chainX + 3.5}
+                    y2={groundY - 3.5}
+                    stroke="#44403C"
+                    strokeWidth={1.25}
+                  />
+                  <polygon
+                    points={`${chainX - 11},${groundY} ${chainX - 15},${groundY - 6} ${chainX - 7},${groundY - 6}`}
+                    fill="#FBF9F5"
+                    stroke="#57534E"
+                    strokeWidth={0.95}
+                  />
+                  <rect
+                    x={shelfLeftX - 4}
+                    y={groundY + 2}
+                    width={62}
+                    height={12}
+                    fill="#FBF9F5"
+                    fillOpacity={0.92}
+                  />
+                  <text
+                    x={chainX - 4}
+                    y={groundY + 11}
+                    textAnchor="end"
+                    fontSize="8.5"
+                    fontFamily="IBM Plex Mono, monospace"
+                    fill="#57534E"
+                  >
+                    {groundElevText} земля
+                  </text>
+                </g>
+
+                {/* Отметки уровня пола 1-го, 2-го и последующих этажей */}
+                {floorOffsetsM.map((floorStartM, flIdx) => {
+                  const yLvl = yFromGroundM(floorStartM);
+                  const isFloor1 = flIdx === 0;
+                  const elevText = formatElev(floorStartM - datum0M);
+                  const strokeCol = isFloor1 ? '#9A3412' : '#44403C';
+                  return (
+                    <g key={`elev-lvl-${flIdx}`}>
+                      <line
+                        x1={shelfLeftX}
+                        y1={yLvl}
+                        x2={xM(0)}
+                        y2={yLvl}
+                        stroke={isFloor1 ? '#9A3412' : '#78716C'}
+                        strokeOpacity={isFloor1 ? 0.75 : 0.55}
+                        strokeWidth={isFloor1 ? 0.95 : 0.75}
+                        strokeDasharray="3 2"
+                      />
+                      <line
+                        x1={chainX - 3.5}
+                        y1={yLvl + 3.5}
+                        x2={chainX + 3.5}
+                        y2={yLvl - 3.5}
+                        stroke={strokeCol}
+                        strokeWidth={1.25}
+                      />
+                      <polygon
+                        points={`${chainX - 11},${yLvl} ${chainX - 15},${yLvl - 6} ${chainX - 7},${yLvl - 6}`}
+                        fill={isFloor1 ? '#9A3412' : '#FBF9F5'}
+                        stroke={strokeCol}
+                        strokeWidth={0.95}
+                      />
+                      <rect
+                        x={shelfLeftX + 4}
+                        y={yLvl - 14}
+                        width={46}
+                        height={11}
+                        fill="#FBF9F5"
+                        fillOpacity={0.92}
+                      />
+                      <text
+                        x={chainX - 17}
+                        y={yLvl - 4}
+                        textAnchor="end"
+                        fontSize="9"
+                        fontFamily="IBM Plex Mono, monospace"
+                        fontWeight={isFloor1 ? 700 : 500}
+                        fill={strokeCol}
+                      >
+                        {elevText}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })()}
+
           {floorOffsetsM.map((floorStartM, flIdx) => {
             const flMidY = yFromGroundM(floorStartM + floorHeightsM[flIdx] / 2);
             const flNum = flIdx + 1;
@@ -1675,10 +1795,10 @@ export function FacadeSvg({
             return (
               <text
                 key={`fl-tag-${flNum}`}
-                x={xM(0) - 10}
+                x={xM(0) - 76}
                 y={flMidY + 3}
                 textAnchor="end"
-                fontSize="9"
+                fontSize="8.5"
                 fontFamily="IBM Plex Mono, monospace"
                 fontWeight={isMainTier || isFullSocle || isUnified12 ? 600 : 400}
                 fill={isUnified12 || isMainTier ? '#9A3412' : '#57534E'}
