@@ -304,8 +304,18 @@ export function buildFacadeCadDocument(
   const totalWidthM = summary.derivedGeometry.facadeWidth;
 
   const verticalGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
-  const { groundToFloor1, floorHeightsM, floorOffsetsM, wallTopM, corniceM, corniceTopM, totalHeightM } =
-    verticalGeo;
+  const {
+    groundToFloor1,
+    floorHeightsM,
+    floorOffsetsM,
+    topFloorTopM,
+    topFloorCeilingM,
+    corniceBottomM,
+    wallTopM,
+    corniceM,
+    corniceTopM,
+    totalHeightM,
+  } = verticalGeo;
   const effectiveSocleH = params.useFullFloorAsSocle
     ? floorOffsetsM.length >= 2
       ? floorOffsetsM[1]
@@ -677,11 +687,12 @@ export function buildFacadeCadDocument(
   const leftChainX = -420;
   const leftShelfX = -1120;
   const datum0M = floorOffsetsM[0] ?? groundToFloor1;
-  const wallTopMm = wallTopM * MM;
+  const hasIndependentCorniceBottom = Math.abs(corniceBottomM - topFloorTopM) > 0.01;
+  const chainTopMm = Math.max(topFloorTopM, corniceBottomM) * MM;
   const tickSz = 65;
 
-  // Вертикальная связующая линия цепочки отметок (от уровня земли до верха верхнего этажа)
-  addLine(doc, layerDims, leftChainX, 0, leftChainX, wallTopMm);
+  // Вертикальная связующая линия цепочки отметок (от уровня земли до верха цепочки)
+  addLine(doc, layerDims, leftChainX, 0, leftChainX, chainTopMm);
 
   // Отметка уровня земли (отрицательная относительно пола 1-го этажа)
   addLine(doc, layerDims, leftShelfX, 0, 0, 0);
@@ -710,7 +721,7 @@ export function buildFacadeCadDocument(
   );
 
   // Отметки уровня пола 1-го, 2-го и последующих этажей + верхняя граница верхнего этажа
-  [...floorOffsetsM, wallTopM].forEach((lvlM) => {
+  [...floorOffsetsM, topFloorTopM].forEach((lvlM) => {
     const yLvlMm = lvlM * MM;
     const relM = lvlM - datum0M;
     const elevLabel =
@@ -733,6 +744,44 @@ export function buildFacadeCadDocument(
       vAlign: TextVerticalAlignmentType.Baseline,
     });
   });
+
+  if (hasIndependentCorniceBottom) {
+    const yCeilingMm = topFloorCeilingM * MM;
+    const relCeilM = topFloorCeilingM - datum0M;
+    const ceilLabel =
+      Math.abs(relCeilM) < 0.005 ? '0.00' : `+${formatMeters(relCeilM, 2)}`;
+    addLine(doc, layerDims, 0, yCeilingMm, totalWidthM * MM, yCeilingMm);
+    addText(
+      doc,
+      layerDims,
+      `потолок верхн. эт. (${ceilLabel})`,
+      totalWidthM * MM - 120,
+      yCeilingMm + 60,
+      100,
+      {
+        hAlign: TextHorizontalAlignment.Right,
+        vAlign: TextVerticalAlignmentType.Baseline,
+      }
+    );
+
+    const yCorniceBotMm = corniceBottomM * MM;
+    const relBotM = corniceBottomM - datum0M;
+    const botLabel =
+      Math.abs(relBotM) < 0.005 ? '0.00' : `+${formatMeters(relBotM, 2)}`;
+    addLine(doc, layerDims, leftShelfX - 200, yCorniceBotMm, 0, yCorniceBotMm);
+    addLine(
+      doc,
+      layerDims,
+      leftChainX - tickSz,
+      yCorniceBotMm - tickSz,
+      leftChainX + tickSz,
+      yCorniceBotMm + tickSz
+    );
+    addText(doc, layerDims, `${botLabel} (низ гл.к.)`, leftChainX - 280, yCorniceBotMm + 70, 115, {
+      hAlign: TextHorizontalAlignment.Right,
+      vAlign: TextVerticalAlignmentType.Baseline,
+    });
+  }
 
   // Высоты каждого этажа в размерной цепочке (включая верхний этаж и 1-й в одноэтажном доме)
   floorOffsetsM.forEach((floorStartM, flIdx) => {
@@ -902,9 +951,9 @@ export function buildFacadeCadDocument(
     });
   }
 
-  // Правые высотные размеры: цоколь, этаж H, общая высота H_зд
+  // Правые высотные размеры: цоколь, этаж H, главный карниз h_гк, общая высота H_зд
   const rightDimX1 = totalWidthM * MM + 550;
-  const rightDimX2 = totalWidthM * MM + 1450;
+  const rightDimX2 = totalWidthM * MM + 1650;
   addVerticalDimension(
     doc,
     layerDims,
@@ -925,6 +974,15 @@ export function buildFacadeCadDocument(
       `H = ${formatMeters(safeH, 2)} м`
     );
   }
+  addVerticalDimension(
+    doc,
+    layerDims,
+    corniceBottomM * MM,
+    corniceTopM * MM,
+    rightDimX1,
+    totalWidthM * MM,
+    `h_гк = ${formatMeters(corniceM, 2)} м`
+  );
   addVerticalDimension(
     doc,
     layerDims,

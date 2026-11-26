@@ -51,7 +51,13 @@ export function filterUnlockedPatch(
   const mutable = nextPatch as Record<string, unknown>;
 
   for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) continue;
+    if (
+      value === undefined &&
+      key !== 'ordinaryPierAxisSpacings' &&
+      key !== 'corniceBottomOffsetM'
+    ) {
+      continue;
+    }
     if (key === 'levels' || key === 'socleParts') continue;
     if (key === 'u' && (locks['u'] || locks['R'])) {
       continue;
@@ -227,6 +233,14 @@ export function computeNextFacadeParams(
   }
 
   if (
+    !isParamLocked(lockedParams, 'corniceBottomOffsetM') &&
+    'corniceBottomOffsetM' in rawPatch &&
+    rawPatch.corniceBottomOffsetM === undefined
+  ) {
+    next.corniceBottomOffsetM = undefined;
+  }
+
+  if (
     patch.axesCount !== undefined &&
     patch.axesCount !== prev.axesCount &&
     !('ordinaryPierAxisSpacings' in rawPatch) &&
@@ -254,7 +268,8 @@ export function computeNextFacadeParams(
     D,
     next.axesCount,
     next.hMain,
-    axisStepsM
+    axisStepsM,
+    next.corniceBottomOffsetM
   );
 
   if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {

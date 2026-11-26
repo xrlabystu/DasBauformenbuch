@@ -4118,12 +4118,28 @@ export function CalculatorModules({
 
         {/* 4.6 Главный карниз */}
         {activeModule === 'cornice' && (() => {
-          const totalH = Math.max(0.01, summary.derivedGeometry.totalHeight);
+          const vg = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
+          const totalH = Math.max(0.01, vg.totalHeightM);
           const effectiveSocleH = params.useFullFloorAsSocle
             ? summary.derivedGeometry.floor1FullHeight
             : params.hSocle;
           const activeStyle = params.corniceFullStyle ?? 'frieze_architrave';
-          const corniceBotM = Math.max(0, totalH - params.hMain);
+          const corniceBotM = vg.corniceBottomM;
+          const topCeilingM = vg.topFloorCeilingM;
+          const rawTopFloorTop =
+            Math.max(0.25, params.levels.groundToFloor1) +
+            params.levels.floors.reduce((s, f) => s + Math.max(1.8, f.floorToFloor), 0);
+          const minCorniceBotM = Number(
+            Math.max(
+              1.2,
+              (vg.floorOffsetsM[vg.floorOffsetsM.length - 1] ?? 0) + 0.8
+            ).toFixed(2)
+          );
+          const maxCorniceBotM = Number((vg.topFloorTopM + 4.0).toFixed(2));
+          const ceilingDeltaM = corniceBotM - topCeilingM;
+          const hasExplicitOffset =
+            params.corniceBottomOffsetM !== undefined &&
+            Math.abs(params.corniceBottomOffsetM) > 1e-3;
           const shareDenom = totalH / Math.max(0.01, params.hMain);
           const [rMin, rMax] = summary.mainCorniceCheck.range;
           const midTarget = (() => {
@@ -4145,12 +4161,12 @@ export function CalculatorModules({
                 </h3>
                 {!isExamBlind && (
                   <p className="mt-1 text-xs text-[#57534E]">
-                    Выбор состава, общей высоты главного карниза h_main от H_зд вниз (S. 9, 16) и деления венчающей части h_u : h_l (S. 10–11).
+                    Выбор состава, общей высоты главного карниза h_main от H_зд вниз (S. 9, 16) и деления венчающей части h_u : h_l (S. 10–11). Отметка низа главного карниза задаётся независимо от потолка верхнего этажа.
                   </p>
                 )}
               </div>
 
-              <CollapsibleSection title="Общая высота главного карниза">
+              <CollapsibleSection title="Общая высота и отметка главного карниза">
                 <div className="space-y-2">
                   <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
                     Выбор варианта состава главного карниза
@@ -4227,7 +4243,7 @@ export function CalculatorModules({
 
                 <MeterControl
                   id="calc-cornice-h-main"
-                  label="Высота главного карниза h_main (отсчитывается от H_зд вниз)"
+                  label="Высота главного карниза h_main (размер справа от фасада)"
                   value={params.hMain}
                   min={0.15}
                   max={2.5}
@@ -4245,14 +4261,65 @@ export function CalculatorModules({
                   onChange={(hMain) => onUpdateParams({ hMain })}
                 />
 
-                <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-[11px]">
+                <MeterControl
+                  id="calc-cornice-bottom"
+                  label="Отметка низа главного карниза (от уровня земли, независимо от потолка)"
+                  value={Number(corniceBotM.toFixed(3))}
+                  min={minCorniceBotM}
+                  max={maxCorniceBotM}
+                  step={0.05}
+                  lockKey="corniceBottomOffsetM"
+                  locked={isParamLocked(lockedParams, 'corniceBottomOffsetM')}
+                  onToggleLock={onToggleLock}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  note={`Потолок верхнего этажа: ${formatMeters(topCeilingM)} м, верх верхнего этажа: ${formatMeters(vg.topFloorTopM)} м. При смещении низа карниза высота помещений верхнего этажа не меняется.`}
+                  onChange={(nextBot) => {
+                    const nextOffset = Number((nextBot - rawTopFloorTop).toFixed(3));
+                    const patch: Partial<FacadeParameters> = {
+                      corniceBottomOffsetM: nextOffset,
+                    };
+                    if (
+                      params.levels.manualTotalHeight !== undefined &&
+                      !isParamLocked(lockedParams, 'levels.manualTotalHeight') &&
+                      !isParamLocked(lockedParams, 'totalHeight')
+                    ) {
+                      patch.levels = {
+                        ...params.levels,
+                        manualTotalHeight: Number((nextBot + params.hMain).toFixed(3)),
+                      };
+                    }
+                    onUpdateParams(patch);
+                  }}
+                />
+
+                {hasExplicitOffset && (
+                  <div>
+                    <button
+                      type="button"
+                      disabled={isParamLocked(lockedParams, 'corniceBottomOffsetM')}
+                      onClick={() => onUpdateParams({ corniceBottomOffsetM: undefined })}
+                      className="px-2.5 py-1 text-[11px] border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-45"
+                    >
+                      Совместить низ карниза с верхом верхнего этажа ({formatMeters(rawTopFloorTop)} м)
+                    </button>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono tabular-nums text-[11px]">
                   <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
                     <span className="block text-[10px] text-[#78716C] uppercase">Верх (H_зд)</span>
                     <strong>{formatMeters(totalH)} м</strong>
                   </div>
                   <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                    <span className="block text-[10px] text-[#78716C] uppercase">Низ (H_зд − h_main)</span>
+                    <span className="block text-[10px] text-[#78716C] uppercase">Низ гл. карниза</span>
                     <strong>{formatMeters(corniceBotM)} м</strong>
+                  </div>
+                  <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                    <span className="block text-[10px] text-[#78716C] uppercase">Потолок верхн. эт.</span>
+                    <strong>
+                      {formatMeters(topCeilingM)} м ({ceilingDeltaM >= 0 ? '+' : ''}
+                      {formatMeters(ceilingDeltaM)} м)
+                    </strong>
                   </div>
                   <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
                     <span className="block text-[10px] text-[#78716C] uppercase">Доля от H_зд</span>

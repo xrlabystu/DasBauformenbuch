@@ -2347,6 +2347,75 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.ok(dimTexts.includes('p_c1 = 0.90 м'));
     assert.ok(dimTexts.includes('p_c2 = 2.50 м'));
   });
+
+  it('52. Размер высоты главного карниза справа и независимая отметка низа карниза от потолка верхнего этажа', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const sumBase = evaluateFacadeSummary(base, { expertMode: true });
+    const vgBase = resolveScaledVerticalGeometry(base, sumBase.derivedGeometry);
+
+    // По умолчанию потолок верхнего этажа ниже верха стен/карниза на толщину перекрытия
+    const lastSlab = base.levels.floors[base.levels.floors.length - 1]?.slabThickness ?? 0.35;
+    assertClose(vgBase.topFloorTopM - vgBase.topFloorCeilingM, lastSlab);
+    assertClose(vgBase.corniceBottomM, vgBase.topFloorTopM);
+
+    // DWG содержит размер высоты главного карниза h_гк = ... м
+    const cadBase = buildFacadeCadDocument(base, sumBase);
+    const dimTextsBase = Array.from(cadBase.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+    assert.ok(
+      dimTextsBase.includes(`h_гк = ${base.hMain.toFixed(2)} м`),
+      `DWG must include main cornice height dimension h_гк = ${base.hMain.toFixed(2)} м`
+    );
+
+    // Поднимаем низ главного карниза на +0.90 м (аттиковая стенка) с включёнными пилястрами на верхнем этаже
+    const raised = computeNextFacadeParams(
+      {
+        ...base,
+        pilasterFloors: base.levels.floors.map((_, idx) => idx === base.levels.floors.length - 1),
+      },
+      { corniceBottomOffsetM: 0.9 },
+      { A: true }
+    );
+    const sumRaised = evaluateFacadeSummary(raised, { expertMode: true });
+    const vgRaised = resolveScaledVerticalGeometry(raised, sumRaised.derivedGeometry);
+
+    // Потолок и высота верхнего этажа НЕ изменились
+    assertClose(vgRaised.topFloorCeilingM, vgBase.topFloorCeilingM);
+    assertClose(vgRaised.topFloorTopM, vgBase.topFloorTopM);
+    assertClose(
+      vgRaised.floorHeightsM[vgRaised.floorHeightsM.length - 1],
+      vgBase.floorHeightsM[vgBase.floorHeightsM.length - 1]
+    );
+    // А низ, верх карниза, стена и общая высота поднялись на +0.90 м
+    assertClose(vgRaised.corniceBottomM, vgBase.topFloorTopM + 0.9);
+    assertClose(vgRaised.wallTopM, vgRaised.corniceBottomM);
+    assertClose(vgRaised.corniceTopM, vgRaised.corniceBottomM + raised.hMain);
+    assertClose(sumRaised.derivedGeometry.totalHeight, vgRaised.corniceTopM);
+
+    // Пилястры верхнего этажа дотягиваются до низа главного карниза
+    const pilSpans = resolvePilasterElevationSpans(raised, sumRaised.derivedGeometry);
+    assert.equal(pilSpans.length, 1);
+    assertClose(pilSpans[0].topM, vgRaised.corniceBottomM);
+
+    // В DWG есть отметка потолка верхнего этажа, низа гл. карниза и размер h_гк
+    const cadRaised = buildFacadeCadDocument(raised, sumRaised);
+    const dimTextsRaised = Array.from(cadRaised.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+    assert.ok(dimTextsRaised.some((t) => t.includes('потолок верхн. эт.')));
+    assert.ok(dimTextsRaised.some((t) => t.includes('(низ гл.к.)')));
+    assert.ok(dimTextsRaised.includes(`h_гк = ${raised.hMain.toFixed(2)} м`));
+
+    // Сброс offset обратно в undefined работает даже при заблокированном другом параметре (A: true)
+    const reset = computeNextFacadeParams(raised, { corniceBottomOffsetM: undefined }, { A: true });
+    assert.equal(reset.corniceBottomOffsetM, undefined);
+    const sumReset = evaluateFacadeSummary(reset, { expertMode: true });
+    const vgReset = resolveScaledVerticalGeometry(reset, sumReset.derivedGeometry);
+    assertClose(vgReset.corniceBottomM, vgReset.topFloorTopM);
+  });
 });
 
 

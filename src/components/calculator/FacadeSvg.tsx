@@ -168,6 +168,9 @@ export function FacadeSvg({
     groundToFloor1,
     floorHeightsM,
     floorOffsetsM,
+    topFloorTopM,
+    topFloorCeilingM,
+    corniceBottomM,
     wallTopM,
     corniceM,
     corniceTopM,
@@ -185,7 +188,7 @@ export function FacadeSvg({
   const extraBottomPx = hasPierAxesDimChain ? 48 : 0;
   const svgH = baseSvgH + extraBottomPx;
   const padLeft = 152;
-  const padRight = 104;
+  const padRight = 126;
   const padTop = 64;
   const padBottom = 86 + extraBottomPx;
   const drawW = svgW - padLeft - padRight;
@@ -1744,18 +1747,50 @@ export function FacadeSvg({
             const chainX = xM(0) - 18;
             const shelfLeftX = xM(0) - 70;
             const datum0M = floorOffsetsM[0] ?? groundToFloor1;
-            const chainTopY = yFromGroundM(wallTopM);
+            const hasIndependentCorniceBottom =
+              Math.abs(corniceBottomM - topFloorTopM) > 0.01;
+            const chainTopY = yFromGroundM(Math.max(topFloorTopM, corniceBottomM));
             const formatElev = (relM: number) => {
               if (Math.abs(relM) < 0.005) return '0.00';
               const val = formatMeters(Math.abs(relM), 2);
               return relM > 0 ? `+${val}` : `-${val}`;
             };
             const groundElevText = formatElev(-datum0M);
-            const levelHeightsM = [...floorOffsetsM, wallTopM];
+            const levelHeightsM = [...floorOffsetsM, topFloorTopM];
+            const yTopCeiling = yFromGroundM(topFloorCeilingM);
+            const yCorniceBot = yFromGroundM(corniceBottomM);
 
             return (
               <g aria-label="Размерная цепочка высот слева от фасада">
-                {/* Непрерывная вертикальная линия размерной цепочки от уровня земли до верха верхнего этажа */}
+                {/* Пунктирная линия отметки потолка верхнего этажа при несовпадении с низом гл. карниза */}
+                {Math.abs(corniceBottomM - topFloorCeilingM) > 0.01 && (
+                  <g aria-label="Отметка потолка верхнего этажа">
+                    <line
+                      x1={xM(0)}
+                      y1={yTopCeiling}
+                      x2={xM(totalWidthM)}
+                      y2={yTopCeiling}
+                      stroke="#78716C"
+                      strokeOpacity={hasIndependentCorniceBottom ? 0.65 : 0.32}
+                      strokeWidth={0.8}
+                      strokeDasharray="4 3"
+                    />
+                    {hasIndependentCorniceBottom && (
+                      <text
+                        x={xM(totalWidthM) - 4}
+                        y={yTopCeiling - 3}
+                        textAnchor="end"
+                        fontSize="7.5"
+                        fontFamily="IBM Plex Mono, monospace"
+                        fill="#78716C"
+                      >
+                        потолок {formatElev(topFloorCeilingM - datum0M)}
+                      </text>
+                    )}
+                  </g>
+                )}
+
+                {/* Непрерывная вертикальная линия размерной цепочки от уровня земли до верха цепи отметок */}
                 <line
                   x1={chainX}
                   y1={groundY}
@@ -1864,6 +1899,49 @@ export function FacadeSvg({
                     </g>
                   );
                 })}
+
+                {/* Независимая отметка низа главного карниза, если он не совпадает с верхом верхнего этажа */}
+                {hasIndependentCorniceBottom && (
+                  <g aria-label="Отметка низа главного карниза">
+                    <line
+                      x1={shelfLeftX - 10}
+                      y1={yCorniceBot}
+                      x2={xM(0)}
+                      y2={yCorniceBot}
+                      stroke="#9A3412"
+                      strokeOpacity={0.7}
+                      strokeWidth={0.85}
+                      strokeDasharray="3 2"
+                    />
+                    <line
+                      x1={chainX - 3.5}
+                      y1={yCorniceBot + 3.5}
+                      x2={chainX + 3.5}
+                      y2={yCorniceBot - 3.5}
+                      stroke="#9A3412"
+                      strokeWidth={1.25}
+                    />
+                    <rect
+                      x={shelfLeftX - 14}
+                      y={yCorniceBot - 14}
+                      width={66}
+                      height={11}
+                      fill="#FBF9F5"
+                      fillOpacity={0.94}
+                    />
+                    <text
+                      x={chainX - 6}
+                      y={yCorniceBot - 4}
+                      textAnchor="end"
+                      fontSize="8"
+                      fontFamily="IBM Plex Mono, monospace"
+                      fontWeight={600}
+                      fill="#9A3412"
+                    >
+                      {formatElev(corniceBottomM - datum0M)} гл.к.
+                    </text>
+                  </g>
+                )}
 
                 {/* Высота каждого этажа по размерной цепочке (включая верхний этаж и 1-й в одноэтажном доме) */}
                 {floorOffsetsM.map((floorStartM, flIdx) => {
@@ -2156,12 +2234,14 @@ export function FacadeSvg({
             );
           })()}
 
-          {/* RIGHT VERTICAL DIMENSION: h_socle, H_max & H_total */}
+          {/* RIGHT VERTICAL DIMENSION: h_socle, H_max, h_гк & H_total */}
           {(() => {
             const dimX = xM(totalWidthM) + 28;
+            const totalDimX = dimX + 68;
             const yGround = groundY;
             const ySocTop = yFromGroundM(visualSocleTopM);
             const yFloor1Top = yFromGroundM(floorOffsetsM[0] + floorHeightsM[0]);
+            const yCBot = yFromGroundM(corniceBottomM);
             const yCTop = yFromGroundM(corniceTopM);
             return (
               <g>
@@ -2185,12 +2265,73 @@ export function FacadeSvg({
                   </text>
                 </g>
 
+                {/* Main cornice height dimension h_гк */}
+                <g
+                  className="cursor-pointer"
+                  aria-label="Высота главного карниза справа от фасада"
+                  onClick={() => onSelectElement?.('cornice')}
+                  {...violationHoverProps('cornice')}
+                >
+                  <line
+                    x1={xM(totalWidthM)}
+                    y1={yCBot}
+                    x2={dimX + 6}
+                    y2={yCBot}
+                    stroke="#A8A29E"
+                    strokeWidth={0.7}
+                    strokeDasharray="2 2"
+                  />
+                  <line
+                    x1={xM(totalWidthM)}
+                    y1={yCTop}
+                    x2={totalDimX + 4}
+                    y2={yCTop}
+                    stroke="#A8A29E"
+                    strokeWidth={0.7}
+                    strokeDasharray="2 2"
+                  />
+                  <line
+                    x1={dimX}
+                    y1={yCBot}
+                    x2={dimX}
+                    y2={yCTop}
+                    stroke={strokeFor(corniceStatus)}
+                    strokeWidth={1.25}
+                  />
+                  <line
+                    x1={dimX - 4}
+                    y1={yCBot}
+                    x2={dimX + 4}
+                    y2={yCBot}
+                    stroke={strokeFor(corniceStatus)}
+                    strokeWidth={1.25}
+                  />
+                  <line
+                    x1={dimX - 4}
+                    y1={yCTop}
+                    x2={dimX + 4}
+                    y2={yCTop}
+                    stroke={strokeFor(corniceStatus)}
+                    strokeWidth={1.25}
+                  />
+                  <text
+                    x={dimX + 7}
+                    y={(yCBot + yCTop) / 2 + 3}
+                    fontSize="9"
+                    fontFamily="IBM Plex Mono, monospace"
+                    fontWeight={600}
+                    fill={strokeFor(corniceStatus)}
+                  >
+                    h_гк={formatMeters(corniceM, 2)}
+                  </text>
+                </g>
+
                 {/* Total building height H_total */}
-                <line x1={dimX + 54} y1={yGround} x2={dimX + 54} y2={yCTop} stroke="#44403C" strokeWidth={1.1} />
-                <line x1={dimX + 50} y1={yGround} x2={dimX + 58} y2={yGround} stroke="#44403C" strokeWidth={1.1} />
-                <line x1={dimX + 50} y1={yCTop} x2={dimX + 58} y2={yCTop} stroke="#44403C" strokeWidth={1.1} />
+                <line x1={totalDimX} y1={yGround} x2={totalDimX} y2={yCTop} stroke="#44403C" strokeWidth={1.1} />
+                <line x1={totalDimX - 4} y1={yGround} x2={totalDimX + 4} y2={yGround} stroke="#44403C" strokeWidth={1.1} />
+                <line x1={totalDimX - 4} y1={yCTop} x2={totalDimX + 4} y2={yCTop} stroke="#44403C" strokeWidth={1.1} />
                 <text
-                  x={dimX + 58}
+                  x={totalDimX + 5}
                   y={(yGround + yCTop) / 2 + 3}
                   fontSize="9"
                   fontFamily="IBM Plex Mono, monospace"

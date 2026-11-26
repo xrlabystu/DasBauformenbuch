@@ -210,7 +210,8 @@ export function computeDerivedGeometry(
   D: number,
   axesCount: number,
   hMain: number,
-  axisStepsM?: number[]
+  axisStepsM?: number[],
+  corniceBottomOffsetM?: number
 ): DerivedGeometry {
   const clearHeights = levels.floors.map((f) =>
     f.clearHeight !== undefined && Number.isFinite(f.clearHeight)
@@ -226,9 +227,13 @@ export function computeDerivedGeometry(
     levels.manualTotalHeight !== undefined &&
     Number.isFinite(levels.manualTotalHeight) &&
     levels.manualTotalHeight > 0;
+  const effectiveCorniceBase = Math.max(
+    1.5,
+    wallTopElevation + (corniceBottomOffsetM !== undefined && Number.isFinite(corniceBottomOffsetM) ? corniceBottomOffsetM : 0)
+  );
   const totalHeight = usesManualTotalHeight
     ? levels.manualTotalHeight!
-    : wallTopElevation + Math.max(0, hMain);
+    : effectiveCorniceBase + Math.max(0, hMain);
   const safeAxesCount = Math.max(1, Math.round(axesCount));
   const stepsCount = Math.max(0, safeAxesCount - 1);
   const totalAxesSpan =
@@ -2500,6 +2505,9 @@ export interface ScaledVerticalGeometry {
   groundToFloor1: number;
   floorHeightsM: number[];
   floorOffsetsM: number[];
+  topFloorTopM: number;
+  topFloorCeilingM: number;
+  corniceBottomM: number;
   wallTopM: number;
   corniceM: number;
   corniceTopM: number;
@@ -2509,8 +2517,10 @@ export interface ScaledVerticalGeometry {
 
 /**
  * Единая вертикальная геометрия фасада (для ортогонального чертежа и DWG-экспорта):
- * - если задана ручная высота здания manualTotalHeight, масштабирует вертикальные отметки так,
- *   чтобы верх главного карниза строго совпадал с totalHeight.
+ * - учитывает независимую отметку низа главного карниза (corniceBottomOffsetM),
+ *   не связанную жёстко с потолком верхнего этажа;
+ * - если задана ручная высота здания manualTotalHeight без ручного сдвига карниза,
+ *   масштабирует вертикальные отметки так, чтобы верх главного карниза совпадал с totalHeight.
  */
 export function resolveScaledVerticalGeometry(
   params: FacadeParameters,
@@ -2521,18 +2531,29 @@ export function resolveScaledVerticalGeometry(
   const rawFloorHeights = params.levels.floors
     .slice(0, safeFloors)
     .map((fl) => Math.max(1.8, fl.floorToFloor));
+  const lastSlabRaw = Math.max(
+    0.1,
+    params.levels.floors[safeFloors - 1]?.slabThickness ?? 0.35
+  );
 
-  const naturalWallTop =
+  const rawTopFloorTop =
     rawGround + rawFloorHeights.reduce((acc, h) => acc + h, 0);
   const corniceM = Math.max(0.2, params.hMain);
+  const hasExplicitCorniceOffset =
+    params.corniceBottomOffsetM !== undefined &&
+    Number.isFinite(params.corniceBottomOffsetM);
 
   const targetTotal = derivedGeometry.usesManualTotalHeight
     ? Math.max(2.0 + corniceM, derivedGeometry.totalHeight)
-    : naturalWallTop + corniceM;
-  const targetWallTop = Math.max(1.5, targetTotal - corniceM);
-  const verticalScale = derivedGeometry.usesManualTotalHeight
-    ? targetWallTop / Math.max(0.5, naturalWallTop)
-    : 1;
+    : rawTopFloorTop +
+      (hasExplicitCorniceOffset ? params.corniceBottomOffsetM! : 0) +
+      corniceM;
+
+  let verticalScale = 1;
+  if (derivedGeometry.usesManualTotalHeight && !hasExplicitCorniceOffset) {
+    const targetWallTop = Math.max(1.5, targetTotal - corniceM);
+    verticalScale = targetWallTop / Math.max(0.5, rawTopFloorTop);
+  }
 
   const groundToFloor1 = rawGround * verticalScale;
   const floorHeightsM = rawFloorHeights.map((h) => h * verticalScale);
@@ -2543,13 +2564,34 @@ export function resolveScaledVerticalGeometry(
     cursor += floorHeightsM[i];
   }
 
-  const wallTopM = cursor;
-  const corniceTopM = wallTopM + corniceM;
+  const topFloorTopM = cursor;
+  const lastFloorBaseM = floorOffsetsM[floorOffsetsM.length - 1] ?? 0;
+  const topFloorCeilingM = Math.max(
+    lastFloorBaseM,
+    topFloorTopM - lastSlabRaw * verticalScale
+  );
+
+  let corniceBottomM: number;
+  if (derivedGeometry.usesManualTotalHeight && hasExplicitCorniceOffset) {
+    corniceBottomM = Math.max(1.5, targetTotal - corniceM);
+  } else {
+    const minCorniceBot = Math.max(1.2, lastFloorBaseM + 0.8);
+    corniceBottomM = Math.max(
+      minCorniceBot,
+      topFloorTopM + (hasExplicitCorniceOffset ? params.corniceBottomOffsetM! : 0)
+    );
+  }
+
+  const wallTopM = corniceBottomM;
+  const corniceTopM = corniceBottomM + corniceM;
 
   return {
     groundToFloor1,
     floorHeightsM,
     floorOffsetsM,
+    topFloorTopM,
+    topFloorCeilingM,
+    corniceBottomM,
     wallTopM,
     corniceM,
     corniceTopM,
@@ -2939,7 +2981,10 @@ export function resolvePilasterElevationSpans(
   for (let i = 0; i < floorCount; i += 1) {
     if (!isPilasterEnabledOnFloor(params, i, floorCount)) continue;
     let rawBot = i === 0 ? 0 : vg.floorOffsetsM[i];
-    let rawTop = vg.floorOffsetsM[i] + vg.floorHeightsM[i];
+    let rawTop =
+      i === floorCount - 1
+        ? vg.corniceBottomM
+        : vg.floorOffsetsM[i] + vg.floorHeightsM[i];
 
     // Лента под этажом i (между этажом i-1 и этажом i) -> уменьшаем пилястр снизу
     if (i > 0 && isBeltEnabledAboveFloor(params, i - 1, floorCount)) {
@@ -4421,6 +4466,7 @@ export interface FacadeParameters {
   socleMode: SocleMode;
   hSocle: number;
   hMain: number;
+  corniceBottomOffsetM?: number;
   hGurt: number;
   socleParts: ThreePartSocleParts;
   hPlate: number;
@@ -4568,7 +4614,8 @@ export function evaluateFacadeSummary(
     D,
     safeAxesCount,
     params.hMain,
-    axisStepsM
+    axisStepsM,
+    params.corniceBottomOffsetM
   );
 
   // Используем поэтажную модель (если задана; обратная совместимость если передан totalHeight вручную)
