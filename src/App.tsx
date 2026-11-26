@@ -41,6 +41,7 @@ export default function App() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [textMode, setTextMode] = useState<TextMode>('parallel');
   const [showFacsimile, setShowFacsimile] = useState(true);
+  const [isFacsimileFullscreen, setIsFacsimileFullscreen] = useState(false);
   const [selectedTerm, setSelectedTerm] = useState<{
     pageId: string;
     term: ArchitecturalTerm;
@@ -290,6 +291,12 @@ export default function App() {
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [activeSection, currentPageIndex, readerSearchQuery, clampedReaderMatchIndex, readerMatches.length]);
+
+  useEffect(() => {
+    if (activeSection !== 'reader' || !showFacsimile) {
+      setIsFacsimileFullscreen(false);
+    }
+  }, [activeSection, showFacsimile]);
 
   useEffect(() => {
     if (activeSection !== 'glossary' || !focusedGlossaryTerm) return;
@@ -752,7 +759,18 @@ export default function App() {
             >
               {showFacsimile && (
                 <div className="lg:col-span-5 lg:sticky lg:top-6">
-                  <FacsimileViewer key={page.id} page={page} />
+                  <FacsimileViewer
+                    page={page}
+                    pages={pages}
+                    currentPageIndex={currentPageIndex}
+                    isFullscreen={isFacsimileFullscreen}
+                    onFullscreenChange={setIsFacsimileFullscreen}
+                    onSelectPage={(nextIdx) => {
+                      setSelectedTerm(null);
+                      setSelectedRuleExcerpt(null);
+                      setCurrentPageIndex(Math.max(0, Math.min(pages.length - 1, nextIdx)));
+                    }}
+                  />
                 </div>
               )}
 
