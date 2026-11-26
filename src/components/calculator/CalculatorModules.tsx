@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   Unlock,
   XCircle,
 } from 'lucide-react';
+import { isExamBlindState, stripExamNormHints } from '../../calc/examMode';
 import { isFramingRLocked, isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
 import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../../utils/termHighlight';
@@ -87,12 +88,16 @@ export type CalculatorModuleId =
   | 'belt'
   | 'summary';
 
+const ExamBlindContext = createContext<boolean>(false);
+
 interface CalculatorModulesProps {
   activeModule: CalculatorModuleId;
   onSelectModule: (mod: CalculatorModuleId) => void;
   params: FacadeParameters;
   summary: FacadeSummary;
   expertMode?: boolean;
+  examMode?: boolean;
+  examSubmitted?: boolean;
   lockedParams?: LockedParamsMap;
   onToggleLock?: (key: string) => void;
   onUpdateParams: (patch: Partial<FacadeParameters>) => void;
@@ -174,6 +179,11 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const isExamBlind = useContext(ExamBlindContext);
+  const displayTitle = isExamBlind ? stripExamNormHints(title) : title;
+  const hideBadge =
+    isExamBlind && Boolean(badge && (badge === 'эвристика' || /пробел|пункт/i.test(badge)));
+
   return (
     <div className={`border border-[#E5DFD3] ${subtle ? 'bg-[#F3EFE6]/45' : 'bg-[#FBF9F5]'}`}>
       <button
@@ -188,9 +198,9 @@ function CollapsibleSection({
           ) : (
             <ChevronRight className="w-3.5 h-3.5 shrink-0 text-[#78716C]" />
           )}
-          <span className="truncate">{title}</span>
+          <span className="truncate">{displayTitle}</span>
         </span>
-        {badge && (
+        {badge && !hideBadge && (
           <span className="font-mono text-[10px] text-[#78716C] shrink-0">{badge}</span>
         )}
       </button>
@@ -230,6 +240,9 @@ function MeterControl({
   onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
   onChange: (val: number) => void;
 }) {
+  const isExamBlind = useContext(ExamBlindContext);
+  const displayLabel = isExamBlind ? stripExamNormHints(label) : label;
+  const displayNote = isExamBlind ? undefined : note;
   const isLocked = Boolean(lockKey && locked);
   const inputDisabled = disabled || isLocked;
 
@@ -243,7 +256,7 @@ function MeterControl({
         <div className="flex items-center gap-1.5 min-w-0">
           <label htmlFor={id} className="text-xs font-medium text-[#1C1917]">
             <TextWithGlossaryLinks
-              text={label}
+              text={displayLabel}
               onOpenGlossaryTerm={onOpenGlossaryTerm}
               insideLabel={true}
             />
@@ -253,7 +266,7 @@ function MeterControl({
               lockKey={lockKey}
               locked={isLocked}
               onToggleLock={onToggleLock}
-              label={label}
+              label={displayLabel}
             />
           )}
         </div>
@@ -266,7 +279,7 @@ function MeterControl({
             max={max * 2}
             step={step}
             disabled={inputDisabled}
-            aria-label={`${label} (${unit})`}
+            aria-label={`${displayLabel} (${unit})`}
             onChange={(e) => {
               const parsed = parseFloat(e.target.value);
               if (Number.isFinite(parsed)) onChange(parsed);
@@ -284,13 +297,13 @@ function MeterControl({
         step={step}
         disabled={inputDisabled}
         value={Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))}
-        aria-label={label}
+        aria-label={displayLabel}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       />
-      {note && (
+      {displayNote && (
         <p className="text-[11px] text-[#78716C]">
-          <TextWithGlossaryLinks text={note} onOpenGlossaryTerm={onOpenGlossaryTerm} />
+          <TextWithGlossaryLinks text={displayNote} onOpenGlossaryTerm={onOpenGlossaryTerm} />
         </p>
       )}
     </div>
@@ -318,6 +331,9 @@ function WhyBlock({
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
   onOpenGlossaryTerm?: (entry: GlossaryLookupEntry) => void;
 }) {
+  const isExamBlind = useContext(ExamBlindContext);
+  if (isExamBlind) return null;
+
   const firstPageMatch = page.match(/\d+/);
   const pageNum = firstPageMatch ? parseInt(firstPageMatch[0], 10) : 5;
   const excerpt = ruleId ? getExcerptForCheckId(ruleId, page) : undefined;
@@ -382,6 +398,8 @@ export function CalculatorModules({
   params,
   summary,
   expertMode = false,
+  examMode = false,
+  examSubmitted = false,
   lockedParams = {},
   onToggleLock,
   onUpdateParams,
@@ -389,6 +407,10 @@ export function CalculatorModules({
   onOpenBookPage,
   onOpenGlossaryTerm,
 }: CalculatorModulesProps) {
+  const isExamBlind = isExamBlindState(examMode, examSubmitted);
+  const effectiveOpenBookPage = examMode ? undefined : onOpenBookPage;
+  const effectiveOpenGlossaryTerm = examMode ? undefined : onOpenGlossaryTerm;
+
   // Локальные настройки режимов решателя внутри каждого модуля
   const [axesSolveMode, setAxesSolveMode] = useState<'find_A' | 'find_H' | 'find_w' | 'find_p_A' | 'check'>('find_A');
   const [axesRatioChoice, setAxesRatioChoice] = useState<string>('4:5');
@@ -432,13 +454,17 @@ export function CalculatorModules({
     { id: 'cornice', label: 'Главный карниз' },
     { id: 'socle', label: 'Цоколь' },
     { id: 'belt', label: 'Лента (пояс)' },
-    {
-      id: 'summary',
-      label:
-        summary.violationCount > 0
-          ? `Сводка (${summary.violationCount} нар.)`
-          : 'Сводка',
-    },
+    ...(!isExamBlind
+      ? [
+          {
+            id: 'summary' as const,
+            label:
+              summary.violationCount > 0
+                ? `Сводка (${summary.violationCount} нар.)`
+                : 'Сводка',
+          },
+        ]
+      : []),
   ];
 
   const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
@@ -467,6 +493,7 @@ export function CalculatorModules({
   };
 
   return (
+    <ExamBlindContext.Provider value={isExamBlind}>
     <div className="border border-[#D6CEBE] bg-[#FBF9F5] flex flex-col min-h-0 flex-1">
       {/* Module tabs */}
       <div className="p-2 border-b border-[#E5DFD3] bg-[#F3EFE6]/70 flex flex-wrap gap-1 shrink-0">
@@ -508,12 +535,14 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.1. Шаг осей (Axenweite) и простенки"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                Выберите целевую величину для расчёта или проверьте текущие параметры (S. 5–6).
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  Выберите целевую величину для расчёта или проверьте текущие параметры (S. 5–6).
+                </p>
+              )}
             </div>
 
             <CollapsibleSection title="Режим расчёта и отношение A : H" subtle>
@@ -748,7 +777,7 @@ export function CalculatorModules({
                 )}
               </div>
 
-              {axesSolveMode === 'find_w' && (
+              {!isExamBlind && axesSolveMode === 'find_w' && (
                 <div className="p-2.5 border border-[#D6CEBE] bg-[#FBF9F5] font-mono text-xs flex justify-between">
                   <span>Предельная ширина w_max = A/2{params.withFraming ? ' − 2u' : ''}:</span>
                   <strong className="text-[#9A3412]">
@@ -768,12 +797,16 @@ export function CalculatorModules({
                 </div>
                 <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
                   <span className="block text-[10px] text-[#78716C] uppercase">
-                    {params.withFraming ? 'Видимый проём w_v' : 'Мин. шаг A_min'}
+                    {params.withFraming ? 'Видимый проём w_v' : isExamBlind ? 'Ширина окна w' : 'Мин. шаг A_min'}
                   </span>
                   <strong className="text-sm text-[#1C1917]">
                     {params.withFraming
-                      ? `${formatMeters('w_v' in summary.pierResult ? summary.pierResult.w_v : params.w)} м (A_min=${formatMeters(A_min_from_wu(params.w, params.u))})`
-                      : `${formatMeters(2 * params.w)} м`}
+                      ? isExamBlind
+                        ? `${formatMeters('w_v' in summary.pierResult ? summary.pierResult.w_v : params.w)} м`
+                        : `${formatMeters('w_v' in summary.pierResult ? summary.pierResult.w_v : params.w)} м (A_min=${formatMeters(A_min_from_wu(params.w, params.u))})`
+                      : isExamBlind
+                        ? `${formatMeters(params.w)} м`
+                        : `${formatMeters(2 * params.w)} м`}
                   </strong>
                 </div>
               </div>
@@ -896,51 +929,53 @@ export function CalculatorModules({
               })()}
             </CollapsibleSection>
 
-            <CollapsibleSection title="Проверки шага осей и простенков" subtle>
-              <WhyBlock
-                ruleId="axen_ratio"
-                status={summary.ahCheck.status}
-                sourceStatus={summary.ahCheck.sourceStatus}
-                formula="A = H × (n/m)"
-                page="S. 5–6"
-                explanation={summary.ahCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
-              <WhyBlock
-                ruleId="pier_width"
-                status={summary.pierResult.status}
-                sourceStatus={summary.pierResult.sourceStatus}
-                formula={summary.pierResult.formula}
-                page={summary.pierResult.page}
-                explanation={summary.pierResult.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
-              <WhyBlock
-                ruleId="corner_pier"
-                status={summary.cornerCheck.status}
-                sourceStatus={summary.cornerCheck.sourceStatus}
-                isHeuristic={summary.cornerCheck.sourceStatus === 'heuristic'}
-                formula={summary.cornerCheck.formula}
-                page={summary.cornerCheck.page}
-                explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
-              {params.withFraming && (
+            {!isExamBlind && (
+              <CollapsibleSection title="Проверки шага осей и простенков" subtle>
                 <WhyBlock
-                  ruleId="n1_framing_width"
-                  status={summary.framingWidthCheck.status}
-                  sourceStatus={summary.framingWidthCheck.sourceStatus}
-                  formula={summary.framingWidthCheck.formula}
-                  page={summary.framingWidthCheck.page}
-                  explanation={summary.framingWidthCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  ruleId="axen_ratio"
+                  status={summary.ahCheck.status}
+                  sourceStatus={summary.ahCheck.sourceStatus}
+                  formula="A = H × (n/m)"
+                  page="S. 5–6"
+                  explanation={summary.ahCheck.explanation}
+                  onOpenBookPage={effectiveOpenBookPage}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
-              )}
-            </CollapsibleSection>
+                <WhyBlock
+                  ruleId="pier_width"
+                  status={summary.pierResult.status}
+                  sourceStatus={summary.pierResult.sourceStatus}
+                  formula={summary.pierResult.formula}
+                  page={summary.pierResult.page}
+                  explanation={summary.pierResult.explanation}
+                  onOpenBookPage={effectiveOpenBookPage}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                />
+                <WhyBlock
+                  ruleId="corner_pier"
+                  status={summary.cornerCheck.status}
+                  sourceStatus={summary.cornerCheck.sourceStatus}
+                  isHeuristic={summary.cornerCheck.sourceStatus === 'heuristic'}
+                  formula={summary.cornerCheck.formula}
+                  page={summary.cornerCheck.page}
+                  explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
+                  onOpenBookPage={effectiveOpenBookPage}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                />
+                {params.withFraming && (
+                  <WhyBlock
+                    ruleId="n1_framing_width"
+                    status={summary.framingWidthCheck.status}
+                    sourceStatus={summary.framingWidthCheck.sourceStatus}
+                    formula={summary.framingWidthCheck.formula}
+                    page={summary.framingWidthCheck.page}
+                    explanation={summary.framingWidthCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                )}
+              </CollapsibleSection>
+            )}
           </div>
         )}
 
@@ -951,9 +986,11 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 Варианты этажности и пропорция фасада
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                Автоматический пересчёт норм карнизов, предела A/H_max, ориентации прямоугольника и рекомендаций по осям (S. 5–6, 14–16, 21–23).
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  Автоматический пересчёт норм карнизов, предела A/H_max, ориентации прямоугольника и рекомендаций по осям (S. 5–6, 14–16, 21–23).
+                </p>
+              )}
             </div>
 
             {/* Выбор варианта этажности */}
@@ -996,8 +1033,8 @@ export function CalculatorModules({
                   <div className="flex flex-wrap gap-1.5">
                     {(
                       [
-                        { id: 'three', label: '3 этажа (идеал)' },
-                        { id: 'four-five', label: '4–5 этажей (S. 23)' },
+                        { id: 'three', label: isExamBlind ? '3 этажа' : '3 этажа (идеал)' },
+                        { id: 'four-five', label: isExamBlind ? '4–5 этажей' : '4–5 этажей (S. 23)' },
                         { id: 'general', label: 'Общий (mehrgeschossig)' },
                       ] as { id: MultiSub; label: string }[]
                     ).map((sub) => (
@@ -1090,7 +1127,7 @@ export function CalculatorModules({
               {params.buildingVariant === 'multi-story' && params.multiSub === 'three' && (
                 <div>
                   <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
-                    Вариант поясных тяг 3-этажного дома (S. 22)
+                    {isExamBlind ? 'Вариант поясных тяг 3-этажного дома' : 'Вариант поясных тяг 3-этажного дома (S. 22)'}
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {(
@@ -1120,7 +1157,7 @@ export function CalculatorModules({
               {params.buildingVariant === 'multi-story' && params.multiSub === 'four-five' && (
                 <div className="space-y-2.5">
                   <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                    5-этажные схемы членения (S. 23)
+                    {isExamBlind ? '5-этажные схемы членения' : '5-этажные схемы членения (S. 23)'}
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {(
@@ -1504,10 +1541,14 @@ export function CalculatorModules({
                   onChange={(e) => onUpdateParams({ isEmbeddedInRow: e.target.checked })}
                   className="accent-[#9A3412]"
                 />
-                <span>Встроенный в уличный ряд дом (допускает чётные оси при боковом входе, S. 14)</span>
+                <span>
+                  {isExamBlind
+                    ? 'Встроенный в уличный ряд дом'
+                    : 'Встроенный в уличный ряд дом (допускает чётные оси при боковом входе, S. 14)'}
+                </span>
               </label>
 
-              {(params.axesCount % 2 === 0 || params.axesCount >= 9) && (
+              {!isExamBlind && (params.axesCount % 2 === 0 || params.axesCount >= 9) && (
                 <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 space-y-1 text-[11px] text-[#44403C]">
                   <span className="font-mono uppercase text-[10px] text-[#9A3412]">
                     Схемы группировки (N7, S. 15–16):
@@ -1518,7 +1559,7 @@ export function CalculatorModules({
 
               <div className="pt-2 border-t border-[#E5DFD3]">
                 <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C] mb-1.5">
-                  Состав и режим оценки главного карниза (S. 16)
+                  {isExamBlind ? 'Состав главного карниза' : 'Состав и режим оценки главного карниза (S. 16)'}
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {(
@@ -1586,7 +1627,11 @@ export function CalculatorModules({
                   onChange={(e) => onUpdateParams({ hasCompositionBreakdown: e.target.checked })}
                   className="accent-[#9A3412]"
                 />
-                <span>Композиция крыльев и ризалитов (N8–N17, N23–N26, S. 13–14, 18–20)</span>
+                <span>
+                  {isExamBlind
+                    ? 'Композиция крыльев и ризалитов'
+                    : 'Композиция крыльев и ризалитов (N8–N17, N23–N26, S. 13–14, 18–20)'}
+                </span>
               </label>
 
               {params.hasCompositionBreakdown && (
@@ -1595,9 +1640,9 @@ export function CalculatorModules({
                     {(
                       [
                         { id: 'two_part_wing', label: '2-частн. (ризалит+крыло)' },
-                        { id: 'five_part', label: '5-частн. (рис. 9)' },
-                        { id: 'seven_part', label: '7-частн. 1.5:3:5:3:1.5 (рис. 10)' },
-                        { id: 'two_side_risalits', label: '2 боковых ризалита (рис. 11)' },
+                        { id: 'five_part', label: isExamBlind ? '5-частн.' : '5-частн. (рис. 9)' },
+                        { id: 'seven_part', label: isExamBlind ? '7-частн. 1.5:3:5:3:1.5' : '7-частн. 1.5:3:5:3:1.5 (рис. 10)' },
+                        { id: 'two_side_risalits', label: isExamBlind ? '2 боковых ризалита' : '2 боковых ризалита (рис. 11)' },
                       ] as { id: CompositionKind; label: string }[]
                     ).map((ck) => (
                       <button
@@ -1618,12 +1663,19 @@ export function CalculatorModules({
                   {params.compKind === 'seven_part' && (
                     <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5">
                       <span className="block text-[11px] font-mono text-[#57534E]">
-                        Схема средней группы 7-частного фасада (N12, S. 19):
+                        {isExamBlind
+                          ? 'Схема средней группы 7-частного фасада:'
+                          : 'Схема средней группы 7-частного фасада (N12, S. 19):'}
                       </span>
                       <div className="flex flex-wrap gap-1.5">
                         {(
                           [
-                            { id: 'two_side_risalits', label: '2 боковых ризалита в центре (предпочтительно)' },
+                            {
+                              id: 'two_side_risalits',
+                              label: isExamBlind
+                                ? '2 боковых ризалита в центре'
+                                : '2 боковых ризалита в центре (предпочтительно)',
+                            },
                             { id: 'one_middle_risalit', label: '1 средний ризалит (вариант)' },
                           ] as const
                         ).map((sc) => {
@@ -1903,189 +1955,193 @@ export function CalculatorModules({
               )}
             </CollapsibleSection>
 
-            {/* Паспорт норм выбранного варианта */}
-            <CollapsibleSection title="Паспорт норм и проверки варианта" subtle>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Прямоугольник</span>
-                  <strong>
-                    {summary.variantInfo.rules.facadeRect === 'lying'
-                      ? 'Лежачий (W > H)'
-                      : summary.variantInfo.rules.facadeRect === 'standing'
-                        ? 'Стоячий (H > W)'
-                        : 'Любой (≉ квадрату)'}
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Членение</span>
-                  <strong>
-                    {summary.variantInfo.rules.articulation === 'horizontal'
-                      ? 'Горизонтальное'
-                      : summary.variantInfo.rules.articulation === 'vertical'
-                        ? 'Вертикальное'
-                        : 'Смешанное'}
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Предел A/H_max</span>
-                  <strong>
-                    {formatMeters(summary.variantAxisCheck.range[0], 2)}…
-                    {formatMeters(summary.variantAxisCheck.range[1], 3)}
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Колонны / пилястры</span>
-                  <strong>
-                    {summary.variantInfo.rules.columnsOptional ? 'Необязательны' : 'Обычно нужны'}
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Главный ярус</span>
-                  <strong>
-                    {summary.variantInfo.rules.mainTierFloor
-                      ? `${summary.variantInfo.rules.mainTierFloor}-й этаж`
-                      : '1-й (основной)'}
-                  </strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Верхний этаж</span>
-                  <strong>
-                    {summary.variantInfo.rules.upperFloorSmallest ? 'Наименьший' : 'Стандартный'}
-                  </strong>
-                </div>
-              </div>
+            {/* Паспорт норм выбранного варианта и блок пробелов источника */}
+            {!isExamBlind && (
+              <>
+                <CollapsibleSection title="Паспорт норм и проверки варианта" subtle>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-xs">
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Прямоугольник</span>
+                      <strong>
+                        {summary.variantInfo.rules.facadeRect === 'lying'
+                          ? 'Лежачий (W > H)'
+                          : summary.variantInfo.rules.facadeRect === 'standing'
+                            ? 'Стоячий (H > W)'
+                            : 'Любой (≉ квадрату)'}
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Членение</span>
+                      <strong>
+                        {summary.variantInfo.rules.articulation === 'horizontal'
+                          ? 'Горизонтальное'
+                          : summary.variantInfo.rules.articulation === 'vertical'
+                            ? 'Вертикальное'
+                            : 'Смешанное'}
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Предел A/H_max</span>
+                      <strong>
+                        {formatMeters(summary.variantAxisCheck.range[0], 2)}…
+                        {formatMeters(summary.variantAxisCheck.range[1], 3)}
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Колонны / пилястры</span>
+                      <strong>
+                        {summary.variantInfo.rules.columnsOptional ? 'Необязательны' : 'Обычно нужны'}
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Главный ярус</span>
+                      <strong>
+                        {summary.variantInfo.rules.mainTierFloor
+                          ? `${summary.variantInfo.rules.mainTierFloor}-й этаж`
+                          : '1-й (основной)'}
+                      </strong>
+                    </div>
+                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                      <span className="block text-[10px] text-[#78716C] uppercase">Верхний этаж</span>
+                      <strong>
+                        {summary.variantInfo.rules.upperFloorSmallest ? 'Наименьший' : 'Стандартный'}
+                      </strong>
+                    </div>
+                  </div>
 
-              <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5 text-xs text-[#44403C]">
-                <div className="flex items-center justify-between gap-2">
-                  <strong className="text-[#1C1917]">{summary.variantInfo.labelRu}</strong>
-                  <span className="font-mono text-[11px] text-[#78716C]">
-                    {summary.variantInfo.pages}
-                  </span>
-                </div>
-                {summary.variantInfo.notesRu.map((n, i) => (
-                  <p key={i} className="leading-relaxed">
-                    • <TextWithGlossaryLinks text={n} onOpenGlossaryTerm={onOpenGlossaryTerm} />
-                  </p>
-                ))}
-              </div>
+                  <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-1.5 text-xs text-[#44403C]">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-[#1C1917]">{summary.variantInfo.labelRu}</strong>
+                      <span className="font-mono text-[11px] text-[#78716C]">
+                        {summary.variantInfo.pages}
+                      </span>
+                    </div>
+                    {summary.variantInfo.notesRu.map((n, i) => (
+                      <p key={i} className="leading-relaxed">
+                        • <TextWithGlossaryLinks text={n} onOpenGlossaryTerm={effectiveOpenGlossaryTerm} />
+                      </p>
+                    ))}
+                  </div>
 
-              <WhyBlock
-                ruleId="variant_axis_ratio"
-                status={summary.variantAxisCheck.status}
-                sourceStatus={summary.variantAxisCheck.sourceStatus}
-                formula={summary.variantAxisCheck.formula}
-                page={summary.variantAxisCheck.page}
-                isHeuristic={
-                  summary.variantAxisCheck.isWideBayHeuristic ||
-                  summary.variantAxisCheck.sourceStatus === 'heuristic'
-                }
-                explanation={summary.variantAxisCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
+                  <WhyBlock
+                    ruleId="variant_axis_ratio"
+                    status={summary.variantAxisCheck.status}
+                    sourceStatus={summary.variantAxisCheck.sourceStatus}
+                    formula={summary.variantAxisCheck.formula}
+                    page={summary.variantAxisCheck.page}
+                    isHeuristic={
+                      summary.variantAxisCheck.isWideBayHeuristic ||
+                      summary.variantAxisCheck.sourceStatus === 'heuristic'
+                    }
+                    explanation={summary.variantAxisCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
 
-              <WhyBlock
-                ruleId="facade_rectangle"
-                status={summary.facadeRectCheck.status}
-                sourceStatus={summary.facadeRectCheck.sourceStatus}
-                formula={summary.facadeRectCheck.formula}
-                page={summary.facadeRectCheck.page}
-                explanation={summary.facadeRectCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
+                  <WhyBlock
+                    ruleId="facade_rectangle"
+                    status={summary.facadeRectCheck.status}
+                    sourceStatus={summary.facadeRectCheck.sourceStatus}
+                    formula={summary.facadeRectCheck.formula}
+                    page={summary.facadeRectCheck.page}
+                    explanation={summary.facadeRectCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
 
-              <WhyBlock
-                ruleId="axes_count"
-                status={summary.axesCountCheck.status}
-                sourceStatus="explicit-verified"
-                formula={summary.axesCountCheck.formula}
-                page={summary.axesCountCheck.page}
-                explanation={summary.axesCountCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
+                  <WhyBlock
+                    ruleId="axes_count"
+                    status={summary.axesCountCheck.status}
+                    sourceStatus="explicit-verified"
+                    formula={summary.axesCountCheck.formula}
+                    page={summary.axesCountCheck.page}
+                    explanation={summary.axesCountCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
 
-              {params.levels.floors.length === 5 && (
-                <WhyBlock
-                  ruleId="n27_five_story_scheme"
-                  status={summary.fiveStorySchemeCheck.status}
-                  sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
-                  formula={summary.fiveStorySchemeCheck.formula}
-                  page={summary.fiveStorySchemeCheck.page}
-                  explanation={summary.fiveStorySchemeCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
-                />
-              )}
+                  {params.levels.floors.length === 5 && (
+                    <WhyBlock
+                      ruleId="n27_five_story_scheme"
+                      status={summary.fiveStorySchemeCheck.status}
+                      sourceStatus={summary.fiveStorySchemeCheck.sourceStatus}
+                      formula={summary.fiveStorySchemeCheck.formula}
+                      page={summary.fiveStorySchemeCheck.page}
+                      explanation={summary.fiveStorySchemeCheck.explanation}
+                      onOpenBookPage={effectiveOpenBookPage}
+                      onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                    />
+                  )}
 
-              <WhyBlock
-                ruleId="main_cornice_subordination"
-                status={summary.mainCorniceCheck.status}
-                sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
-                formula={summary.mainCorniceCheck.formula}
-                page={summary.mainCorniceCheck.page}
-                isHeuristic={summary.mainCorniceCheck.isExtrapolated}
-                explanation={summary.mainCorniceCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
+                  <WhyBlock
+                    ruleId="main_cornice_subordination"
+                    status={summary.mainCorniceCheck.status}
+                    sourceStatus={summary.mainCorniceCheck.isExtrapolated ? 'gap' : 'explicit-verified'}
+                    formula={summary.mainCorniceCheck.formula}
+                    page={summary.mainCorniceCheck.page}
+                    isHeuristic={summary.mainCorniceCheck.isExtrapolated}
+                    explanation={summary.mainCorniceCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
 
-              <WhyBlock
-                ruleId="gurt_cornice"
-                status={summary.gurtCheck.status}
-                sourceStatus={
-                  !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
-                    ? 'heuristic'
-                    : 'explicit-verified'
-                }
-                isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
-                formula={summary.gurtCheck.formula}
-                page={summary.gurtCheck.page}
-                explanation={summary.gurtCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
-            </CollapsibleSection>
+                  <WhyBlock
+                    ruleId="gurt_cornice"
+                    status={summary.gurtCheck.status}
+                    sourceStatus={
+                      !summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt
+                        ? 'heuristic'
+                        : 'explicit-verified'
+                    }
+                    isHeuristic={!summary.gurtCheck.notRequired && !params.useFloorToFloorForBelt}
+                    formula={summary.gurtCheck.formula}
+                    page={summary.gurtCheck.page}
+                    explanation={summary.gurtCheck.explanation}
+                    onOpenBookPage={effectiveOpenBookPage}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                </CollapsibleSection>
 
-            {/* Явное сообщение: чего в тексте нет */}
-            <CollapsibleSection
-              title="Чего в тексте Brausewetter (1895) нет"
-              badge={`${VARIANT_TEXT_GAPS.length} пробела`}
-              defaultOpen={false}
-              subtle
-            >
-              <div className="divide-y divide-[#E5DFD3]">
-                {VARIANT_TEXT_GAPS.map((gap) => {
-                  const relevant = gap.appliesTo.includes(params.buildingVariant);
-                  return (
-                    <div
-                      key={gap.id}
-                      className={`py-2.5 space-y-1 text-xs ${
-                        relevant ? 'opacity-100' : 'opacity-60'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-medium text-[#1C1917]">{gap.title}</span>
-                        <span
-                          className={`font-mono text-[10px] px-1.5 py-0.5 border ${
-                            relevant
-                              ? 'border-[#9A3412]/40 bg-[#9A3412]/10 text-[#9A3412]'
-                              : 'border-[#D6CEBE] bg-[#FBF9F5] text-[#78716C]'
+                {/* Явное сообщение: чего в тексте нет */}
+                <CollapsibleSection
+                  title="Чего в тексте Brausewetter (1895) нет"
+                  badge={`${VARIANT_TEXT_GAPS.length} пробела`}
+                  defaultOpen={false}
+                  subtle
+                >
+                  <div className="divide-y divide-[#E5DFD3]">
+                    {VARIANT_TEXT_GAPS.map((gap) => {
+                      const relevant = gap.appliesTo.includes(params.buildingVariant);
+                      return (
+                        <div
+                          key={gap.id}
+                          className={`py-2.5 space-y-1 text-xs ${
+                            relevant ? 'opacity-100' : 'opacity-60'
                           }`}
                         >
-                          {gap.status}
-                        </span>
-                      </div>
-                      <p className="text-[11px] leading-relaxed text-[#57534E]">{gap.detail}</p>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="font-mono text-[10px] text-[#78716C]">
-                Доля пересчитанных проверок в текущей сводке: OK {formatPercent(summary.okCount / Math.max(1, summary.checks.length), 0)}.
-              </p>
-            </CollapsibleSection>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-medium text-[#1C1917]">{gap.title}</span>
+                            <span
+                              className={`font-mono text-[10px] px-1.5 py-0.5 border ${
+                                relevant
+                                  ? 'border-[#9A3412]/40 bg-[#9A3412]/10 text-[#9A3412]'
+                                  : 'border-[#D6CEBE] bg-[#FBF9F5] text-[#78716C]'
+                              }`}
+                            >
+                              {gap.status}
+                            </span>
+                          </div>
+                          <p className="text-[11px] leading-relaxed text-[#57534E]">{gap.detail}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="font-mono text-[10px] text-[#78716C]">
+                    Доля пересчитанных проверок в текущей сводке: OK {formatPercent(summary.okCount / Math.max(1, summary.checks.length), 0)}.
+                  </p>
+                </CollapsibleSection>
+              </>
+            )}
           </div>
         )}
 
@@ -2318,7 +2374,7 @@ export function CalculatorModules({
                       </div>
                     )}
 
-                    {safeAxesCount % 2 === 0 && (
+                    {!isExamBlind && safeAxesCount % 2 === 0 && (
                       <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-[11px] text-[#57534E]">
                         <span className="font-mono text-[#9A3412]">S. 14–16:</span>{' '}
                         {summary.axesCountCheck.explanation}
@@ -2493,7 +2549,7 @@ export function CalculatorModules({
                     </div>
                   </div>
 
-                  {exceedsFloor1 && (
+                  {!isExamBlind && exceedsFloor1 && (
                     <div className="p-2.5 border border-[#B45309]/50 bg-[#B45309]/10 text-xs text-[#92400E]">
                       Внимание: отметка верха двери ({formatMeters(entranceGeo.doorTopM, 2)} м) превышает полную отметку перекрытия 1-го этажа ({formatMeters(floor1TopM, 2)} м).
                     </div>
@@ -2511,12 +2567,14 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.2. Пропорции окна (Fensterproportionen)"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                Пределы 1.5w ≤ h ≤ 2w, золотое сечение φ и правило половины диагонали (S. 6–7).
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  Пределы 1.5w ≤ h ≤ 2w, золотое сечение φ и правило половины диагонали (S. 6–7).
+                </p>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -2678,7 +2736,7 @@ export function CalculatorModules({
 
               <MeterControl
                 id="calc-win-tol"
-                label="Допуск правила половины диагонали (по умолчанию 7%)"
+                label={isExamBlind ? 'Допуск диагонали' : 'Допуск правила половины диагонали (по умолчанию 7%)'}
                 value={params.diagTolerance * 100}
                 min={1}
                 max={12}
@@ -2711,7 +2769,11 @@ export function CalculatorModules({
                   onChange={(e) => onUpdateParams({ hasWallRustication: e.target.checked })}
                   className="accent-[#9A3412]"
                 />
-                <span>Стена с рустовкой (N4, S. 17: окно = 7–8 рядов руста)</span>
+                <span>
+                  {isExamBlind
+                    ? 'Стена с рустовкой'
+                    : 'Стена с рустовкой (N4, S. 17: окно = 7–8 рядов руста)'}
+                </span>
               </label>
             </div>
 
@@ -2874,7 +2936,7 @@ export function CalculatorModules({
               formula="1.5w ≤ h ≤ 2w"
               page="S. 6"
               explanation={summary.windowCheck.rangeCheck.explanation}
-              onOpenBookPage={onOpenBookPage}
+              onOpenBookPage={effectiveOpenBookPage}
             />
             <WhyBlock
               ruleId="window_diag"
@@ -2884,7 +2946,7 @@ export function CalculatorModules({
               page="S. 7"
               isHeuristic={summary.windowCheck.diagCheck.sourceStatus === 'heuristic'}
               explanation={`${summary.windowCheck.diagCheck.explanation} Ближайшее приближение золотого сечения: ${summary.windowCheck.nearestApprox.spec.label}.`}
-              onOpenBookPage={onOpenBookPage}
+              onOpenBookPage={effectiveOpenBookPage}
             />
             {params.withFraming && (
               <WhyBlock
@@ -2894,7 +2956,7 @@ export function CalculatorModules({
                 formula={summary.sillPlateCheck.formula}
                 page={summary.sillPlateCheck.page}
                 explanation={summary.sillPlateCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
             )}
             {params.hasWallRustication && (
@@ -2905,7 +2967,7 @@ export function CalculatorModules({
                 formula={summary.windowRowsCheck.formula}
                 page={summary.windowRowsCheck.page}
                 explanation={summary.windowRowsCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
             )}
           </div>
@@ -2918,15 +2980,17 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.3. Угловой простенок (Eckpfeiler)"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                <TextWithGlossaryLinks
-                  text="Расстояние от угла дома до первой оси D = k_D × A и чистая ширина угла p_corner (S. 4–5)."
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
-                />
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  <TextWithGlossaryLinks
+                    text="Расстояние от угла дома до первой оси D = k_D × A и чистая ширина угла p_corner (S. 4–5)."
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                </p>
+              )}
             </div>
 
             <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
@@ -2966,24 +3030,26 @@ export function CalculatorModules({
                   onToggleLock={onToggleLock}
                   onChange={(k_D) => onUpdateParams({ k_D })}
                 />
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { label: '2/3 (0.667)', val: 2 / 3 },
-                    { label: '3/4 (0.750)', val: 0.75 },
-                    { label: '4/5 (0.800)', val: 0.8 },
-                    { label: '5/6 (0.833)', val: 5 / 6 },
-                  ].map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      disabled={isParamLocked(lockedParams, 'k_D')}
-                      onClick={() => onUpdateParams({ k_D: preset.val })}
-                      className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] hover:bg-[#EAE3D5] disabled:opacity-45"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
+                {!isExamBlind && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: '2/3 (0.667)', val: 2 / 3 },
+                      { label: '3/4 (0.750)', val: 0.75 },
+                      { label: '4/5 (0.800)', val: 0.8 },
+                      { label: '5/6 (0.833)', val: 5 / 6 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        disabled={isParamLocked(lockedParams, 'k_D')}
+                        onClick={() => onUpdateParams({ k_D: preset.val })}
+                        className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] hover:bg-[#EAE3D5] disabled:opacity-45"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -3006,12 +3072,14 @@ export function CalculatorModules({
               formula={summary.cornerCheck.formula}
               page={summary.cornerCheck.page}
               explanation={`${summary.cornerCheck.explanation} ${summary.cornerCheck.recommendation}`}
-              onOpenBookPage={onOpenBookPage}
+              onOpenBookPage={effectiveOpenBookPage}
             />
 
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-3">
               <h4 className="font-display text-base font-medium text-[#1C1917]">
-                Угловая рустовка и отступ угла (N5–N6, S. 12, 17)
+                {isExamBlind
+                  ? 'Угловая рустовка и отступ угла'
+                  : 'Угловая рустовка и отступ угла (N5–N6, S. 12, 17)'}
               </h4>
               <MeterControl
                 id="calc-corner-rust-rows"
@@ -3033,7 +3101,11 @@ export function CalculatorModules({
                   onChange={(e) => onUpdateParams({ cornerRustStartsEndsLong: e.target.checked })}
                   className="accent-[#9A3412]"
                 />
-                <span>Начинается и заканчивается длинными квадрами (S. 15)</span>
+                <span>
+                  {isExamBlind
+                    ? 'Начинается и заканчивается длинными квадрами'
+                    : 'Начинается и заканчивается длинными квадрами (S. 15)'}
+                </span>
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <MeterControl
@@ -3068,7 +3140,7 @@ export function CalculatorModules({
                 formula={summary.cornerRustRowsCheck.formula}
                 page={summary.cornerRustRowsCheck.page}
                 explanation={summary.cornerRustRowsCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
               <WhyBlock
                 ruleId="n6_corner_offset_m_n"
@@ -3077,7 +3149,7 @@ export function CalculatorModules({
                 formula={summary.cornerOffsetCheck.formula}
                 page={summary.cornerOffsetCheck.page}
                 explanation={summary.cornerOffsetCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
             </div>
           </div>
@@ -3092,15 +3164,17 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.4. Обрамление и сандрик окна (R : F : K)"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                <TextWithGlossaryLinks
-                  text="Деление наличника (Rahmen), фриза (Fries) и венчающего карниза (Kranz), вынос по 45° и на консолях (S. 7–8)."
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
-                />
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  <TextWithGlossaryLinks
+                    text="Деление наличника (Rahmen), фриза (Fries) и венчающего карниза (Kranz), вынос по 45° и на консолях (S. 7–8)."
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                </p>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -3136,7 +3210,7 @@ export function CalculatorModules({
             <div className="p-3 border border-[#E5DFD3] bg-[#F3EFE6]/45 space-y-2.5">
               <div className="flex items-center gap-2">
                 <label className="block text-xs font-medium text-[#1C1917]">
-                  Отношение R : F : K (из текста S. 8)
+                  {isExamBlind ? 'Отношение R : F : K' : 'Отношение R : F : K (из текста S. 8)'}
                 </label>
                 <LockToggleButton
                   lockKey="framingRatio"
@@ -3288,7 +3362,7 @@ export function CalculatorModules({
                 lockKey="u"
                 locked={framingRLocked}
                 onToggleLock={onToggleLock}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 note={
                   isParamLocked(lockedParams, 'T')
                     ? 'Общая высота сандрика T закреплена замком — снимите замок с T, чтобы менять R (= u).'
@@ -3419,7 +3493,7 @@ export function CalculatorModules({
               formula={summary.framingResult.formula}
               page={summary.framingResult.page}
               explanation={summary.framingResult.explanation}
-              onOpenBookPage={onOpenBookPage}
+              onOpenBookPage={effectiveOpenBookPage}
             />
             {params.withConsoles && !isSandrikDisabled && (
               <WhyBlock
@@ -3428,7 +3502,7 @@ export function CalculatorModules({
                 formula={summary.offsetCheck.formula}
                 page={summary.offsetCheck.page}
                 explanation={summary.offsetCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
             )}
           </div>
@@ -3448,15 +3522,17 @@ export function CalculatorModules({
                 <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                   <TextWithGlossaryLinks
                     text="4.5. Пилястры и лопатки (Pilaster / Mauerpfeiler)"
-                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   />
                 </h3>
-                <p className="mt-1 text-xs text-[#57534E]">
-                  <TextWithGlossaryLinks
-                    text="Предельный выступ v_max = W_p / 4; лёгкий декоративный диапазон — W_p / 6 … W_p / 5 (S. 11–12)."
-                    onOpenGlossaryTerm={onOpenGlossaryTerm}
-                  />
-                </p>
+                {!isExamBlind && (
+                  <p className="mt-1 text-xs text-[#57534E]">
+                    <TextWithGlossaryLinks
+                      text="Предельный выступ v_max = W_p / 4; лёгкий декоративный диапазон — W_p / 6 … W_p / 5 (S. 11–12)."
+                      onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                    />
+                  </p>
+                )}
               </div>
 
               <CollapsibleSection title="Размещение пилястр / лопаток по этажам и в плане">
@@ -3584,8 +3660,14 @@ export function CalculatorModules({
                 <div className="flex flex-wrap gap-2">
                   {(
                     [
-                      { id: 'massive', label: 'Массивный характер (до W_p/4)' },
-                      { id: 'light', label: 'Лёгкий характер (W_p/6…W_p/5)' },
+                      {
+                        id: 'massive',
+                        label: isExamBlind ? 'Массивный характер' : 'Массивный характер (до W_p/4)',
+                      },
+                      {
+                        id: 'light',
+                        label: isExamBlind ? 'Лёгкий характер' : 'Лёгкий характер (W_p/6…W_p/5)',
+                      },
                     ] as const
                   ).map((ch) => (
                     <button
@@ -3613,7 +3695,7 @@ export function CalculatorModules({
                   <span>
                     <TextWithGlossaryLinks
                       text="Гладкая лопатка / стенной пилон (Mauerpfeiler) — без базы и капители"
-                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                       insideLabel={true}
                     />
                   </span>
@@ -3628,7 +3710,7 @@ export function CalculatorModules({
                   lockKey="Wp"
                   locked={isParamLocked(lockedParams, 'Wp')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   onChange={(Wp) => onUpdateParams({ Wp })}
                 />
                 <MeterControl
@@ -3640,35 +3722,39 @@ export function CalculatorModules({
                   lockKey="v"
                   locked={isParamLocked(lockedParams, 'v')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   onChange={(v) => onUpdateParams({ v })}
                 />
 
-                <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
-                  <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                    <span className="block text-[10px] text-[#78716C] uppercase">Макс. выступ v_max = W_p/4</span>
-                    <strong>{formatMeters(summary.pilasterCheck.v_max)} м</strong>
-                  </div>
-                  <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
-                    <span className="block text-[10px] text-[#78716C] uppercase">Лёгкий диапазон (1/6…1/5)</span>
-                    <strong>
-                      {formatMeters(summary.pilasterCheck.v_light_min)}–{formatMeters(summary.pilasterCheck.v_light_max)} м
-                    </strong>
-                  </div>
-                </div>
+                {!isExamBlind && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 font-mono tabular-nums text-xs">
+                      <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Макс. выступ v_max = W_p/4</span>
+                        <strong>{formatMeters(summary.pilasterCheck.v_max)} м</strong>
+                      </div>
+                      <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Лёгкий диапазон (1/6…1/5)</span>
+                        <strong>
+                          {formatMeters(summary.pilasterCheck.v_light_min)}–{formatMeters(summary.pilasterCheck.v_light_max)} м
+                        </strong>
+                      </div>
+                    </div>
 
-                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C] space-y-1">
-                  <div className="font-mono text-[11px] text-[#1C1917]">
-                    Отметки пилястр ({params.isMauerpfeiler ? 'без базы' : 'с базой'}):{' '}
-                    {bounds.hasUpperPilasters
-                      ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
-                      : 'скрыты (цоколь или все этажи отключены)'}
-                  </div>
-                  <p className="text-[11px] text-[#57534E]">
-                    Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
-                    {formatMeters(bounds.socleTopM, 2)} м).
-                  </p>
-                </div>
+                    <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C] space-y-1">
+                      <div className="font-mono text-[11px] text-[#1C1917]">
+                        Отметки пилястр ({params.isMauerpfeiler ? 'без базы' : 'с базой'}):{' '}
+                        {bounds.hasUpperPilasters
+                          ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
+                          : 'скрыты (цоколь или все этажи отключены)'}
+                      </div>
+                      <p className="text-[11px] text-[#57534E]">
+                        Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
+                        {formatMeters(bounds.socleTopM, 2)} м).
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 <WhyBlock
                   ruleId="pilaster_check"
@@ -3677,8 +3763,8 @@ export function CalculatorModules({
                   formula={summary.pilasterCheck.formula}
                   page={summary.pilasterCheck.page}
                   explanation={`${summary.pilasterCheck.explanation} ${summary.pilasterCheck.baseCapitalNote}`}
-                  onOpenBookPage={onOpenBookPage}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenBookPage={effectiveOpenBookPage}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </CollapsibleSection>
 
@@ -3693,7 +3779,11 @@ export function CalculatorModules({
                     }
                     className="accent-[#9A3412]"
                   />
-                  <span>Повторение ордера в смежных этажах близкой высоты (N18)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Повторение ордера в смежных этажах близкой высоты'
+                      : 'Повторение ордера в смежных этажах близкой высоты (N18)'}
+                  </span>
                 </label>
                 {params.pilasterAdjacentSameHeight && (
                   <MeterControl
@@ -3707,7 +3797,7 @@ export function CalculatorModules({
                     lockKey="pilasterHeightDiffPct"
                     locked={isParamLocked(lockedParams, 'pilasterHeightDiffPct')}
                     onToggleLock={onToggleLock}
-                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                     onChange={(pct) => onUpdateParams({ pilasterHeightDiffPct: pct / 100 })}
                   />
                 )}
@@ -3727,7 +3817,11 @@ export function CalculatorModules({
                     }}
                     className="accent-[#9A3412]"
                   />
-                  <span>Пилястры применены только на верхнем этаже (N19, нежелательно)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Пилястры применены только на верхнем этаже'
+                      : 'Пилястры применены только на верхнем этаже (N19, нежелательно)'}
+                  </span>
                 </label>
               </CollapsibleSection>
 
@@ -3742,7 +3836,7 @@ export function CalculatorModules({
                     lockKey="wpWallPier"
                     locked={isParamLocked(lockedParams, 'wpWallPier')}
                     onToggleLock={onToggleLock}
-                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                     onChange={(wpWallPier) => onUpdateParams({ wpWallPier })}
                   />
                   <label className="flex items-center gap-2 text-xs text-[#1C1917] cursor-pointer">
@@ -3764,7 +3858,7 @@ export function CalculatorModules({
                       lockKey="pairedPilastersGap"
                       locked={isParamLocked(lockedParams, 'pairedPilastersGap')}
                       onToggleLock={onToggleLock}
-                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                       onChange={(pairedPilastersGap) => onUpdateParams({ pairedPilastersGap })}
                     />
                   )}
@@ -3797,11 +3891,11 @@ export function CalculatorModules({
                     </div>
                   </div>
                 </CollapsibleSection>
-              ) : (
+              ) : !isExamBlind ? (
                 <p className="font-mono text-[11px] text-[#78716C]">
                   Доп. проверки ордера N20–N22 доступны при включении «Эксперт P3».
                 </p>
-              )}
+              ) : null}
             </div>
           );
         })()}
@@ -3830,12 +3924,14 @@ export function CalculatorModules({
                 <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                   <TextWithGlossaryLinks
                     text="4.6. Главный карниз (Hauptgesims)"
-                    onOpenGlossaryTerm={onOpenGlossaryTerm}
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   />
                 </h3>
-                <p className="mt-1 text-xs text-[#57534E]">
-                  Выбор состава, общей высоты главного карниза h_main от H_зд вниз (S. 9, 16) и деления венчающей части h_u : h_l (S. 10–11).
-                </p>
+                {!isExamBlind && (
+                  <p className="mt-1 text-xs text-[#57534E]">
+                    Выбор состава, общей высоты главного карниза h_main от H_зд вниз (S. 9, 16) и деления венчающей части h_u : h_l (S. 10–11).
+                  </p>
+                )}
               </div>
 
               <CollapsibleSection title="Общая высота главного карниза">
@@ -3862,7 +3958,9 @@ export function CalculatorModules({
                         },
                         {
                           key: 'crowning_only',
-                          label: 'Только венчающая часть (Kranz — при небольшой высоте)',
+                          label: isExamBlind
+                            ? 'Только венчающая часть (Kranz)'
+                            : 'Только венчающая часть (Kranz — при небольшой высоте)',
                           desc: 'Дом 1–2 эт.: 1/15–1/16 высоты; многоэтажный городской дом: 1/16–1/20 высоты до верхнего обреза.',
                           mode: 'crowning_only',
                         },
@@ -3896,13 +3994,15 @@ export function CalculatorModules({
                           }`}
                         >
                           <div className="text-xs font-medium">{opt.label}</div>
-                          <div
-                            className={`mt-0.5 text-[10px] ${
-                              isSelected ? 'text-[#E7E5E4]' : 'text-[#78716C]'
-                            }`}
-                          >
-                            {opt.desc}
-                          </div>
+                          {!isExamBlind && (
+                            <div
+                              className={`mt-0.5 text-[10px] ${
+                                isSelected ? 'text-[#E7E5E4]' : 'text-[#78716C]'
+                              }`}
+                            >
+                              {opt.desc}
+                            </div>
+                          )}
                         </button>
                       );
                     })}
@@ -3918,7 +4018,7 @@ export function CalculatorModules({
                   lockKey="hMain"
                   locked={isParamLocked(lockedParams, 'hMain')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   note={
                     summary.mainCorniceCheck.notApplicable
                       ? 'Весь 1-й этаж включён в цоколь — правило главного карниза (1/8–1/12, 1/12–1/15 и < цоколя) не работает (S. 16, 22).'
@@ -3946,31 +4046,35 @@ export function CalculatorModules({
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    disabled={isParamLocked(lockedParams, 'hMain')}
-                    onClick={() => onUpdateParams({ hMain: midTarget })}
-                    className="px-2.5 py-1 text-[11px] border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-45"
-                  >
-                    Подогнать h_main к середине нормы ({formatMeters(midTarget)} м)
-                  </button>
-                </div>
+                {!isExamBlind && (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        disabled={isParamLocked(lockedParams, 'hMain')}
+                        onClick={() => onUpdateParams({ hMain: midTarget })}
+                        className="px-2.5 py-1 text-[11px] border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] disabled:opacity-45"
+                      >
+                        Подогнать h_main к середине нормы ({formatMeters(midTarget)} м)
+                      </button>
+                    </div>
 
-                <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-[11px] text-[#44403C] space-y-1">
-                  <div className="font-mono uppercase text-[10px] text-[#9A3412]">
-                    Нормы высоты главного карниза (S. 16):
-                  </div>
-                  <p>
-                    • Полный главный карниз (1 или 2 вариант): меньше цоколя; в 2-этажном доме 1/8–1/12, в многоэтажном 1/12–1/15 общей высоты H_зд (не применяется, если весь 1-й этаж включён в цоколь).
-                  </p>
-                  <p>
-                    • При небольшой высоте (1–2 этажный дом), одна венчающая часть: 1/15–1/16 высоты (для 1 этажа — экстраполяция от 2-этажного).
-                  </p>
-                  <p>
-                    • В многоэтажном городском доме одна венчающая часть: 1/16–1/20 высоты от уровня земли до верхнего обреза главного карниза (H_зд).
-                  </p>
-                </div>
+                    <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-[11px] text-[#44403C] space-y-1">
+                      <div className="font-mono uppercase text-[10px] text-[#9A3412]">
+                        Нормы высоты главного карниза (S. 16):
+                      </div>
+                      <p>
+                        • Полный главный карниз (1 или 2 вариант): меньше цоколя; в 2-этажном доме 1/8–1/12, в многоэтажном 1/12–1/15 общей высоты H_зд (не применяется, если весь 1-й этаж включён в цоколь).
+                      </p>
+                      <p>
+                        • При небольшой высоте (1–2 этажный дом), одна венчающая часть: 1/15–1/16 высоты (для 1 этажа — экстраполяция от 2-этажного).
+                      </p>
+                      <p>
+                        • В многоэтажном городском доме одна венчающая часть: 1/16–1/20 высоты от уровня земли до верхнего обреза главного карниза (H_зд).
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 <WhyBlock
                   ruleId="main_cornice_subordination"
@@ -3980,8 +4084,8 @@ export function CalculatorModules({
                   page={summary.mainCorniceCheck.page}
                   isHeuristic={summary.mainCorniceCheck.isExtrapolated}
                   explanation={summary.mainCorniceCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenBookPage={effectiveOpenBookPage}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </CollapsibleSection>
 
@@ -3995,7 +4099,7 @@ export function CalculatorModules({
                   lockKey="Tc"
                   locked={isParamLocked(lockedParams, 'Tc')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   note={
                     params.corniceVariantMode === 'full_entablature' && params.Tc >= params.hMain - 0.02
                       ? `В полном карнизе венчающая часть T_c обычно меньше h_main (${formatMeters(params.hMain)} м), оставляя место для нижних элементов.`
@@ -4015,7 +4119,7 @@ export function CalculatorModules({
                   lockKey="corniceRatio"
                   locked={isParamLocked(lockedParams, 'corniceRatio')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   onChange={(corniceRatio) => onUpdateParams({ corniceRatio })}
                 />
               </CollapsibleSection>
@@ -4023,9 +4127,9 @@ export function CalculatorModules({
               <CollapsibleSection title="Характер профиля и доля плиты" badge="эвристика" subtle>
                 <div className="flex flex-wrap gap-1.5">
                   {[
-                    { label: 'Тяжёлый (≥75 %)', share: 0.8 },
-                    { label: 'Нейтральный (60 %)', share: 0.6 },
-                    { label: 'Лёгкий (≤50 %)', share: 0.42 },
+                    { label: isExamBlind ? 'Тяжёлый' : 'Тяжёлый (≥75 %)', share: 0.8 },
+                    { label: isExamBlind ? 'Нейтральный' : 'Нейтральный (60 %)', share: 0.6 },
+                    { label: isExamBlind ? 'Лёгкий' : 'Лёгкий (≤50 %)', share: 0.42 },
                   ].map((pr) => (
                     <button
                       key={pr.label}
@@ -4053,7 +4157,7 @@ export function CalculatorModules({
                   lockKey="plateShare"
                   locked={isParamLocked(lockedParams, 'plateShare')}
                   onToggleLock={onToggleLock}
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                   note="Процентные пороги ≥75 % и ≤50 % — интерпретационное допущение UX поверх качественного описания S. 10–11."
                   onChange={(pct) => onUpdateParams({ plateShare: pct / 100 })}
                 />
@@ -4076,8 +4180,8 @@ export function CalculatorModules({
                 formula={summary.corniceCheck.formula}
                 page={summary.corniceCheck.page}
                 explanation={summary.corniceCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </div>
           );
@@ -4090,15 +4194,17 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.7. Цоколь (Sockel), карнизы и рустика"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                <TextWithGlossaryLinks
-                  text="Высота цоколя (1/6…1/10 общей высоты), подчинённость главного и поясного карнизов, трёхчастное деление, ряды рустики и убывание вверх (S. 10, 12, 16–17, 22)."
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
-                />
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  <TextWithGlossaryLinks
+                    text="Высота цоколя (1/6…1/10 общей высоты), подчинённость главного и поясного карнизов, трёхчастное деление, ряды рустики и убывание вверх (S. 10, 12, 16–17, 22)."
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                </p>
+              )}
             </div>
 
             {/* Этажность и общая высота здания */}
@@ -4141,37 +4247,39 @@ export function CalculatorModules({
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <div className="flex flex-wrap gap-1.5">
-                  {(
-                    [
-                      { id: 'optimal', label: 'Оптимум 1/6 H_total' },
-                      { id: 'typical', label: 'Типично 1/8 H_total (1/7…1/10)' },
-                    ] as const
-                  ).map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      disabled={isParamLocked(lockedParams, 'hSocle')}
-                      onClick={() => {
-                        const res = socleHeight(summary.derivedGeometry.totalHeight, mode.id as SocleMode);
-                        onUpdateParams({
-                          socleMode: mode.id,
-                          hSocle: res.h,
-                          useFullFloorAsSocle: false,
-                        });
-                      }}
-                      className={`px-2.5 py-1 text-[11px] font-medium border transition-colors disabled:opacity-45 ${
-                        params.socleMode === mode.id && !params.useFullFloorAsSocle
-                          ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
-                          : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                      }`}
-                    >
-                      {mode.label}
-                    </button>
-                  ))}
+              {!isExamBlind && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        { id: 'optimal', label: 'Оптимум 1/6 H_total' },
+                        { id: 'typical', label: 'Типично 1/8 H_total (1/7…1/10)' },
+                      ] as const
+                    ).map((mode) => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        disabled={isParamLocked(lockedParams, 'hSocle')}
+                        onClick={() => {
+                          const res = socleHeight(summary.derivedGeometry.totalHeight, mode.id as SocleMode);
+                          onUpdateParams({
+                            socleMode: mode.id,
+                            hSocle: res.h,
+                            useFullFloorAsSocle: false,
+                          });
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-medium border transition-colors disabled:opacity-45 ${
+                          params.socleMode === mode.id && !params.useFullFloorAsSocle
+                            ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                            : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                        }`}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <MeterControl
                 id="calc-h-socle"
@@ -4197,10 +4305,26 @@ export function CalculatorModules({
                     className="accent-[#9A3412] mt-0.5"
                   />
                   <span>
-                    Включить весь 1-й этаж в цоколь (S. 16, 22; полн. высота = {formatMeters(summary.derivedGeometry.floor1FullHeight)} м) —{' '}
-                    <strong className={summary.fullFloorSocleCheck.applicable ? 'text-[#15803D]' : 'text-[#B91C1C]'}>
-                      {summary.fullFloorSocleCheck.applicable ? 'применимо' : 'недостаточно высоты'}
-                    </strong>
+                    {isExamBlind ? (
+                      <>
+                        Включить весь 1-й этаж в цоколь (полн. высота ={' '}
+                        {formatMeters(summary.derivedGeometry.floor1FullHeight)} м)
+                      </>
+                    ) : (
+                      <>
+                        Включить весь 1-й этаж в цоколь (S. 16, 22; полн. высота ={' '}
+                        {formatMeters(summary.derivedGeometry.floor1FullHeight)} м) —{' '}
+                        <strong
+                          className={
+                            summary.fullFloorSocleCheck.applicable
+                              ? 'text-[#15803D]'
+                              : 'text-[#B91C1C]'
+                          }
+                        >
+                          {summary.fullFloorSocleCheck.applicable ? 'применимо' : 'недостаточно высоты'}
+                        </strong>
+                      </>
+                    )}
                   </span>
                 </label>
                 <LockToggleButton
@@ -4218,8 +4342,8 @@ export function CalculatorModules({
                 formula={summary.socleHeightCheck.formula}
                 page={summary.socleHeightCheck.page}
                 explanation={summary.socleHeightCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
@@ -4253,7 +4377,7 @@ export function CalculatorModules({
                 page={summary.mainCorniceCheck.page}
                 isHeuristic={summary.mainCorniceCheck.isExtrapolated}
                 explanation={summary.mainCorniceCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
               />
 
               <MeterControl
@@ -4286,8 +4410,8 @@ export function CalculatorModules({
                 formula={summary.gurtCheck.formula}
                 page={summary.gurtCheck.page}
                 explanation={summary.gurtCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
@@ -4357,7 +4481,9 @@ export function CalculatorModules({
                 </div>
               </div>
 
-              <p className="text-[11px] text-[#57534E]">{summary.threePartSocleResult.note}</p>
+              {!isExamBlind && (
+                <p className="text-[11px] text-[#57534E]">{summary.threePartSocleResult.note}</p>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E5DFD3]">
                 <MeterControl
@@ -4391,8 +4517,8 @@ export function CalculatorModules({
                 page={summary.plateCheck.page}
                 isHeuristic={true}
                 explanation={summary.plateCheck.note}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
@@ -4411,12 +4537,12 @@ export function CalculatorModules({
                     <span className="font-medium block">
                       <TextWithGlossaryLinks
                         text="Рустовка тулова цоколя (ряды руста)"
-                        onOpenGlossaryTerm={onOpenGlossaryTerm}
+                        onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                         insideLabel
                       />
                     </span>
                     <span className="text-[11px] text-[#57534E]">
-                      Можно отключить, чтобы выполнить тулово цоколя гладким без рустовки (S. 10). Трёхчастное деление цоколя при этом сохраняется.
+                      Можно отключить, чтобы выполнить тулово цоколя гладким без рустовки{isExamBlind ? '' : ' (S. 10)'}. Трёхчастное деление цоколя при этом сохраняется.
                     </span>
                   </span>
                 </label>
@@ -4442,27 +4568,32 @@ export function CalculatorModules({
                     onChange={(rustRowHeight) => onUpdateParams({ rustRowHeight })}
                   />
 
-                  <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
+                  <div className={`grid ${isExamBlind ? 'grid-cols-2' : 'grid-cols-3'} gap-2 font-mono tabular-nums text-xs`}>
                     <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
                       <span className="block text-[10px] text-[#78716C]">Число рядов n</span>
                       <strong>
-                        {summary.rusticationCheck.n} ({summary.rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'})
+                        {summary.rusticationCheck.n}
+                        {!isExamBlind
+                          ? ` (${summary.rusticationCheck.oddPreferred ? 'нечёт.' : 'чёт.'})`
+                          : ''}
                       </strong>
                     </div>
                     <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
                       <span className="block text-[10px] text-[#78716C]">Шаг ряда</span>
                       <strong>{formatMeters(summary.rusticationCheck.rowHeight)} м</strong>
                     </div>
-                    <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
-                      <span className="block text-[10px] text-[#78716C]">Диапазон</span>
-                      <strong>0.300–0.400 м</strong>
-                    </div>
+                    {!isExamBlind && (
+                      <div className="p-2 border border-[#E5DFD3] bg-[#F3EFE6]/45">
+                        <span className="block text-[10px] text-[#78716C]">Диапазон</span>
+                        <strong>0.300–0.400 м</strong>
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
                 <div className="p-2.5 border border-[#E5DFD3] bg-[#F3EFE6]/55 text-xs text-[#44403C]">
                   Тулово цоколя (<span className="font-mono">Rumpf</span>) выполняется{' '}
-                  <strong>гладким без рядов рустовки</strong> (S. 10). Деление на{' '}
+                  <strong>гладким без рядов рустовки</strong>{isExamBlind ? '' : ' (S. 10)'}. Деление на{' '}
                   <span className="font-mono">Fuß / Rumpf / Deckgesims</span> сохраняется.
                 </div>
               )}
@@ -4475,8 +4606,8 @@ export function CalculatorModules({
                 formula={summary.rusticationCheck.formula}
                 page={summary.rusticationCheck.page}
                 explanation={summary.rusticationCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E5DFD3]">
@@ -4534,8 +4665,8 @@ export function CalculatorModules({
                 formula={summary.decreasingCheck.formula}
                 page={summary.decreasingCheck.page}
                 explanation={summary.decreasingCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
 
               <div className="space-y-2 pt-2 border-t border-[#E5DFD3]">
@@ -4567,8 +4698,8 @@ export function CalculatorModules({
                 formula={summary.abkroepfungCheck.formula}
                 page={summary.abkroepfungCheck.page}
                 explanation={summary.abkroepfungCheck.note}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
           </div>
@@ -4581,15 +4712,17 @@ export function CalculatorModules({
               <h3 className="font-display text-2xl font-medium text-[#1C1917]">
                 <TextWithGlossaryLinks
                   text="4.8. Межэтажные карнизы — ленты (Gurtgesims)"
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
                 />
               </h3>
-              <p className="mt-1 text-xs text-[#57534E]">
-                <TextWithGlossaryLinks
-                  text="Двойственность ленты, диапазон h_нижн/12…h_нижн/6, соподчинение цоколю и главному карнизу, 4 класса профиля, разбивка венца 1:2…2:1 и спецслучаи (S. 10–11, 16–17, 22)."
-                  onOpenGlossaryTerm={onOpenGlossaryTerm}
-                />
-              </p>
+              {!isExamBlind && (
+                <p className="mt-1 text-xs text-[#57534E]">
+                  <TextWithGlossaryLinks
+                    text="Двойственность ленты, диапазон h_нижн/12…h_нижн/6, соподчинение цоколю и главному карнизу, 4 класса профиля, разбивка венца 1:2…2:1 и спецслучаи (S. 10–11, 16–17, 22)."
+                    onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                  />
+                </p>
+              )}
             </div>
 
             {/* Размещение лент по этажам (над каждым, кроме верхнего) */}
@@ -4715,7 +4848,11 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ useFloorToFloorForBelt: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Высота нижнего этажа от пола до пола (S. 5)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Высота нижнего этажа от пола до пола'
+                      : 'Высота нижнего этажа от пола до пола (S. 5)'}
+                  </span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -4726,7 +4863,11 @@ export function CalculatorModules({
                     }
                     className="accent-[#9A3412]"
                   />
-                  <span>Скромный 1-й этаж: мягче порог &lt; h/12 (S. 16)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Скромный 1-й этаж'
+                      : 'Скромный 1-й этаж: мягче порог < h/12 (S. 16)'}
+                  </span>
                 </label>
               </div>
 
@@ -4775,45 +4916,47 @@ export function CalculatorModules({
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <span className="text-[11px] text-[#57534E]">
-                  Допустимый диапазон ленты: {formatMeters(summary.beltHeightCheck.range[0])}–{formatMeters(summary.beltHeightCheck.range[1])} м
-                </span>
-                <button
-                  type="button"
-                  disabled={isParamLocked(lockedParams, 'hGurt')}
-                  onClick={() => {
-                    const effectiveSocleH = params.useFullFloorAsSocle
-                      ? summary.derivedGeometry.floor1FullHeight
-                      : params.hSocle;
-                    const effectiveLowerH = params.useFloorToFloorForBelt
-                      ? summary.derivedGeometry.floor1FloorToFloor
-                      : summary.derivedGeometry.H_max;
-                    const mid = beltHeight({
-                      hLowerFloor: effectiveLowerH,
-                      hUpperFloor: params.beltUpperFloorHeight,
-                      H_socle: effectiveSocleH,
-                      H_mainCornice: params.hMain,
-                      mode: params.beltMode,
-                      type: params.beltType,
-                      upperToLower: params.beltCrowningRatio,
-                      hasColumnsBelow: params.beltHasColumnsBelow,
-                      hasRustication: params.beltAsRusticationMode,
-                    });
-                    onUpdateParams({
-                      hGurt: mid.h,
-                      beltIsAbsent: false,
-                      beltFloors:
-                        hasAnyActiveBelt(params)
-                          ? resolveBeltFloorsMask(params)
-                          : Array.from({ length: Math.max(0, params.levels.floors.length - 1) }, () => true),
-                    });
-                  }}
-                  className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#9A3412] hover:bg-[#EAE3D5] disabled:opacity-45"
-                >
-                  Установить середину диапазона
-                </button>
-              </div>
+              {!isExamBlind && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-[#57534E]">
+                    Допустимый диапазон ленты: {formatMeters(summary.beltHeightCheck.range[0])}–{formatMeters(summary.beltHeightCheck.range[1])} м
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isParamLocked(lockedParams, 'hGurt')}
+                    onClick={() => {
+                      const effectiveSocleH = params.useFullFloorAsSocle
+                        ? summary.derivedGeometry.floor1FullHeight
+                        : params.hSocle;
+                      const effectiveLowerH = params.useFloorToFloorForBelt
+                        ? summary.derivedGeometry.floor1FloorToFloor
+                        : summary.derivedGeometry.H_max;
+                      const mid = beltHeight({
+                        hLowerFloor: effectiveLowerH,
+                        hUpperFloor: params.beltUpperFloorHeight,
+                        H_socle: effectiveSocleH,
+                        H_mainCornice: params.hMain,
+                        mode: params.beltMode,
+                        type: params.beltType,
+                        upperToLower: params.beltCrowningRatio,
+                        hasColumnsBelow: params.beltHasColumnsBelow,
+                        hasRustication: params.beltAsRusticationMode,
+                      });
+                      onUpdateParams({
+                        hGurt: mid.h,
+                        beltIsAbsent: false,
+                        beltFloors:
+                          hasAnyActiveBelt(params)
+                            ? resolveBeltFloorsMask(params)
+                            : Array.from({ length: Math.max(0, params.levels.floors.length - 1) }, () => true),
+                      });
+                    }}
+                    className="px-2.5 py-1 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#9A3412] hover:bg-[#EAE3D5] disabled:opacity-45"
+                  >
+                    Установить середину диапазона
+                  </button>
+                </div>
+              )}
 
               <MeterControl
                 id="calc-belt-height"
@@ -4840,8 +4983,8 @@ export function CalculatorModules({
                 formula={summary.beltHeightCheck.formula}
                 page={summary.beltHeightCheck.page}
                 explanation={summary.beltHeightCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
@@ -4992,8 +5135,8 @@ export function CalculatorModules({
                 formula={summary.beltCrowningCheck.formula}
                 page={summary.beltCrowningCheck.page}
                 explanation={summary.beltCrowningCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
@@ -5008,7 +5151,11 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltHasColumnsBelow: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Колоннада или пилястры в нижнем этаже (S. 17)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Колоннада или пилястры в нижнем этаже'
+                      : 'Колоннада или пилястры в нижнем этаже (S. 17)'}
+                  </span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -5030,7 +5177,11 @@ export function CalculatorModules({
                     }}
                     className="accent-[#9A3412]"
                   />
-                  <span>Лента заменена рустовкой / шовным членением (S. 16)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Лента заменена рустовкой / шовным членением'
+                      : 'Лента заменена рустовкой / шовным членением (S. 16)'}
+                  </span>
                 </label>
 
                 {params.beltAsRusticationMode && (
@@ -5043,7 +5194,11 @@ export function CalculatorModules({
                       }
                       className="accent-[#9A3412]"
                     />
-                    <span>Рустовка опирается на базовый профиль (Fußprofil, S. 16)</span>
+                    <span>
+                      {isExamBlind
+                        ? 'Рустовка опирается на базовый профиль (Fußprofil)'
+                        : 'Рустовка опирается на базовый профиль (Fußprofil, S. 16)'}
+                    </span>
                   </label>
                 )}
 
@@ -5074,7 +5229,11 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltIsSillCornice: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Лента = сплошной подоконный карниз (Sohlbankgesimse, N3)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Лента = сплошной подоконный карниз (Sohlbankgesimse)'
+                      : 'Лента = сплошной подоконный карниз (Sohlbankgesimse, N3)'}
+                  </span>
                 </label>
 
                 {params.beltIsSillCornice && (
@@ -5102,7 +5261,11 @@ export function CalculatorModules({
                     }
                     className="accent-[#9A3412]"
                   />
-                  <span>Только подоконный пояс под 2-м этажом (редко и проблем., S. 22)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Только подоконный пояс под 2-м этажом'
+                      : 'Только подоконный пояс под 2-м этажом (редко и проблем., S. 22)'}
+                  </span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-[#E5DFD3]">
@@ -5112,44 +5275,50 @@ export function CalculatorModules({
                     onChange={(e) => onUpdateParams({ beltAlignsWithRecesses: e.target.checked })}
                     className="accent-[#9A3412]"
                   />
-                  <span>Совпадает с западающими частями / ризалитами (Rücklagen, S. 22)</span>
+                  <span>
+                    {isExamBlind
+                      ? 'Совпадает с западающими частями / ризалитами (Rücklagen)'
+                      : 'Совпадает с западающими частями / ризалитами (Rücklagen, S. 22)'}
+                  </span>
                 </label>
               </div>
 
               {/* Переключатель схем 1–3 для 3-этажного дома (S. 22) */}
-              <div className="pt-2 border-t border-[#E5DFD3] space-y-1.5">
-                <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
-                  Схемы 1–3 для 3-этажного дома (S. 22)
-                </span>
-                <div className="grid grid-cols-1 gap-1.5">
-                  {([1, 2, 3] as ThreeStoryBeltSchemeNumber[]).map((num) => {
-                    const activeScheme = schemeNumberFromGurtMode(params.threeStoryGurtMode) === num;
-                    return (
-                      <button
-                        key={num}
-                        type="button"
-                        onClick={() =>
-                          onUpdateParams({
-                            buildingVariant: 'multi-story',
-                            multiSub: 'three',
-                            floors: 3,
-                            threeStoryGurtMode: gurtModeFromSchemeNumber(num),
-                            beltIsAbsent: false,
-                            beltFloors: num === 3 ? [true, false] : [true, true],
-                          })
-                        }
-                        className={`px-2.5 py-1.5 text-left text-[11px] border transition-colors ${
-                          activeScheme
-                            ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                            : 'bg-[#F3EFE6]/45 text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                        }`}
-                      >
-                        <strong>Схема {num}:</strong> {threeStoryBeltScheme(num)}
-                      </button>
-                    );
-                  })}
+              {!isExamBlind && (
+                <div className="pt-2 border-t border-[#E5DFD3] space-y-1.5">
+                  <span className="block text-[11px] font-mono uppercase tracking-wider text-[#78716C]">
+                    Схемы 1–3 для 3-этажного дома (S. 22)
+                  </span>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {([1, 2, 3] as ThreeStoryBeltSchemeNumber[]).map((num) => {
+                      const activeScheme = schemeNumberFromGurtMode(params.threeStoryGurtMode) === num;
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() =>
+                            onUpdateParams({
+                              buildingVariant: 'multi-story',
+                              multiSub: 'three',
+                              floors: 3,
+                              threeStoryGurtMode: gurtModeFromSchemeNumber(num),
+                              beltIsAbsent: false,
+                              beltFloors: num === 3 ? [true, false] : [true, true],
+                            })
+                          }
+                          className={`px-2.5 py-1.5 text-left text-[11px] border transition-colors ${
+                            activeScheme
+                              ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                              : 'bg-[#F3EFE6]/45 text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                          }`}
+                        >
+                          <strong>Схема {num}:</strong> {threeStoryBeltScheme(num)}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {params.beltHasColumnsBelow && (
                 <WhyBlock
@@ -5163,7 +5332,7 @@ export function CalculatorModules({
                   formula={summary.beltColumnsCheck.formula}
                   page={summary.beltColumnsCheck.page}
                   explanation={summary.beltColumnsCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
+                  onOpenBookPage={effectiveOpenBookPage}
                 />
               )}
 
@@ -5175,7 +5344,7 @@ export function CalculatorModules({
                   formula={summary.beltRusticationCheck.formula}
                   page={summary.beltRusticationCheck.page}
                   explanation={summary.beltRusticationCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
+                  onOpenBookPage={effectiveOpenBookPage}
                 />
               )}
 
@@ -5187,7 +5356,7 @@ export function CalculatorModules({
                   formula={summary.sillCorniceCheck.formula}
                   page={summary.sillCorniceCheck.page}
                   explanation={summary.sillCorniceCheck.explanation}
-                  onOpenBookPage={onOpenBookPage}
+                  onOpenBookPage={effectiveOpenBookPage}
                 />
               )}
 
@@ -5198,37 +5367,39 @@ export function CalculatorModules({
                 formula={summary.beltSpecialCheck.formula}
                 page={summary.beltSpecialCheck.page}
                 explanation={summary.beltSpecialCheck.explanation}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </CollapsibleSection>
 
             {/* Явное блок 12: Чего в источнике нет */}
-            <CollapsibleSection
-              title="Чего в источнике нет (межэтажные ленты)"
-              badge={`${BELT_TEXT_GAPS.length} пункта`}
-              defaultOpen={false}
-              subtle
-            >
-              <div className="divide-y divide-[#E5DFD3]">
-                {BELT_TEXT_GAPS.map((gap) => (
-                  <div key={gap.id} className="py-2.5 space-y-1 text-xs">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-medium text-[#1C1917]">{gap.title}</span>
-                      <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#9A3412]/40 bg-[#9A3412]/10 text-[#9A3412]">
-                        {gap.tag}
-                      </span>
+            {!isExamBlind && (
+              <CollapsibleSection
+                title="Чего в источнике нет (межэтажные ленты)"
+                badge={`${BELT_TEXT_GAPS.length} пункта`}
+                defaultOpen={false}
+                subtle
+              >
+                <div className="divide-y divide-[#E5DFD3]">
+                  {BELT_TEXT_GAPS.map((gap) => (
+                    <div key={gap.id} className="py-2.5 space-y-1 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium text-[#1C1917]">{gap.title}</span>
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#9A3412]/40 bg-[#9A3412]/10 text-[#9A3412]">
+                          {gap.tag}
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-[#57534E]">{gap.detail}</p>
                     </div>
-                    <p className="text-[11px] leading-relaxed text-[#57534E]">{gap.detail}</p>
-                  </div>
-                ))}
-              </div>
-            </CollapsibleSection>
+                  ))}
+                </div>
+              </CollapsibleSection>
+            )}
           </div>
         )}
 
         {/* 4.9 Сводка фасада */}
-        {activeModule === 'summary' && (
+        {!isExamBlind && activeModule === 'summary' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -5274,10 +5445,10 @@ export function CalculatorModules({
                       </button>
                       <div className="flex items-center gap-3">
                         <StatusBadge status={item.status} />
-                        {onOpenBookPage ? (
+                        {effectiveOpenBookPage ? (
                           <button
                             type="button"
-                            onClick={() => onOpenBookPage(excerpt.pageNumber, excerpt)}
+                            onClick={() => effectiveOpenBookPage(excerpt.pageNumber, excerpt)}
                             title="Открыть правило в читальном зале с подсветкой текста"
                             className="font-mono text-[11px] text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
                           >
@@ -5297,10 +5468,10 @@ export function CalculatorModules({
                       {item.isExpertOnly ? ' (Экспертный режим)' : ''}
                     </p>
                     <p className="text-xs text-[#57534E] leading-relaxed">{item.explanation}</p>
-                    {isViolation && onOpenBookPage && (
+                    {isViolation && effectiveOpenBookPage && (
                       <button
                         type="button"
-                        onClick={() => onOpenBookPage(excerpt.pageNumber, excerpt)}
+                        onClick={() => effectiveOpenBookPage(excerpt.pageNumber, excerpt)}
                         className="mt-1 inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium border border-[#B91C1C]/40 bg-[#FEF2F2] text-[#991B1B] hover:bg-[#FEE2E2] transition-colors"
                       >
                         <span>Открыть нарушенное правило в читальном зале (Стр. {excerpt.pageNumber}) →</span>
@@ -5314,5 +5485,6 @@ export function CalculatorModules({
         )}
       </div>
     </div>
+    </ExamBlindContext.Provider>
   );
 }

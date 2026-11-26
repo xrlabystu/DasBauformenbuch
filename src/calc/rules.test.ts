@@ -127,6 +127,11 @@ import {
   exportFacadeToDwg,
   type DetailPlateId,
 } from './dwgExport.ts';
+import {
+  getExamResultSummary,
+  isExamBlindState,
+  stripExamNormHints,
+} from './examMode.ts';
 import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
@@ -1836,6 +1841,71 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assertClose(tLockedState.u, 0.35);
     assertClose(evaluateFacadeSummary(tLockedState).framingResult.R, 0.35);
   });
+
+  it('47. Режим «Экзамен»: скрытие подсказок до завершения, сохранение терминов и расчёт итога после проверки', () => {
+    // 1. Слепой режим активен только когда examMode=true и examSubmitted=false
+    assert.equal(isExamBlindState(false, false), false);
+    assert.equal(isExamBlindState(false, true), false);
+    assert.equal(isExamBlindState(true, false), true);
+    assert.equal(isExamBlindState(true, true), false);
+
+    // 2. Очистка нормативных подсказок сохраняет архитектурные термины и обозначения
+    assert.equal(stripExamNormHints('Шаг осей A (Axenweite)'), 'Шаг осей A (Axenweite)');
+    assert.equal(
+      stripExamNormHints('Ширина обрамления с одной стороны u (Rahmen)'),
+      'Ширина обрамления с одной стороны u (Rahmen)'
+    );
+    assert.equal(
+      stripExamNormHints('Высота элемента R (= u, Rahmen)'),
+      'Высота элемента R (= u, Rahmen)'
+    );
+    assert.equal(
+      stripExamNormHints('Без сандрика (K = 0)'),
+      'Без сандрика (K = 0)'
+    );
+
+    assert.equal(
+      stripExamNormHints('Высота подоконной плиты h_sill (N2, норма w/8…w/7, до w/5 approx)'),
+      'Высота подоконной плиты h_sill'
+    );
+    assert.equal(
+      stripExamNormHints('Коэффициент k_D = D / A (норма 2/3 … 5/6, по умолчанию 4/5)'),
+      'Коэффициент k_D = D / A'
+    );
+    assert.equal(
+      stripExamNormHints('Обычный цоколь (S. 10, 12, 17)'),
+      'Обычный цоколь'
+    );
+    assert.equal(
+      stripExamNormHints('Цоколь высотой h_цок (из текста S. 8)'),
+      'Цоколь высотой h_цок'
+    );
+    assert.equal(
+      stripExamNormHints('Пилястры только на верхнем этаже (N19, нежелательно)'),
+      'Пилястры только на верхнем этаже'
+    );
+
+    // 3. Итог экзамена отражает нарушения после завершения настройки
+    const validBase = createDefaultParamsForTypology('urban_house');
+    const validSummary = evaluateFacadeSummary(validBase, { expertMode: false });
+    const validResult = getExamResultSummary(validSummary);
+    assert.equal(validResult.violationCount, 0);
+    assert.equal(validResult.passed, true);
+    assert.equal(validResult.totalChecks, validSummary.checks.length);
+
+    const badFacade = {
+      ...validBase,
+      useFullFloorAsSocle: false,
+      hMain: 0.25, // заведомо слишком малый главный карниз -> нарушение
+      h: validBase.w * 1.1, // слишком низкое окно -> нарушение 1.5w <= h <= 2w
+    };
+    const badSummary = evaluateFacadeSummary(badFacade, { expertMode: false });
+    const badResult = getExamResultSummary(badSummary);
+    assert.ok(badResult.violationCount >= 2);
+    assert.equal(badResult.passed, false);
+    assert.equal(badResult.overallStatus, 'violation');
+  });
 });
+
 
 

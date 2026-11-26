@@ -60,6 +60,8 @@ export default function App() {
   // Сессионное состояние калькулятора (сбрасывается только при обновлении страницы или по «Сбросить к примеру из книги»)
   const [calcSubpage, setCalcSubpage] = useState<CalculatorSubpage>('workspace');
   const [calcExpertMode, setCalcExpertMode] = useState<boolean>(false);
+  const [calcExamMode, setCalcExamMode] = useState<boolean>(false);
+  const [calcExamSubmitted, setCalcExamSubmitted] = useState<boolean>(false);
   const [calcActiveModule, setCalcActiveModule] = useState<CalculatorModuleId>('axes');
   const [calcActivePlate, setCalcActivePlate] = useState<AnalyticalPlateId>('fan');
   const [calcHighlightedElement, setCalcHighlightedElement] = useState<FacadeTargetElement | null>(null);
@@ -338,6 +340,7 @@ export default function App() {
   };
 
   const handleOpenGlossaryFromCalc = (entry: GlossaryLookupEntry) => {
+    if (calcExamMode) return;
     setFocusedGlossaryTerm({
       pageId: entry.pageId,
       pageNumber: entry.pageNumber,
@@ -422,6 +425,7 @@ export default function App() {
   };
 
   const handleOpenBookPageFromCalc = (pageNum: number, excerpt?: RuleBookExcerpt) => {
+    if (calcExamMode) return;
     const targetPageNum = excerpt?.pageNumber ?? pageNum;
     const idx = pages.findIndex((p) => Number(p.pageNumber) === targetPageNum);
     setSelectedTerm(null);
@@ -431,6 +435,38 @@ export default function App() {
     if (!excerpt) {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+  };
+
+  const handleEnterExamMode = () => {
+    setCalcExamMode(true);
+    setCalcExamSubmitted(false);
+    setCalcExpertMode(false);
+    setActiveSection('calculator');
+    setCalcSubpage('workspace');
+    if (calcActiveModule === 'summary') {
+      setCalcActiveModule('axes');
+    }
+    setCalcHighlightedElement(null);
+  };
+
+  const handleSubmitExam = () => {
+    setCalcExamSubmitted(true);
+    setCalcSubpage('workspace');
+    setCalcActiveModule('summary');
+  };
+
+  const handleRestartExam = () => {
+    setCalcExamSubmitted(false);
+    setCalcSubpage('workspace');
+    if (calcActiveModule === 'summary') {
+      setCalcActiveModule('axes');
+    }
+    setCalcHighlightedElement(null);
+  };
+
+  const handleExitExamMode = () => {
+    setCalcExamMode(false);
+    setCalcExamSubmitted(false);
   };
 
   const navItems: { id: ActiveSection; label: string }[] = [
@@ -449,9 +485,18 @@ export default function App() {
             href="#top"
             onClick={(e) => {
               e.preventDefault();
+              if (calcExamMode) return;
               setActiveSection('reader');
             }}
-            className="font-display text-2xl font-semibold tracking-tight text-[#1C1917] whitespace-nowrap shrink-0"
+            aria-disabled={calcExamMode}
+            title={
+              calcExamMode
+                ? 'Недоступно в режиме «Экзамен» — сначала выйдите из режима «Экзамен»'
+                : undefined
+            }
+            className={`font-display text-2xl font-semibold tracking-tight whitespace-nowrap shrink-0 ${
+              calcExamMode ? 'text-[#78716C] cursor-not-allowed' : 'text-[#1C1917]'
+            }`}
           >
             Das Bauformenbuch
           </a>
@@ -459,18 +504,28 @@ export default function App() {
           <nav aria-label="Разделы издания" className="hidden md:flex items-center gap-7">
             {navItems.map((item) => {
               const isActive = activeSection === item.id;
+              const isLockedByExam = calcExamMode && item.id !== 'calculator';
               return (
                 <button
                   key={item.id}
                   type="button"
+                  disabled={isLockedByExam}
+                  title={
+                    isLockedByExam
+                      ? 'В режиме «Экзамен» переход к тексту и терминам заблокирован до выхода из экзамена'
+                      : undefined
+                  }
                   onClick={() => {
+                    if (isLockedByExam) return;
                     if (item.id === 'glossary') setFocusedGlossaryTerm(null);
                     setActiveSection(item.id);
                   }}
                   className={`py-1.5 text-sm transition-colors whitespace-nowrap shrink-0 border-b ${
                     isActive
                       ? 'text-[#1C1917] border-[#9A3412] font-semibold'
-                      : 'text-[#57534E] border-transparent hover:text-[#1C1917]'
+                      : isLockedByExam
+                        ? 'text-[#A8A29E] border-transparent cursor-not-allowed opacity-60'
+                        : 'text-[#57534E] border-transparent hover:text-[#1C1917]'
                   } focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#9A3412]`}
                 >
                   {item.label}
@@ -479,8 +534,14 @@ export default function App() {
             })}
           </nav>
 
-          <div className="hidden md:block text-xs font-mono text-[#78716C] whitespace-nowrap shrink-0">
-            Brausewetter · 1895
+          <div className="hidden md:flex items-center gap-3 whitespace-nowrap shrink-0">
+            {calcExamMode ? (
+              <span className="px-2.5 py-1 text-[11px] font-mono border border-[#9A3412]/50 bg-[#9A3412]/10 text-[#9A3412]">
+                Режим «Экзамен»
+              </span>
+            ) : (
+              <span className="text-xs font-mono text-[#78716C]">Brausewetter · 1895</span>
+            )}
           </div>
         </div>
 
@@ -488,18 +549,23 @@ export default function App() {
         <div className="md:hidden border-t border-[#E5DFD3] px-6 py-2 flex items-center gap-5 overflow-x-auto">
           {navItems.map((item) => {
             const isActive = activeSection === item.id;
+            const isLockedByExam = calcExamMode && item.id !== 'calculator';
             return (
               <button
                 key={item.id}
                 type="button"
+                disabled={isLockedByExam}
                 onClick={() => {
+                  if (isLockedByExam) return;
                   if (item.id === 'glossary') setFocusedGlossaryTerm(null);
                   setActiveSection(item.id);
                 }}
                 className={`py-1 text-xs whitespace-nowrap shrink-0 border-b ${
                   isActive
                     ? 'text-[#1C1917] border-[#9A3412] font-semibold'
-                    : 'text-[#57534E] border-transparent'
+                    : isLockedByExam
+                      ? 'text-[#A8A29E] border-transparent cursor-not-allowed opacity-60'
+                      : 'text-[#57534E] border-transparent'
                 }`}
               >
                 {item.label}
@@ -1308,14 +1374,29 @@ export default function App() {
 
         {activeSection === 'calculator' && (
           <FacadeCalculatorPage
-            onOpenBookPage={handleOpenBookPageFromCalc}
-            onOpenGlossaryTerm={handleOpenGlossaryFromCalc}
+            onOpenBookPage={calcExamMode ? undefined : handleOpenBookPageFromCalc}
+            onOpenGlossaryTerm={calcExamMode ? undefined : handleOpenGlossaryFromCalc}
             subpage={calcSubpage}
-            onChangeSubpage={setCalcSubpage}
+            onChangeSubpage={(next) => {
+              if (calcExamMode && next !== 'workspace') return;
+              setCalcSubpage(next);
+            }}
             expertMode={calcExpertMode}
-            onChangeExpertMode={setCalcExpertMode}
+            onChangeExpertMode={(val) => {
+              if (calcExamMode && !calcExamSubmitted) return;
+              setCalcExpertMode(val);
+            }}
+            examMode={calcExamMode}
+            examSubmitted={calcExamSubmitted}
+            onEnterExamMode={handleEnterExamMode}
+            onSubmitExam={handleSubmitExam}
+            onRestartExam={handleRestartExam}
+            onExitExamMode={handleExitExamMode}
             activeModule={calcActiveModule}
-            onChangeActiveModule={setCalcActiveModule}
+            onChangeActiveModule={(mod) => {
+              if (calcExamMode && !calcExamSubmitted && mod === 'summary') return;
+              setCalcActiveModule(mod);
+            }}
             activePlate={calcActivePlate}
             onChangeActivePlate={setCalcActivePlate}
             highlightedElement={calcHighlightedElement}

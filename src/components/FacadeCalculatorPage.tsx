@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Lock, RotateCcw } from 'lucide-react';
+import { Award, CheckCircle2, GraduationCap, Lock, LogOut, RotateCcw } from 'lucide-react';
 import {
   D_from_A,
   RULES_DATA,
@@ -15,6 +15,10 @@ import {
   type MultiSub,
   type RuleRecord,
 } from '../calc/rules';
+import {
+  getExamResultSummary,
+  isExamBlindState,
+} from '../calc/examMode';
 import {
   computeNextFacadeParams,
   countLockedParams,
@@ -45,6 +49,12 @@ interface FacadeCalculatorPageProps {
   onChangeSubpage?: (sub: CalculatorSubpage) => void;
   expertMode?: boolean;
   onChangeExpertMode?: (val: boolean) => void;
+  examMode?: boolean;
+  examSubmitted?: boolean;
+  onEnterExamMode?: () => void;
+  onSubmitExam?: () => void;
+  onRestartExam?: () => void;
+  onExitExamMode?: () => void;
   activeModule?: CalculatorModuleId;
   onChangeActiveModule?: (mod: CalculatorModuleId) => void;
   activePlate?: AnalyticalPlateId;
@@ -95,6 +105,12 @@ export function FacadeCalculatorPage({
   onChangeSubpage,
   expertMode: controlledExpertMode,
   onChangeExpertMode,
+  examMode: controlledExamMode,
+  examSubmitted: controlledExamSubmitted,
+  onEnterExamMode,
+  onSubmitExam,
+  onRestartExam,
+  onExitExamMode,
   activeModule: controlledActiveModule,
   onChangeActiveModule,
   activePlate: controlledActivePlate,
@@ -112,6 +128,8 @@ export function FacadeCalculatorPage({
 }: FacadeCalculatorPageProps) {
   const [localSubpage, setLocalSubpage] = useState<CalculatorSubpage>('workspace');
   const [localExpertMode, setLocalExpertMode] = useState<boolean>(false);
+  const [localExamMode, setLocalExamMode] = useState<boolean>(false);
+  const [localExamSubmitted, setLocalExamSubmitted] = useState<boolean>(false);
   const [localActiveModule, setLocalActiveModule] = useState<CalculatorModuleId>('axes');
   const [localActivePlate, setLocalActivePlate] = useState<AnalyticalPlateId>('fan');
   const [localHighlightedElement, setLocalHighlightedElement] =
@@ -121,19 +139,78 @@ export function FacadeCalculatorPage({
   );
   const [localLockedParams, setLocalLockedParams] = useState<LockedParamsMap>({});
 
-  const subpage = controlledSubpage ?? localSubpage;
-  const setSubpage = onChangeSubpage ?? setLocalSubpage;
+  const examMode = controlledExamMode ?? localExamMode;
+  const examSubmitted = controlledExamSubmitted ?? localExamSubmitted;
+  const isExamBlind = isExamBlindState(examMode, examSubmitted);
 
-  const expertMode = controlledExpertMode ?? localExpertMode;
+  const subpage = examMode ? 'workspace' : (controlledSubpage ?? localSubpage);
+  const setSubpage = (next: CalculatorSubpage) => {
+    if (examMode && next !== 'workspace') return;
+    if (onChangeSubpage) onChangeSubpage(next);
+    else setLocalSubpage(next);
+  };
+
+  const expertMode = isExamBlind ? false : (controlledExpertMode ?? localExpertMode);
   const setExpertMode = (valOrUpdater: boolean | ((prev: boolean) => boolean)) => {
+    if (isExamBlind) return;
     const resolved =
       typeof valOrUpdater === 'function' ? valOrUpdater(expertMode) : valOrUpdater;
     if (onChangeExpertMode) onChangeExpertMode(resolved);
     else setLocalExpertMode(resolved);
   };
 
-  const activeModule = controlledActiveModule ?? localActiveModule;
-  const setActiveModule = onChangeActiveModule ?? setLocalActiveModule;
+  const activeModule =
+    isExamBlind && (controlledActiveModule ?? localActiveModule) === 'summary'
+      ? 'axes'
+      : (controlledActiveModule ?? localActiveModule);
+  const setActiveModule = (mod: CalculatorModuleId) => {
+    if (isExamBlind && mod === 'summary') return;
+    if (onChangeActiveModule) onChangeActiveModule(mod);
+    else setLocalActiveModule(mod);
+  };
+
+  const handleEnterExam = () => {
+    if (onEnterExamMode) {
+      onEnterExamMode();
+      return;
+    }
+    setLocalExamMode(true);
+    setLocalExamSubmitted(false);
+    setLocalExpertMode(false);
+    setLocalSubpage('workspace');
+    if (localActiveModule === 'summary') setLocalActiveModule('axes');
+    setLocalHighlightedElement(null);
+  };
+
+  const handleSubmitExamClick = () => {
+    if (onSubmitExam) {
+      onSubmitExam();
+      return;
+    }
+    setLocalExamSubmitted(true);
+    setLocalSubpage('workspace');
+    setLocalActiveModule('summary');
+  };
+
+  const handleRestartExamClick = () => {
+    if (onRestartExam) {
+      onRestartExam();
+      return;
+    }
+    setLocalExamSubmitted(false);
+    setLocalSubpage('workspace');
+    if (localActiveModule === 'summary') setLocalActiveModule('axes');
+    setLocalHighlightedElement(null);
+  };
+
+  const handleExitExamClick = () => {
+    if (onExitExamMode) {
+      onExitExamMode();
+      return;
+    }
+    setLocalExamMode(false);
+    setLocalExamSubmitted(false);
+  };
 
   const activePlate = controlledActivePlate ?? localActivePlate;
   const setActivePlate = onChangeActivePlate ?? setLocalActivePlate;
@@ -151,8 +228,11 @@ export function FacadeCalculatorPage({
     () => evaluateFacadeSummary(params, { expertMode }),
     [params, expertMode]
   );
+  const examResult = useMemo(() => getExamResultSummary(summary), [summary]);
   const currentTypology = useMemo(() => getTypology(params.buildingType), [params.buildingType]);
   const lockedCount = useMemo(() => countLockedParams(lockedParams), [lockedParams]);
+  const effectiveOpenBookPage = examMode ? undefined : onOpenBookPage;
+  const effectiveOpenGlossaryTerm = examMode ? undefined : onOpenGlossaryTerm;
 
   const handleToggleLock = (key: string) => {
     if (onCommitSnapshot) {
@@ -252,7 +332,9 @@ export function FacadeCalculatorPage({
       <div className="pb-6 border-b border-[#E5DFD3] flex flex-col lg:flex-row lg:items-end justify-between gap-5">
         <div>
           <p className="text-xs tracking-widest uppercase text-[#78716C] font-mono">
-            Параметрический модуль · Brausewetter 1895 (S. 1–23)
+            {examMode
+              ? 'Режим «Экзамен» · Самостоятельная настройка фасада'
+              : 'Параметрический модуль · Brausewetter 1895 (S. 1–23)'}
           </p>
           <h2
             id="calculator-heading"
@@ -261,45 +343,136 @@ export function FacadeCalculatorPage({
             Интерактивный пропорциональный калькулятор фасада
           </h2>
           <p className="mt-2 text-sm text-[#57534E] max-w-2xl">
-            <TextWithGlossaryLinks
-              text="Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов, цоколя и поэтажных отметок без округления промежуточных значений; проверенные нормы книги отделены от UX-эвристик."
-              onOpenGlossaryTerm={onOpenGlossaryTerm}
-            />
+            {isExamBlind ? (
+              'Настройте параметры фасада интуитивно без подсказок. Когда завершите, нажмите «Завершить создание и узнать результат».'
+            ) : (
+              <TextWithGlossaryLinks
+                text="Вычисление шага осей (Axenweite), простенков, окон, сандриков, пилястров, карнизов, цоколя и поэтажных отметок без округления промежуточных значений; проверенные нормы книги отделены от UX-эвристик."
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+              />
+            )}
           </p>
         </div>
 
-        <div
-          role="tablist"
-          aria-label="Подстраницы калькулятора"
-          className="inline-flex flex-wrap items-center gap-1 p-1 bg-[#F3EFE6] border border-[#E5DFD3] shrink-0"
-        >
-          {(
-            [
-              { id: 'workspace', label: 'Фасад и калькуляторы' },
-              { id: 'rules', label: `Правила и нормы (${RULES_DATA.rules.length})` },
-              { id: 'tests', label: 'Тесты (11 кейсов)' },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={subpage === tab.id}
-              onClick={() => setSubpage(tab.id)}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                subpage === tab.id
-                  ? 'bg-[#FBF9F5] text-[#1C1917] shadow-xs'
-                  : 'text-[#57534E] hover:text-[#1C1917]'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        {!examMode && (
+          <div
+            role="tablist"
+            aria-label="Подстраницы калькулятора"
+            className="inline-flex flex-wrap items-center gap-1 p-1 bg-[#F3EFE6] border border-[#E5DFD3] shrink-0"
+          >
+            {(
+              [
+                { id: 'workspace', label: 'Фасад и калькуляторы' },
+                { id: 'rules', label: `Правила и нормы (${RULES_DATA.rules.length})` },
+                { id: 'tests', label: 'Тесты (11 кейсов)' },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={subpage === tab.id}
+                onClick={() => setSubpage(tab.id)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  subpage === tab.id
+                    ? 'bg-[#FBF9F5] text-[#1C1917] shadow-xs'
+                    : 'text-[#57534E] hover:text-[#1C1917]'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {subpage === 'workspace' && (
         <div className="space-y-6">
+          {/* Exam Mode Banner */}
+          {examMode && !examSubmitted && (
+            <div className="p-4 border-2 border-[#9A3412]/70 bg-[#9A3412]/[0.06] flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-[#9A3412] font-semibold">
+                  <GraduationCap className="w-4 h-4 shrink-0" />
+                  <span>Режим «Экзамен» активен</span>
+                </div>
+                <p className="text-xs text-[#44403C] max-w-2xl leading-relaxed">
+                  Все подсказки, нормы и индикаторы нарушений скрыты, а переход к тексту трактата и терминам заблокирован.
+                  Меняйте любые параметры фасада, затем проверьте результат.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSubmitExamClick}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#9A3412] text-[#FBF9F5] hover:bg-[#7C2D12] transition-colors whitespace-nowrap"
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Завершить создание и узнать результат</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExitExamClick}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#44403C] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap"
+                >
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span>Выйти из режима «Экзамен»</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {examMode && examSubmitted && (
+            <div
+              className={`p-4 border-2 flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                examResult.passed
+                  ? 'border-[#15803D]/60 bg-[#15803D]/[0.06]'
+                  : 'border-[#B91C1C]/60 bg-[#FEF2F2]'
+              }`}
+            >
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold ${
+                      examResult.passed ? 'text-[#15803D]' : 'text-[#B91C1C]'
+                    }`}
+                  >
+                    <Award className="w-4 h-4 shrink-0" />
+                    <span>
+                      {examResult.passed
+                        ? 'Результат экзамена: нарушений не обнаружено'
+                        : `Результат экзамена: выявлено нарушений — ${examResult.violationCount}`}
+                    </span>
+                  </span>
+                  <span className="font-mono text-[11px] text-[#44403C] tabular-nums">
+                    OK: {examResult.okCount}/{examResult.totalChecks} · Приближ.: {examResult.approxCount} · Нарушения: {examResult.violationCount}
+                  </span>
+                </div>
+                <p className="text-xs text-[#44403C] max-w-2xl leading-relaxed">
+                  Нарушения теперь отображаются на чертеже фасада и в разделе «Сводка». Переход к тексту и терминам станет доступен после выхода из режима «Экзамен».
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleRestartExamClick}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-[#9A3412]/50 bg-[#FBF9F5] text-[#9A3412] hover:bg-[#9A3412]/10 transition-colors whitespace-nowrap"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span>Повторить экзамен</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExitExamClick}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-[#1C1917] text-[#FBF9F5] hover:bg-[#292524] transition-colors whitespace-nowrap"
+                >
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span>Выйти из режима «Экзамен»</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Typology & Global Facade Bar */}
           <div className="p-4 border border-[#D6CEBE] bg-[#F3EFE6]/55 flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-4">
@@ -318,7 +491,9 @@ export function FacadeCalculatorPage({
                 >
                   {RULES_DATA.typologies.map((t) => (
                     <option key={t.id} value={t.id}>
-                      {t.nameRu} ({t.nameDe}) — {t.recommendedAH}
+                      {isExamBlind
+                        ? `${t.nameRu} (${t.nameDe})`
+                        : `${t.nameRu} (${t.nameDe}) — ${t.recommendedAH}`}
                     </option>
                   ))}
                 </select>
@@ -391,16 +566,18 @@ export function FacadeCalculatorPage({
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge
-                status={summary.overallStatus}
-                text={
-                  summary.overallStatus === 'ok'
-                    ? `Все проверки OK (${summary.okCount}/${summary.checks.length})`
-                    : summary.overallStatus === 'approx'
-                      ? `Приближения (${summary.approxCount})`
-                      : `Нарушения: ${summary.violationCount}`
-                }
-              />
+              {!isExamBlind && (
+                <StatusBadge
+                  status={summary.overallStatus}
+                  text={
+                    summary.overallStatus === 'ok'
+                      ? `Все проверки OK (${summary.okCount}/${summary.checks.length})`
+                      : summary.overallStatus === 'approx'
+                        ? `Приближения (${summary.approxCount})`
+                        : `Нарушения: ${summary.violationCount}`
+                  }
+                />
+              )}
               {lockedCount > 0 && (
                 <button
                   type="button"
@@ -412,49 +589,63 @@ export function FacadeCalculatorPage({
                   <span>Замочков: {lockedCount} · Снять все</span>
                 </button>
               )}
-              <button
-                type="button"
-                aria-pressed={expertMode}
-                onClick={() => setExpertMode((v) => !v)}
-                className={`px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap shrink-0 ${
-                  expertMode
-                    ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                    : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                }`}
-              >
-                {expertMode ? 'Эксперт P3: вкл.' : 'Эксперт P3: выкл.'}
-              </button>
+              {!examMode && (
+                <button
+                  type="button"
+                  aria-pressed={expertMode}
+                  onClick={() => setExpertMode((v) => !v)}
+                  className={`px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap shrink-0 ${
+                    expertMode
+                      ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
+                      : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                  }`}
+                >
+                  {expertMode ? 'Эксперт P3: вкл.' : 'Эксперт P3: выкл.'}
+                </button>
+              )}
+              {!examMode && (
+                <button
+                  type="button"
+                  onClick={handleEnterExam}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#9A3412]/60 bg-[#9A3412]/10 text-[#9A3412] hover:bg-[#9A3412]/15 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Режим «Экзамен»</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleResetToBookExample}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Сбросить к примеру из книги</span>
+                <span>{isExamBlind ? 'Сбросить фасад' : 'Сбросить к примеру из книги'}</span>
               </button>
             </div>
           </div>
 
           {/* Typology Guidance Line */}
-          <div className="px-4 py-2.5 border border-[#E5DFD3] bg-[#FBF9F5] flex flex-wrap items-baseline justify-between gap-2 text-xs text-[#44403C]">
-            <div>
-              <strong className="text-[#1C1917]">{currentTypology.nameRu}</strong>{' '}
-              <span className="text-[#78716C]">
-                ({currentTypology.nameDe}, {currentTypology.page}):
-              </span>{' '}
-              <TextWithGlossaryLinks
-                text={currentTypology.summary}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
+          {!isExamBlind && (
+            <div className="px-4 py-2.5 border border-[#E5DFD3] bg-[#FBF9F5] flex flex-wrap items-baseline justify-between gap-2 text-xs text-[#44403C]">
+              <div>
+                <strong className="text-[#1C1917]">{currentTypology.nameRu}</strong>{' '}
+                <span className="text-[#78716C]">
+                  ({currentTypology.nameDe}, {currentTypology.page}):
+                </span>{' '}
+                <TextWithGlossaryLinks
+                  text={currentTypology.summary}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                />
+              </div>
+              <span className="font-mono text-[11px] text-[#9A3412] shrink-0">
+                A:H {currentTypology.recommendedAH} ·{' '}
+                <TextWithGlossaryLinks
+                  text={currentTypology.cornerRule}
+                  onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
+                />
+              </span>
             </div>
-            <span className="font-mono text-[11px] text-[#9A3412] shrink-0">
-              A:H {currentTypology.recommendedAH} ·{' '}
-              <TextWithGlossaryLinks
-                text={currentTypology.cornerRule}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
-              />
-            </span>
-          </div>
+          )}
 
           {/* Two-Column Split: Left = Independent Scrollable Calculators (5 cols), Right = SVG Facade & Detail Plate (7 cols) */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -472,12 +663,14 @@ export function FacadeCalculatorPage({
                 params={params}
                 summary={summary}
                 expertMode={expertMode}
+                examMode={examMode}
+                examSubmitted={examSubmitted}
                 lockedParams={lockedParams}
                 onToggleLock={handleToggleLock}
                 onUpdateParams={handleUpdateParams}
                 onHighlightElement={setHighlightedElement}
-                onOpenBookPage={onOpenBookPage}
-                onOpenGlossaryTerm={onOpenGlossaryTerm}
+                onOpenBookPage={effectiveOpenBookPage}
+                onOpenGlossaryTerm={effectiveOpenGlossaryTerm}
               />
             </div>
 
@@ -486,12 +679,13 @@ export function FacadeCalculatorPage({
                 params={params}
                 summary={summary}
                 highlightedElement={highlightedElement}
+                hideValidation={isExamBlind}
                 onSelectElement={handleSelectElementFromSvg}
                 onSelectEntrance={() => {
                   setHighlightedElement(null);
                   setActiveModule('entrance');
                 }}
-                onOpenBookPage={onOpenBookPage}
+                onOpenBookPage={effectiveOpenBookPage}
                 canUndo={canUndo}
                 canRedo={canRedo}
                 onUndo={onUndo}
@@ -538,7 +732,9 @@ export function FacadeCalculatorPage({
                     {formatMeters(params.w, 2)} × {formatMeters(params.h, 2)}
                   </strong>
                   <span className="block text-[11px] text-[#57534E]">
-                    ближ. {summary.windowCheck.nearestApprox.spec.label}
+                    {isExamBlind
+                      ? `w:h = 1:${formatMeters(params.h / Math.max(0.1, params.w), 2)}`
+                      : `ближ. ${summary.windowCheck.nearestApprox.spec.label}`}
                   </span>
                 </div>
                 <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
@@ -558,34 +754,40 @@ export function FacadeCalculatorPage({
                 </div>
               </div>
 
-              <AnalyticalPlates
-                activePlate={activePlate}
-                onSelectPlate={setActivePlate}
-                params={params}
-                summary={summary}
-                onUpdateParams={handleUpdateParams}
-                lockedParams={lockedParams}
-              />
+              {isExamBlind ? (
+                <div className="p-4 border border-dashed border-[#D6CEBE] bg-[#F3EFE6]/45 text-xs text-[#57534E]">
+                  Геометрические таблицы с нормативными проверками скрыты в режиме «Экзамен» и откроются после нажатия «Завершить создание и узнать результат».
+                </div>
+              ) : (
+                <AnalyticalPlates
+                  activePlate={activePlate}
+                  onSelectPlate={setActivePlate}
+                  params={params}
+                  summary={summary}
+                  onUpdateParams={handleUpdateParams}
+                  lockedParams={lockedParams}
+                />
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {subpage === 'rules' && (
+      {subpage === 'rules' && !examMode && (
         <RuleCardsView
           expertMode={expertMode}
           onToggleExpertMode={() => setExpertMode((v) => !v)}
           onHighlightRuleOnFacade={handleHighlightRuleOnFacade}
-          onOpenBookPage={onOpenBookPage}
+          onOpenBookPage={effectiveOpenBookPage}
         />
       )}
 
-      {subpage === 'tests' && (
+      {subpage === 'tests' && !examMode && (
         <TestCasesVerificationView
           summary={summary}
           onLoadCaseOnFacade={handleLoadCaseOnFacade}
           onHighlightElementOnFacade={handleHighlightElementOnFacade}
-          onOpenBookPage={onOpenBookPage}
+          onOpenBookPage={effectiveOpenBookPage}
         />
       )}
     </section>

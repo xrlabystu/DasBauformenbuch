@@ -36,7 +36,7 @@ export function getExamResultSummary(summary: FacadeSummary): ExamResultSummary 
 }
 
 const NORM_HINT_CONTENT_RE =
-  /(?:\bнорма\b|\bдопустимо\b|\bнежелательно\b|\bредко\b|\bпроблем|\bидеал\b|\bэвристик|\bэкстрапол|\bS\.\s*\d|\bN\d+\b|\bрис\.\s*\d|\bUX-|\bapprox\b|\bw\/\d|\bW_p\/|\bh_нижн|\b1\/\d|\b1:1\b|\bдо\s+w\/|\b≤|\b≥)/i;
+  /(?:норма|допустимо|нежелательно|редко|проблем|идеал|эвристик|экстрапол|по\s+умолчанию|из\s+текста|при\s+небольшой\s+высоте|меньше\s+h_|\bS\.\s*\d|\bN\d+\b|рис\.\s*\d|\bUX-|\bapprox\b|\bw\/\d|\bW_p\/|\bh_нижн|\b1\/\d|\b1:1\b|до\s+w\/|≤|≥|<|>)/i;
 
 /**
  * Strips normative/rule hints (e.g. "(норма w/8…w/7)", "(S. 16)", "(N2, ...)")
@@ -51,12 +51,15 @@ export function stripExamNormHints(text: string): string {
       return fullMatch;
     }
 
-    // If parenthetical mixes a non-norm term with a ", S. 16" or "; N3" suffix,
-    // keep only the clean non-norm leading part if it looks like a term name.
     const parts = inner
       .split(/[;,]/)
       .map((part) => part.trim())
-      .filter((part) => part.length > 0 && !NORM_HINT_CONTENT_RE.test(part));
+      .filter(
+        (part) =>
+          part.length > 0 &&
+          !NORM_HINT_CONTENT_RE.test(part) &&
+          !/^\d+(?:[–-]\d+)?$/.test(part)
+      );
 
     if (parts.length > 0) {
       return ` (${parts.join(', ')})`;
@@ -64,7 +67,6 @@ export function stripExamNormHints(text: string): string {
     return '';
   });
 
-  // Also remove trailing bare "S. 10–11" or "N18–N19" fragments if any remained
   result = result
     .replace(/\s*[·,]\s*(?:S\.\s*\d[\d–,\s-]*|N\d+(?:–N?\d+)?)/gi, '')
     .replace(/\s{2,}/g, ' ')

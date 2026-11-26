@@ -47,6 +47,7 @@ interface FacadeSvgProps {
   params: FacadeParameters;
   summary: FacadeSummary;
   highlightedElement: FacadeTargetElement | null;
+  hideValidation?: boolean;
   onSelectElement?: (el: FacadeTargetElement) => void;
   onSelectEntrance?: () => void;
   onOpenBookPage?: (pageNum: number, excerpt?: RuleBookExcerpt) => void;
@@ -91,6 +92,7 @@ export function FacadeSvg({
   params,
   summary,
   highlightedElement,
+  hideValidation = false,
   onSelectElement,
   onSelectEntrance,
   onOpenBookPage,
@@ -252,11 +254,18 @@ export function FacadeSvg({
 
   const openBookFromSvg = useCallback(
     (pageNum: number, excerpt?: RuleBookExcerpt) => {
+      if (!onOpenBookPage) return;
       setIsFullscreen(false);
-      onOpenBookPage?.(pageNum, excerpt);
+      onOpenBookPage(pageNum, excerpt);
     },
     [onOpenBookPage]
   );
+
+  useEffect(() => {
+    if (hideValidation) {
+      setHoveredViolation(null);
+    }
+  }, [hideValidation]);
 
   // Escape closes fullscreen; body scroll locked while fullscreen is active
   useEffect(() => {
@@ -392,6 +401,7 @@ export function FacadeSvg({
   }, [summary.checks, params.withFraming]);
 
   const getViolationsForElement = (el: FacadeTargetElement): SummaryCheckItem[] => {
+    if (hideValidation) return [];
     if (el === 'pier' || el === 'framing_pier') {
       const combined = [...checksByElement.pier, ...checksByElement.framing_pier];
       const seen = new Set<string>();
@@ -456,6 +466,13 @@ export function FacadeSvg({
         : 'ok';
   const beltStatus = getWorstCheckStatus('belt', beltBaseStatus);
 
+  const strokeFor = (status: ValidationStatus) =>
+    hideValidation ? '#44403C' : STATUS_STROKE[status];
+  const fillFor = (status: ValidationStatus) =>
+    hideValidation ? 'rgba(68, 64, 60, 0.08)' : STATUS_FILL[status];
+  const showViol = (status: ValidationStatus) => !hideValidation && status === 'violation';
+  const showNonOk = (status: ValidationStatus) => !hideValidation && status !== 'ok';
+
   const cancelHideTimer = () => {
     if (hideTimerRef.current !== null) {
       window.clearTimeout(hideTimerRef.current);
@@ -474,6 +491,7 @@ export function FacadeSvg({
     el: FacadeTargetElement,
     e: ReactMouseEvent<SVGElement>
   ) => {
+    if (hideValidation) return;
     const violations = getViolationsForElement(el);
     if (violations.length === 0) return;
     cancelHideTimer();
@@ -491,16 +509,21 @@ export function FacadeSvg({
     });
   };
 
-  const violationHoverProps = (el: FacadeTargetElement) => ({
-    onMouseEnter: (e: ReactMouseEvent<SVGElement>) => handleElementMouseEnter(el, e),
-    onMouseLeave: scheduleHideViolation,
-  });
+  const violationHoverProps = (el: FacadeTargetElement) =>
+    hideValidation
+      ? {}
+      : {
+          onMouseEnter: (e: ReactMouseEvent<SVGElement>) => handleElementMouseEnter(el, e),
+          onMouseLeave: scheduleHideViolation,
+        };
 
-  const activeViolationItems = hoveredViolation
-    ? getViolationsForElement(hoveredViolation.element)
-    : [];
+  const activeViolationItems =
+    !hideValidation && hoveredViolation
+      ? getViolationsForElement(hoveredViolation.element)
+      : [];
 
   const allViolationElements = useMemo(() => {
+    if (hideValidation) return [];
     const order: FacadeTargetElement[] = [
       'axenweite',
       'pier',
@@ -520,7 +543,7 @@ export function FacadeSvg({
         violations: checksByElement[el].filter((c) => c.status === 'violation'),
       }))
       .filter((item) => item.violations.length > 0);
-  }, [checksByElement]);
+  }, [checksByElement, hideValidation]);
 
   const p_corner = D - safeW / 2 - effectiveU;
   const p_inter = safeA - safeW - 2 * effectiveU;
@@ -573,7 +596,7 @@ export function FacadeSvg({
     status: ValidationStatus,
     onClickEl?: FacadeTargetElement
   ) => {
-    const color = STATUS_STROKE[status];
+    const color = strokeFor(status);
     const midX = (x1 + x2) / 2;
     const minX = Math.min(x1, x2);
     const maxX = Math.max(x1, x2);
@@ -660,16 +683,19 @@ export function FacadeSvg({
           </span>
           <span aria-hidden="true">·</span>
           <span className="font-mono text-[11px] text-[#78716C] tabular-nums">
-            W={formatMeters(totalWidthM, 2)} м × H_зд={formatMeters(totalHeightM, 2)} м ({rectOriRu})
+            W={formatMeters(totalWidthM, 2)} м × H_зд={formatMeters(totalHeightM, 2)} м
+            {!hideValidation ? ` (${rectOriRu})` : ''}
           </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="hidden sm:flex items-center gap-3 text-[11px] font-mono tabular-nums pr-2 border-r border-[#D6CEBE]">
-            <span className="text-[#15803D]">■ OK</span>
-            <span className="text-[#B45309]">▲ ПРИБЛ.</span>
-            <span className="text-[#B91C1C]">✕ НАРУШЕНИЕ</span>
-          </div>
+          {!hideValidation && (
+            <div className="hidden sm:flex items-center gap-3 text-[11px] font-mono tabular-nums pr-2 border-r border-[#D6CEBE]">
+              <span className="text-[#15803D]">■ OK</span>
+              <span className="text-[#B45309]">▲ ПРИБЛ.</span>
+              <span className="text-[#B91C1C]">✕ НАРУШЕНИЕ</span>
+            </div>
+          )}
 
           {(onUndo || onRedo) && (
             <div className="inline-flex items-center gap-1 pr-2 border-r border-[#D6CEBE] font-mono text-[11px]">
@@ -848,15 +874,15 @@ export function FacadeSvg({
               height={plinthPxH}
               fill={
                 isHi('socle')
-                  ? STATUS_FILL[socleStatus]
-                  : socleStatus === 'violation'
+                  ? fillFor(socleStatus)
+                  : showViol(socleStatus)
                     ? 'rgba(185, 28, 28, 0.14)'
                     : '#E6DFD0'
               }
               stroke={
-                isHi('socle') || socleStatus === 'violation' ? STATUS_STROKE[socleStatus] : '#292524'
+                isHi('socle') || showViol(socleStatus) ? strokeFor(socleStatus) : '#292524'
               }
-              strokeWidth={isHi('socle') || socleStatus === 'violation' ? 1.8 : 1.2}
+              strokeWidth={isHi('socle') || showViol(socleStatus) ? 1.8 : 1.2}
             />
             <rect
               x={xM(0) - 5}
@@ -864,7 +890,7 @@ export function FacadeSvg({
               width={facadePxW + 10}
               height={deckPxH}
               fill="#DDD4C0"
-              stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+              stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
               strokeWidth={0.95}
             />
             {Array.from({ length: Math.max(0, rustCourses - 1) }).map((_, rIdx) => {
@@ -889,7 +915,7 @@ export function FacadeSvg({
               width={facadePxW + 10}
               height={fussPxH}
               fill="#D6CEBE"
-              stroke={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+              stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
               strokeWidth={0.95}
             />
             <rect
@@ -905,7 +931,7 @@ export function FacadeSvg({
               y={yFromGroundM(visualSocleTopM / 2) + 3}
               fontSize="9"
               fontFamily="IBM Plex Mono, monospace"
-              fill={isHi('socle') ? STATUS_STROKE[socleStatus] : '#44403C'}
+              fill={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
             >
               Цоколь {formatMeters(effectiveSocleH)} м ({hasSocleRust ? `${summary.rusticationCheck.n} ряд.` : 'гладкий'})
             </text>
@@ -919,18 +945,18 @@ export function FacadeSvg({
             height={wallHeightM * scale}
             fill={
               isHi('corner')
-                ? STATUS_FILL[cornerStatus]
-                : cornerStatus === 'violation'
+                ? fillFor(cornerStatus)
+                : showViol(cornerStatus)
                   ? 'rgba(185, 28, 28, 0.14)'
                   : 'transparent'
             }
             stroke={
-              isHi('corner') || cornerStatus === 'violation'
-                ? STATUS_STROKE[cornerStatus]
+              isHi('corner') || showViol(cornerStatus)
+                ? strokeFor(cornerStatus)
                 : 'none'
             }
-            strokeWidth={isHi('corner') || cornerStatus === 'violation' ? 1.8 : 0}
-            strokeDasharray={cornerStatus === 'violation' && !isHi('corner') ? '5 3' : undefined}
+            strokeWidth={isHi('corner') || showViol(cornerStatus) ? 1.8 : 0}
+            strokeDasharray={showViol(cornerStatus) && !isHi('corner') ? '5 3' : undefined}
             className="cursor-pointer"
             onClick={() => onSelectElement?.('corner')}
             {...violationHoverProps('corner')}
@@ -945,21 +971,21 @@ export function FacadeSvg({
               height={wallHeightM * scale}
               fill={
                 isHi('pier') || isHi('framing_pier')
-                  ? STATUS_FILL[pierStatus]
-                  : pierStatus === 'violation'
+                  ? fillFor(pierStatus)
+                  : showViol(pierStatus)
                     ? 'rgba(185, 28, 28, 0.14)'
                     : 'transparent'
               }
               stroke={
-                isHi('pier') || isHi('framing_pier') || pierStatus === 'violation'
-                  ? STATUS_STROKE[pierStatus]
+                isHi('pier') || isHi('framing_pier') || showViol(pierStatus)
+                  ? strokeFor(pierStatus)
                   : 'none'
               }
               strokeWidth={
-                isHi('pier') || isHi('framing_pier') || pierStatus === 'violation' ? 1.8 : 0
+                isHi('pier') || isHi('framing_pier') || showViol(pierStatus) ? 1.8 : 0
               }
               strokeDasharray={
-                pierStatus === 'violation' && !isHi('pier') && !isHi('framing_pier')
+                showViol(pierStatus) && !isHi('pier') && !isHi('framing_pier')
                   ? '5 3'
                   : undefined
               }
@@ -1038,7 +1064,7 @@ export function FacadeSvg({
                         y={yFromGroundM(floorStartM) - 8}
                         width={facadePxW}
                         height={16}
-                        fill={beltStatus === 'violation' && !anyBeltsOn ? 'rgba(185, 28, 28, 0.08)' : 'transparent'}
+                        fill={showViol(beltStatus) && !anyBeltsOn ? 'rgba(185, 28, 28, 0.08)' : 'transparent'}
                       />
                       <line
                         x1={xM(0)}
@@ -1046,15 +1072,16 @@ export function FacadeSvg({
                         x2={xM(0) + facadePxW}
                         y2={yFromGroundM(floorStartM)}
                         stroke={
-                          isHi('belt') || (!anyBeltsOn && beltStatus !== 'ok')
-                            ? STATUS_STROKE[beltStatus]
+                          isHi('belt') || (!anyBeltsOn && showNonOk(beltStatus))
+                            ? strokeFor(beltStatus)
                             : '#A8A29E'
                         }
-                        strokeOpacity={isHi('belt') || (!anyBeltsOn && beltStatus !== 'ok') ? 0.9 : 0.45}
-                        strokeWidth={!anyBeltsOn && beltStatus === 'violation' ? 1.5 : 0.9}
+                        strokeOpacity={isHi('belt') || (!anyBeltsOn && showNonOk(beltStatus)) ? 0.9 : 0.45}
+                        strokeWidth={!anyBeltsOn && showViol(beltStatus) ? 1.5 : 0.9}
                         strokeDasharray="5 4"
                       />
-                      {upperFloorNum === 2 &&
+                      {!hideValidation &&
+                        upperFloorNum === 2 &&
                         !anyBeltsOn &&
                         (isHi('belt') || beltStatus !== 'ok' || params.beltOnlySillUnderSecond) && (
                           <text
@@ -1095,12 +1122,12 @@ export function FacadeSvg({
                 : Math.min(11, Math.max(4, params.hGurt * scale));
 
               const beltStroke =
-                isHi('belt') || beltStatus !== 'ok'
-                  ? STATUS_STROKE[beltStatus]
+                isHi('belt') || showNonOk(beltStatus)
+                  ? strokeFor(beltStatus)
                   : '#57534E';
               const beltFill =
-                isHi('belt') || beltStatus === 'violation'
-                  ? STATUS_FILL[beltStatus]
+                isHi('belt') || showViol(beltStatus)
+                  ? fillFor(beltStatus)
                   : params.beltMode === 'crowning'
                     ? '#D6CEBE'
                     : '#DFD6C3';
@@ -1120,12 +1147,12 @@ export function FacadeSvg({
                       width={facadePxW}
                       height={14}
                       fill={
-                        isHi('belt') || beltStatus === 'violation'
-                          ? STATUS_FILL[beltStatus]
+                        isHi('belt') || showViol(beltStatus)
+                          ? fillFor(beltStatus)
                           : 'rgba(214, 206, 190, 0.35)'
                       }
-                      stroke={beltStatus === 'violation' ? STATUS_STROKE.violation : 'none'}
-                      strokeWidth={beltStatus === 'violation' ? 1.2 : 0}
+                      stroke={showViol(beltStatus) ? strokeFor('violation') : 'none'}
+                      strokeWidth={showViol(beltStatus) ? 1.2 : 0}
                     />
                     <line
                       x1={xM(0)}
@@ -1156,7 +1183,7 @@ export function FacadeSvg({
                         strokeWidth={0.9}
                       />
                     )}
-                    {!params.beltRusticationHasBaseProfile && upperFloorNum === 2 && (
+                    {!hideValidation && !params.beltRusticationHasBaseProfile && upperFloorNum === 2 && (
                       <text
                         x={xM(0) + facadePxW / 2}
                         y={yBelt + 12}
@@ -1186,7 +1213,7 @@ export function FacadeSvg({
                     height={beltThicknessPx}
                     fill={beltFill}
                     stroke={beltStroke}
-                    strokeWidth={isHi('belt') || beltStatus === 'violation' ? 1.5 : 1}
+                    strokeWidth={isHi('belt') || showViol(beltStatus) ? 1.5 : 1}
                     strokeDasharray={isSillMode ? '4 2' : undefined}
                   />
                   {idx === firstActiveBoundaryIdx && (
@@ -1205,11 +1232,12 @@ export function FacadeSvg({
                         textAnchor="end"
                         fontSize="8.5"
                         fontFamily="IBM Plex Mono, monospace"
-                        fontWeight={isHi('belt') || beltStatus !== 'ok' ? 600 : 400}
+                        fontWeight={isHi('belt') || showNonOk(beltStatus) ? 600 : 400}
                         fill={beltStroke}
                       >
                         {isSillMode ? 'Подокон. ' : 'Лента '}
-                        {formatMeters(params.hGurt, 2)}м ({STATUS_TAG[beltStatus]})
+                        {formatMeters(params.hGurt, 2)}м
+                        {!hideValidation ? ` (${STATUS_TAG[beltStatus]})` : ''}
                       </text>
                     </g>
                   )}
@@ -1228,8 +1256,8 @@ export function FacadeSvg({
               pilasterW
             );
             const strokeCol =
-              isHi('pilaster') || pilasterStatus === 'violation'
-                ? STATUS_STROKE[pilasterStatus]
+              isHi('pilaster') || showViol(pilasterStatus)
+                ? strokeFor(pilasterStatus)
                 : '#57534E';
             return pilasterSpans.map((span, spanIdx) => {
               const yTop = yFromGroundM(span.topM);
@@ -1252,12 +1280,12 @@ export function FacadeSvg({
                       width={pilasterPxW}
                       height={Math.max(4, hPx - capH - baseH)}
                       fill={
-                        isHi('pilaster') || pilasterStatus === 'violation'
-                          ? STATUS_FILL[pilasterStatus]
+                        isHi('pilaster') || showViol(pilasterStatus)
+                          ? fillFor(pilasterStatus)
                           : '#EAE3D3'
                       }
                       stroke={strokeCol}
-                      strokeWidth={isHi('pilaster') || pilasterStatus === 'violation' ? 1.6 : 1}
+                      strokeWidth={isHi('pilaster') || showViol(pilasterStatus) ? 1.6 : 1}
                     />
                     {!params.isMauerpfeiler && (
                       <>
@@ -1266,18 +1294,18 @@ export function FacadeSvg({
                           y={yTop}
                           width={pilasterPxW + 4}
                           height={capH}
-                          fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
+                          fill={showViol(pilasterStatus) ? fillFor('violation') : '#DFD6C3'}
                           stroke={strokeCol}
-                          strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
+                          strokeWidth={showViol(pilasterStatus) ? 1.4 : 1}
                         />
                         <rect
                           x={xLeft - 2}
                           y={yTop + hPx - baseH}
                           width={pilasterPxW + 4}
                           height={baseH}
-                          fill={pilasterStatus === 'violation' ? STATUS_FILL.violation : '#DFD6C3'}
+                          fill={showViol(pilasterStatus) ? fillFor('violation') : '#DFD6C3'}
                           stroke={strokeCol}
-                          strokeWidth={pilasterStatus === 'violation' ? 1.4 : 1}
+                          strokeWidth={showViol(pilasterStatus) ? 1.4 : 1}
                         />
                       </>
                     )}
@@ -1299,16 +1327,16 @@ export function FacadeSvg({
               width={facadePxW + corniceOverhangPx * 2}
               height={huPx}
               fill={
-                isHi('cornice') || corniceStatus === 'violation'
-                  ? STATUS_FILL[corniceStatus]
+                isHi('cornice') || showViol(corniceStatus)
+                  ? fillFor(corniceStatus)
                   : '#DFD6C3'
               }
               stroke={
-                isHi('cornice') || corniceStatus === 'violation'
-                  ? STATUS_STROKE[corniceStatus]
+                isHi('cornice') || showViol(corniceStatus)
+                  ? strokeFor(corniceStatus)
                   : '#292524'
               }
-              strokeWidth={corniceStatus === 'violation' ? 1.8 : 1.25}
+              strokeWidth={showViol(corniceStatus) ? 1.8 : 1.25}
             />
             <rect
               x={xM(0) - corniceOverhangPx * 0.55}
@@ -1316,16 +1344,16 @@ export function FacadeSvg({
               width={facadePxW + corniceOverhangPx * 1.1}
               height={hlPx}
               fill={
-                isHi('cornice') || corniceStatus === 'violation'
-                  ? STATUS_FILL[corniceStatus]
+                isHi('cornice') || showViol(corniceStatus)
+                  ? fillFor(corniceStatus)
                   : '#EAE3D3'
               }
               stroke={
-                isHi('cornice') || corniceStatus === 'violation'
-                  ? STATUS_STROKE[corniceStatus]
+                isHi('cornice') || showViol(corniceStatus)
+                  ? strokeFor(corniceStatus)
                   : '#292524'
               }
-              strokeWidth={corniceStatus === 'violation' ? 1.6 : 1.1}
+              strokeWidth={showViol(corniceStatus) ? 1.6 : 1.1}
             />
             {hasLowerCornice && (
               <>
@@ -1341,18 +1369,18 @@ export function FacadeSvg({
                   }
                   height={middleCornicePx}
                   fill={
-                    isHi('cornice') || corniceStatus === 'violation'
-                      ? STATUS_FILL[corniceStatus]
+                    isHi('cornice') || showViol(corniceStatus)
+                      ? fillFor(corniceStatus)
                       : corniceLayers.fullStyle === 'neck_band'
                         ? '#F4EFE2'
                         : '#F0EAD8'
                   }
                   stroke={
-                    isHi('cornice') || corniceStatus === 'violation'
-                      ? STATUS_STROKE[corniceStatus]
+                    isHi('cornice') || showViol(corniceStatus)
+                      ? strokeFor(corniceStatus)
                       : '#292524'
                   }
-                  strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.0}
+                  strokeWidth={showViol(corniceStatus) ? 1.5 : 1.0}
                 />
                 <rect
                   x={
@@ -1366,18 +1394,18 @@ export function FacadeSvg({
                   }
                   height={bottomBandCornicePx}
                   fill={
-                    isHi('cornice') || corniceStatus === 'violation'
-                      ? STATUS_FILL[corniceStatus]
+                    isHi('cornice') || showViol(corniceStatus)
+                      ? fillFor(corniceStatus)
                       : corniceLayers.fullStyle === 'neck_band'
                         ? '#DAD0BA'
                         : '#E2DAC5'
                   }
                   stroke={
-                    isHi('cornice') || corniceStatus === 'violation'
-                      ? STATUS_STROKE[corniceStatus]
+                    isHi('cornice') || showViol(corniceStatus)
+                      ? strokeFor(corniceStatus)
                       : '#292524'
                   }
-                  strokeWidth={corniceStatus === 'violation' ? 1.5 : 1.05}
+                  strokeWidth={showViol(corniceStatus) ? 1.5 : 1.05}
                 />
               </>
             )}
@@ -1393,12 +1421,12 @@ export function FacadeSvg({
                   y1={padTop - 20}
                   x2={cx}
                   y2={groundY + 18}
-                  stroke={ahStatus === 'violation' ? '#B91C1C' : '#9A3412'}
-                  strokeOpacity={ahStatus === 'violation' ? 0.72 : 0.4}
-                  strokeWidth={ahStatus === 'violation' ? 1.35 : 0.85}
+                  stroke={showViol(ahStatus) ? '#B91C1C' : '#9A3412'}
+                  strokeOpacity={showViol(ahStatus) ? 0.72 : 0.4}
+                  strokeWidth={showViol(ahStatus) ? 1.35 : 0.85}
                   strokeDasharray="5 3"
                 />
-                {ahStatus === 'violation' && (
+                {showViol(ahStatus) && (
                   <line
                     x1={cx}
                     y1={padTop - 20}
@@ -1467,16 +1495,16 @@ export function FacadeSvg({
                             width={winWpx + 2 * uPx}
                             height={winHpx + rPx + uPx * 0.5}
                             fill={
-                              isHi('entablature') || entablatureStatus === 'violation'
-                                ? STATUS_FILL[entablatureStatus]
+                              isHi('entablature') || showViol(entablatureStatus)
+                                ? fillFor(entablatureStatus)
                                 : '#E6DEC9'
                             }
                             stroke={
-                              isHi('entablature') || entablatureStatus === 'violation'
-                                ? STATUS_STROKE[entablatureStatus]
+                              isHi('entablature') || showViol(entablatureStatus)
+                                ? strokeFor(entablatureStatus)
                                 : '#44403C'
                             }
-                            strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.05}
+                            strokeWidth={showViol(entablatureStatus) ? 1.6 : 1.05}
                           />
                           {fPx > 0.01 && (
                             <rect
@@ -1484,13 +1512,13 @@ export function FacadeSvg({
                               y={winY - rPx - fPx}
                               width={winWpx + 2 * uPx}
                               height={Math.max(2, fPx)}
-                              fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#EFE8D7'}
+                              fill={showViol(entablatureStatus) ? fillFor('violation') : '#EFE8D7'}
                               stroke={
-                                isHi('entablature') || entablatureStatus === 'violation'
-                                  ? STATUS_STROKE[entablatureStatus]
+                                isHi('entablature') || showViol(entablatureStatus)
+                                  ? strokeFor(entablatureStatus)
                                   : '#44403C'
                               }
-                              strokeWidth={entablatureStatus === 'violation' ? 1.4 : 0.95}
+                              strokeWidth={showViol(entablatureStatus) ? 1.4 : 0.95}
                             />
                           )}
                           {params.withConsoles && K > 1e-6 && (
@@ -1502,8 +1530,8 @@ export function FacadeSvg({
                                 height={Math.max(4, fPx + rPx * 0.5)}
                                 fill="#D6CEBE"
                                 stroke={
-                                  entablatureStatus === 'violation'
-                                    ? STATUS_STROKE.violation
+                                  showViol(entablatureStatus)
+                                    ? strokeFor('violation')
                                     : '#44403C'
                                 }
                                 strokeWidth={0.85}
@@ -1515,8 +1543,8 @@ export function FacadeSvg({
                                 height={Math.max(4, fPx + rPx * 0.5)}
                                 fill="#D6CEBE"
                                 stroke={
-                                  entablatureStatus === 'violation'
-                                    ? STATUS_STROKE.violation
+                                  showViol(entablatureStatus)
+                                    ? strokeFor('violation')
                                     : '#44403C'
                                 }
                                 strokeWidth={0.85}
@@ -1534,14 +1562,14 @@ export function FacadeSvg({
                             return (
                               <polygon
                                 points={`${outerL},${capTopY} ${outerR},${capTopY} ${innerR},${capBotY} ${innerL},${capBotY}`}
-                                fill={entablatureStatus === 'violation' ? STATUS_FILL.violation : '#DDD4C0'}
+                                fill={showViol(entablatureStatus) ? fillFor('violation') : '#DDD4C0'}
                                 stroke={
-                                  isHi('entablature') || entablatureStatus === 'violation'
-                                    ? STATUS_STROKE[entablatureStatus]
+                                  isHi('entablature') || showViol(entablatureStatus)
+                                    ? strokeFor(entablatureStatus)
                                     : '#292524'
                                 }
                                 strokeLinejoin="miter"
-                                strokeWidth={entablatureStatus === 'violation' ? 1.6 : 1.1}
+                                strokeWidth={showViol(entablatureStatus) ? 1.6 : 1.1}
                               />
                             );
                           })()}
@@ -1572,17 +1600,17 @@ export function FacadeSvg({
                           height={winHpx}
                           fill={
                             isHi('window')
-                              ? STATUS_FILL[windowStatus]
-                              : windowStatus === 'violation'
+                              ? fillFor(windowStatus)
+                              : showViol(windowStatus)
                                 ? 'rgba(185, 28, 28, 0.16)'
                                 : '#D6DEE2'
                           }
                           stroke={
-                            isHi('window') || windowStatus !== 'ok'
-                              ? STATUS_STROKE[windowStatus]
+                            isHi('window') || showNonOk(windowStatus)
+                              ? strokeFor(windowStatus)
                               : '#292524'
                           }
-                          strokeWidth={isHi('window') || windowStatus === 'violation' ? 1.8 : 1.1}
+                          strokeWidth={isHi('window') || showViol(windowStatus) ? 1.8 : 1.1}
                         />
                         <line
                           x1={cx}
@@ -1892,7 +1920,7 @@ export function FacadeSvg({
             xM(0),
             xM(axesM[0]),
             padTop - 26,
-            `D = ${formatMeters(D)} (${STATUS_TAG[cornerStatus]})`,
+            hideValidation ? `D = ${formatMeters(D)}` : `D = ${formatMeters(D)} (${STATUS_TAG[cornerStatus]})`,
             cornerStatus,
             'corner'
           )}
@@ -1901,7 +1929,7 @@ export function FacadeSvg({
               xM(axesM[0]),
               xM(axesM[1]),
               padTop - 26,
-              `A = ${formatMeters(safeA)} (${STATUS_TAG[ahStatus]})`,
+              hideValidation ? `A = ${formatMeters(safeA)}` : `A = ${formatMeters(safeA)} (${STATUS_TAG[ahStatus]})`,
               ahStatus,
               'axenweite'
             )}
@@ -1931,8 +1959,12 @@ export function FacadeSvg({
               xM(axesM[1] - safeW / 2 - effectiveU),
               groundY + 26,
               params.withFraming
-                ? `p_c = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`
-                : `p = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`,
+                ? hideValidation
+                  ? `p_c = ${formatMeters(p_inter)}`
+                  : `p_c = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`
+                : hideValidation
+                  ? `p = ${formatMeters(p_inter)}`
+                  : `p = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`,
               pierStatus,
               params.withFraming ? 'framing_pier' : 'pier'
             )}
@@ -1952,15 +1984,15 @@ export function FacadeSvg({
                   onClick={() => onSelectElement?.('socle')}
                   {...violationHoverProps('socle')}
                 >
-                  <line x1={dimX} y1={yGround} x2={dimX} y2={ySocTop} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
-                  <line x1={dimX - 4} y1={yGround} x2={dimX + 4} y2={yGround} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
-                  <line x1={dimX - 4} y1={ySocTop} x2={dimX + 4} y2={ySocTop} stroke={STATUS_STROKE[socleStatus]} strokeWidth={1.25} />
+                  <line x1={dimX} y1={yGround} x2={dimX} y2={ySocTop} stroke={strokeFor(socleStatus)} strokeWidth={1.25} />
+                  <line x1={dimX - 4} y1={yGround} x2={dimX + 4} y2={yGround} stroke={strokeFor(socleStatus)} strokeWidth={1.25} />
+                  <line x1={dimX - 4} y1={ySocTop} x2={dimX + 4} y2={ySocTop} stroke={strokeFor(socleStatus)} strokeWidth={1.25} />
                   <text
                     x={dimX + 7}
                     y={(yGround + ySocTop) / 2 + 3}
                     fontSize="9"
                     fontFamily="IBM Plex Mono, monospace"
-                    fill={STATUS_STROKE[socleStatus]}
+                    fill={strokeFor(socleStatus)}
                   >
                     h_s={formatMeters(effectiveSocleH, 2)}
                   </text>
@@ -1988,7 +2020,7 @@ export function FacadeSvg({
                       y1={yFromGroundM(floorOffsetsM[0])}
                       x2={dimX}
                       y2={yFloor1Top}
-                      stroke={STATUS_STROKE[ahStatus]}
+                      stroke={strokeFor(ahStatus)}
                       strokeWidth={1.2}
                     />
                     <text
@@ -1996,7 +2028,7 @@ export function FacadeSvg({
                       y={(yFromGroundM(floorOffsetsM[0]) + yFloor1Top) / 2 + 3}
                       fontSize="9"
                       fontFamily="IBM Plex Mono, monospace"
-                      fill={STATUS_STROKE[ahStatus]}
+                      fill={strokeFor(ahStatus)}
                     >
                       H={formatMeters(safeH, 2)}
                     </text>
@@ -2020,7 +2052,7 @@ export function FacadeSvg({
         </div>
 
         {/* Floating Explanatory Popover for Hovered Violation Element (fixed viewport-clamped so never clipped) */}
-        {hoveredViolation && activeViolationItems.length > 0 && (
+        {!hideValidation && hoveredViolation && activeViolationItems.length > 0 && (
           <div
             role="dialog"
             aria-label={`Нарушение правила: ${ELEMENT_LABELS_RU[hoveredViolation.element]}`}
@@ -2063,29 +2095,40 @@ export function FacadeSvg({
                     </div>
                     <p className="text-[11px] leading-snug text-[#57534E]">{item.explanation}</p>
 
-                    <button
-                      type="button"
-                      onClick={() => openBookFromSvg(excerpt.pageNumber, excerpt)}
-                      className="w-full text-left p-2 border border-[#B91C1C]/35 border-l-3 border-l-[#B91C1C] bg-[#FEF2F2]/85 hover:bg-[#FEE2E2]/80 transition-colors space-y-1 group cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-[#B91C1C]">
-                        <span>Нарушенное правило ({item.page})</span>
-                        <span className="inline-flex items-center gap-1 underline underline-offset-2 group-hover:text-[#7F1D1D]">
-                          <BookOpen className="w-3 h-3" />
-                          <span>В читальный зал →</span>
-                        </span>
-                      </div>
-                      <p className="text-[11px] leading-snug text-[#1C1917]">
-                        <mark className="bg-[#FDE68A]/85 text-[#1C1917] px-1 py-0.5 rounded-[2px] font-medium">
-                          {excerpt.ruleSummaryHighlight}
-                        </mark>
-                      </p>
-                      {excerpt.bookQuoteRu && (
-                        <p className="text-[10.5px] italic text-[#44403C] line-clamp-2">
-                          «{excerpt.bookQuoteRu}»
+                    {onOpenBookPage ? (
+                      <button
+                        type="button"
+                        onClick={() => openBookFromSvg(excerpt.pageNumber, excerpt)}
+                        className="w-full text-left p-2 border border-[#B91C1C]/35 border-l-3 border-l-[#B91C1C] bg-[#FEF2F2]/85 hover:bg-[#FEE2E2]/80 transition-colors space-y-1 group cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-[#B91C1C]">
+                          <span>Нарушенное правило ({item.page})</span>
+                          <span className="inline-flex items-center gap-1 underline underline-offset-2 group-hover:text-[#7F1D1D]">
+                            <BookOpen className="w-3 h-3" />
+                            <span>В читальный зал →</span>
+                          </span>
+                        </div>
+                        <p className="text-[11px] leading-snug text-[#1C1917]">
+                          <mark className="bg-[#FDE68A]/85 text-[#1C1917] px-1 py-0.5 rounded-[2px] font-medium">
+                            {excerpt.ruleSummaryHighlight}
+                          </mark>
                         </p>
-                      )}
-                    </button>
+                        {excerpt.bookQuoteRu && (
+                          <p className="text-[10.5px] italic text-[#44403C] line-clamp-2">
+                            «{excerpt.bookQuoteRu}»
+                          </p>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="p-2 border border-[#B91C1C]/35 border-l-3 border-l-[#B91C1C] bg-[#FEF2F2]/85 space-y-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#B91C1C]">
+                          Нарушенное правило ({item.page})
+                        </div>
+                        <p className="text-[11px] leading-snug text-[#1C1917]">
+                          {excerpt.ruleSummaryHighlight}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2095,7 +2138,7 @@ export function FacadeSvg({
       </div>
 
       {/* Compact Interactive Violation Strip below SVG when violations exist */}
-      {allViolationElements.length > 0 && (
+      {!hideValidation && allViolationElements.length > 0 && (
         <div className="px-4 py-2.5 border-t border-[#B91C1C]/25 bg-[#FEF2F2]/65 flex flex-wrap items-center gap-2 text-[11px] shrink-0">
           <span className="font-mono uppercase tracking-wider text-[#B91C1C] font-semibold">
             Нарушения на схеме (наведите на элемент):
@@ -2108,8 +2151,18 @@ export function FacadeSvg({
                 key={element}
                 type="button"
                 onMouseEnter={() => onSelectElement?.(element)}
-                onClick={() => openBookFromSvg(excerpt.pageNumber, excerpt)}
-                title={`${first.title} — открыть в «Читальном зале» (${first.page})`}
+                onClick={() => {
+                  if (onOpenBookPage) {
+                    openBookFromSvg(excerpt.pageNumber, excerpt);
+                  } else {
+                    onSelectElement?.(element);
+                  }
+                }}
+                title={
+                  onOpenBookPage
+                    ? `${first.title} — открыть в «Читальном зале» (${first.page})`
+                    : `${first.title} — показать элемент`
+                }
                 className="inline-flex items-center gap-1 px-2 py-0.5 border border-[#B91C1C]/45 bg-[#FBF9F5] text-[#B91C1C] hover:bg-[#B91C1C] hover:text-[#FBF9F5] transition-colors font-mono text-[10.5px]"
               >
                 <span>✕ {label.split(' (')[0]}</span>
