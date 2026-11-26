@@ -307,6 +307,17 @@ export function computeNextFacadeParams(
       next.beltIsAbsent = !resizedBelts.some(Boolean);
     }
   }
+  if (next.beltSillFloors && next.beltSillFloors.length !== boundaryCount) {
+    const resizedSillBelts = Array.from({ length: boundaryCount }, (_, idx) =>
+      idx < next.beltSillFloors!.length
+        ? Boolean(next.beltSillFloors![idx]) && Boolean(next.beltFloors ? next.beltFloors[idx] : !next.beltIsAbsent)
+        : false
+    );
+    next.beltSillFloors = resizedSillBelts;
+    if (patch.beltIsSillCornice === undefined && patch.beltSillFloors === undefined) {
+      next.beltIsSillCornice = resizedSillBelts.some(Boolean);
+    }
+  }
 
   // Синхронизируем поэтажные высоты подоконников окон
   if (next.windowSillHeights && next.windowSillHeights.length !== next.levels.floors.length) {

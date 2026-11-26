@@ -35,13 +35,16 @@ import {
   gurtModeFromSchemeNumber,
   h_from_w_ratio,
   hasAnyActiveBelt,
+  hasAnySillBelt,
   isPilasterEnabledOnFloor,
   kD_from_cornerPier,
   projection_45,
   projection_console,
   resolveBeltFloorsMask,
+  resolveBeltSillFloorsMask,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolvePilasterElevationSpans,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
   resolveWindowSillHeightM,
@@ -1140,7 +1143,15 @@ export function CalculatorModules({
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => onUpdateParams({ threeStoryGurtMode: m.id })}
+                        onClick={() =>
+                          onUpdateParams({
+                            threeStoryGurtMode: m.id,
+                            beltIsAbsent: false,
+                            beltFloors: m.id === 'unified_upper' ? [true, false] : [true, true],
+                            beltSillFloors: m.id === 'third_sohlbank' ? [false, true] : [false, false],
+                            beltIsSillCornice: m.id === 'third_sohlbank',
+                          })
+                        }
                         className={`px-2.5 py-1 text-[11px] border ${
                           params.threeStoryGurtMode === m.id
                             ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
@@ -3513,6 +3524,7 @@ export function CalculatorModules({
         {activeModule === 'pilaster' && (() => {
           const floorCount = Math.max(1, params.levels.floors.length);
           const bounds = resolveSocleAndPilasterBounds(params, summary.derivedGeometry);
+          const pilasterSpans = resolvePilasterElevationSpans(params, summary.derivedGeometry);
           const scaledGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
           const activePlacement: PilasterPlacement = params.pilasterPlacement ?? 'edges';
 
@@ -3748,9 +3760,20 @@ export function CalculatorModules({
                           ? `${formatMeters(bounds.pilasterBottomM, 2)} м … ${formatMeters(bounds.pilasterTopM, 2)} м`
                           : 'скрыты (цоколь или все этажи отключены)'}
                       </div>
+                      {pilasterSpans.length > 0 && (
+                        <div className="font-mono text-[10px] text-[#57534E]">
+                          Участки по высоте:{' '}
+                          {pilasterSpans
+                            .map(
+                              (sp) =>
+                                `${formatMeters(sp.bottomM, 2)}–${formatMeters(sp.topM, 2)} м (H=${formatMeters(sp.topM - sp.bottomM, 2)} м)`
+                            )
+                            .join(' · ')}
+                        </div>
+                      )}
                       <p className="text-[11px] text-[#57534E]">
                         Правило привязки: низ пилястр (с базой или без базы) не может быть ниже верха цоколя (
-                        {formatMeters(bounds.socleTopM, 2)} м).
+                        {formatMeters(bounds.socleTopM, 2)} м), а при наличии межэтажной ленты высота пилястра подрезается сверху и/или снизу, чтобы не пересекать ленту.
                       </p>
                     </div>
                   </>
@@ -4738,6 +4761,8 @@ export function CalculatorModules({
                 const floorCount = Math.max(1, params.levels.floors.length);
                 const boundaryCount = Math.max(0, floorCount - 1);
                 const currentMask = resolveBeltFloorsMask(params, floorCount);
+                const sillMask = resolveBeltSillFloorsMask(params, floorCount);
+                const anySillActive = hasAnySillBelt(params, floorCount);
 
                 if (boundaryCount === 0 || params.buildingVariant === 'one-story') {
                   return (
@@ -4747,8 +4772,30 @@ export function CalculatorModules({
                   );
                 }
 
+                const activeBeltIndices = currentMask
+                  .map((on, idx) => (on ? idx : -1))
+                  .filter((idx) => idx >= 0);
+
+                const toggleSingleBeltSillMode = (flIdx: number) => {
+                  const isSillHere = Boolean(sillMask[flIdx]);
+                  const nextSillMask = sillMask.map((v, idx) =>
+                    idx === flIdx ? !isSillHere : v
+                  );
+                  const anySillNext = nextSillMask.some(Boolean);
+                  onUpdateParams({
+                    beltSillFloors: nextSillMask,
+                    beltIsSillCornice: anySillNext,
+                    ...(anySillNext ? { hSillCornice: params.hGurt } : {}),
+                    ...(flIdx === 1 &&
+                    isSillHere &&
+                    params.threeStoryGurtMode === 'third_sohlbank'
+                      ? { threeStoryGurtMode: 'both_gurt' as ThreeStoryGurtMode }
+                      : {}),
+                  });
+                };
+
                 return (
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-[11px] text-[#57534E]">
                         Выберите этажи, над которыми проходит межэтажный карниз (лента):
@@ -4756,12 +4803,19 @@ export function CalculatorModules({
                       <div className="flex items-center gap-3 font-mono text-[11px]">
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
+                            const nextBeltMask = Array.from({ length: boundaryCount }, () => true);
+                            const nextSillMask = Array.from(
+                              { length: boundaryCount },
+                              (_, idx) => Boolean(sillMask[idx])
+                            );
                             onUpdateParams({
-                              beltFloors: Array.from({ length: boundaryCount }, () => true),
+                              beltFloors: nextBeltMask,
+                              beltSillFloors: nextSillMask,
+                              beltIsSillCornice: nextSillMask.some(Boolean),
                               beltIsAbsent: false,
-                            })
-                          }
+                            });
+                          }}
                           className="text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
                         >
                           Включить все
@@ -4771,6 +4825,8 @@ export function CalculatorModules({
                           onClick={() =>
                             onUpdateParams({
                               beltFloors: Array.from({ length: boundaryCount }, () => false),
+                              beltSillFloors: Array.from({ length: boundaryCount }, () => false),
+                              beltIsSillCornice: false,
                               beltIsAbsent: true,
                               beltAsRusticationMode: false,
                             })
@@ -4785,18 +4841,19 @@ export function CalculatorModules({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                       {Array.from({ length: boundaryCount }, (_, flIdx) => {
                         const enabled = Boolean(currentMask[flIdx]);
+                        const isSillHere = Boolean(sillMask[flIdx]);
                         const lockKey = `beltFloors.${flIdx}`;
                         const locked = isParamLocked(lockedParams, lockKey);
                         return (
-                          <label
+                          <div
                             key={`belt-fl-${flIdx}`}
-                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs border cursor-pointer transition-colors ${
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs border transition-colors ${
                               enabled
                                 ? 'border-[#1C1917]/40 bg-[#F3EFE6]/80 text-[#1C1917]'
                                 : 'border-[#E5DFD3] bg-[#FBF9F5] text-[#78716C]'
                             }`}
                           >
-                            <span className="flex items-center gap-2">
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
                               <input
                                 type="checkbox"
                                 disabled={locked}
@@ -4805,26 +4862,39 @@ export function CalculatorModules({
                                   const nextMask = currentMask.map((v, idx) =>
                                     idx === flIdx ? !enabled : v
                                   );
+                                  const nextSillMask = sillMask.map((v, idx) =>
+                                    idx === flIdx ? (!enabled ? v : false) : v
+                                  );
                                   const anyOn = nextMask.some(Boolean);
+                                  const anySillOn = nextSillMask.some(Boolean);
                                   onUpdateParams({
                                     beltFloors: nextMask,
+                                    beltSillFloors: nextSillMask,
+                                    beltIsSillCornice: anySillOn,
                                     beltIsAbsent: !anyOn,
                                     beltAsRusticationMode: anyOn ? params.beltAsRusticationMode : false,
                                   });
                                 }}
                                 className="accent-[#9A3412]"
                               />
-                              <span>
-                                Над {flIdx + 1}-м этажом ({flIdx + 1}→{flIdx + 2} эт.)
+                              <span className="truncate">
+                                Над {flIdx + 1}-м эт. ({flIdx + 1}→{flIdx + 2})
                               </span>
-                            </span>
-                            <LockToggleButton
-                              lockKey={lockKey}
-                              locked={locked}
-                              onToggleLock={onToggleLock}
-                              label={`Лента над ${flIdx + 1}-м эт.`}
-                            />
-                          </label>
+                            </label>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {enabled && isSillHere && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-mono bg-[#9A3412]/15 text-[#9A3412] border border-[#9A3412]/30">
+                                  подоконный
+                                </span>
+                              )}
+                              <LockToggleButton
+                                lockKey={lockKey}
+                                locked={locked}
+                                onToggleLock={onToggleLock}
+                                label={`Лента над ${flIdx + 1}-м эт.`}
+                              />
+                            </div>
+                          </div>
                         );
                       })}
 
@@ -4832,6 +4902,103 @@ export function CalculatorModules({
                         <span>Над {floorCount}-м эт. (верхний)</span>
                         <span className="font-mono text-[10px]">венчающий карниз</span>
                       </div>
+                    </div>
+
+                    {/* Независимое превращение каждой созданной ленты в подоконный карниз */}
+                    <div className="p-2.5 border border-[#D6CEBE] bg-[#F3EFE6]/55 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono uppercase tracking-wider text-[#57534E]">
+                          Превращение лент в подоконный карниз (независимо по этажам)
+                        </span>
+                        {activeBeltIndices.length > 1 && (
+                          <div className="flex items-center gap-3 font-mono text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextSillMask = currentMask.map(Boolean);
+                                onUpdateParams({
+                                  beltSillFloors: nextSillMask,
+                                  beltIsSillCornice: true,
+                                  hSillCornice: params.hGurt,
+                                });
+                              }}
+                              className="text-[#9A3412] underline underline-offset-4 hover:text-[#7C2D12]"
+                            >
+                              Превратить все
+                            </button>
+                            {anySillActive && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onUpdateParams({
+                                    beltSillFloors: Array.from({ length: boundaryCount }, () => false),
+                                    beltIsSillCornice: false,
+                                    ...(params.threeStoryGurtMode === 'third_sohlbank'
+                                      ? { threeStoryGurtMode: 'both_gurt' as ThreeStoryGurtMode }
+                                      : {}),
+                                  })
+                                }
+                                className="text-[#57534E] underline underline-offset-4 hover:text-[#1C1917]"
+                              >
+                                Вернуть все
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {activeBeltIndices.length === 0 ? (
+                        <p className="text-[11px] text-[#78716C]">
+                          Включите хотя бы одну ленту выше — для каждой созданной ленты станет доступна отдельная кнопка «Превратить ленту в подоконный карниз».
+                        </p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {activeBeltIndices.map((flIdx) => {
+                            const isSillHere = Boolean(sillMask[flIdx]);
+                            return (
+                              <div
+                                key={`belt-sill-ctrl-${flIdx}`}
+                                className={`flex flex-wrap items-center justify-between gap-2 p-2 border transition-colors ${
+                                  isSillHere
+                                    ? 'border-[#9A3412]/50 bg-[#FBF9F5]'
+                                    : 'border-[#D6CEBE] bg-[#FBF9F5]/80'
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-xs font-medium text-[#1C1917]">
+                                    Лента над {flIdx + 1}-м этажом ({flIdx + 1}→{flIdx + 2} эт.)
+                                  </div>
+                                  <div className="text-[11px] text-[#57534E]">
+                                    {isSillHere
+                                      ? `Подоконный карниз ${flIdx + 2}-го этажа · привязан к низу окна · низ обрамления = 0`
+                                      : 'Поясная лента на уровне межэтажного перекрытия'}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  aria-pressed={isSillHere}
+                                  onClick={() => toggleSingleBeltSillMode(flIdx)}
+                                  className={`px-2.5 py-1 text-xs font-medium border transition-colors shrink-0 ${
+                                    isSillHere
+                                      ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412] hover:bg-[#7C2D12]'
+                                      : 'bg-[#FBF9F5] text-[#1C1917] border-[#1C1917]/40 hover:bg-[#EAE3D5]'
+                                  }`}
+                                >
+                                  {isSillHere
+                                    ? 'Подоконный карниз активен — вернуть ленту'
+                                    : 'Превратить ленту в подоконный карниз'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <p className="text-[11px] text-[#57534E] leading-relaxed">
+                        Каждая включённая лента настраивается отдельно: при активации она поднимается до низа оконного проёма следующего этажа и следует за его отметкой, а нижняя часть обрамления окна на этом этаже исчезает (= 0).
+                        {!isExamBlind &&
+                          ' Высота: 1/12–1/6 высоты этажа, обязательно меньше главного карниза и цоколя (S. 16).'}
+                      </p>
                     </div>
                   </div>
                 );
@@ -4931,19 +5098,25 @@ export function CalculatorModules({
                       const effectiveLowerH = params.useFloorToFloorForBelt
                         ? summary.derivedGeometry.floor1FloorToFloor
                         : summary.derivedGeometry.H_max;
-                      const mid = beltHeight({
-                        hLowerFloor: effectiveLowerH,
-                        hUpperFloor: params.beltUpperFloorHeight,
-                        H_socle: effectiveSocleH,
-                        H_mainCornice: params.hMain,
-                        mode: params.beltMode,
-                        type: params.beltType,
-                        upperToLower: params.beltCrowningRatio,
-                        hasColumnsBelow: params.beltHasColumnsBelow,
-                        hasRustication: params.beltAsRusticationMode,
-                      });
+                      const sillActive = hasAnySillBelt(params);
+                      const mid = beltHeight(
+                        {
+                          hLowerFloor: effectiveLowerH,
+                          hUpperFloor: params.beltUpperFloorHeight,
+                          H_socle: effectiveSocleH,
+                          H_mainCornice: params.hMain,
+                          mode: params.beltMode,
+                          type: params.beltType,
+                          upperToLower: params.beltCrowningRatio,
+                          hasColumnsBelow: params.beltHasColumnsBelow,
+                          hasRustication: params.beltAsRusticationMode,
+                        },
+                        undefined,
+                        { isSillCornice: sillActive }
+                      );
                       onUpdateParams({
                         hGurt: mid.h,
+                        ...(sillActive ? { hSillCornice: mid.h } : {}),
                         beltIsAbsent: false,
                         beltFloors:
                           hasAnyActiveBelt(params)
@@ -4962,13 +5135,18 @@ export function CalculatorModules({
                 id="calc-belt-height"
                 label="Высота ленты H_ленты (Gurtgesims)"
                 value={params.hGurt}
-                min={0.12}
+                min={0.10}
                 max={1.2}
                 disabled={!hasAnyActiveBelt(params) || params.buildingVariant === 'one-story'}
                 lockKey="hGurt"
                 locked={isParamLocked(lockedParams, 'hGurt')}
                 onToggleLock={onToggleLock}
-                onChange={(hGurt) => onUpdateParams({ hGurt })}
+                onChange={(hGurt) =>
+                  onUpdateParams({
+                    hGurt,
+                    ...(hasAnySillBelt(params) ? { hSillCornice: hGurt } : {}),
+                  })
+                }
               />
 
               <WhyBlock
@@ -5212,9 +5390,13 @@ export function CalculatorModules({
                       onUpdateParams({
                         beltIsAbsent: absent,
                         beltFloors: Array.from({ length: boundaryCount }, () => !absent),
-                        beltAsRusticationMode: absent
-                          ? false
-                          : params.beltAsRusticationMode,
+                        ...(absent
+                          ? {
+                              beltSillFloors: Array.from({ length: boundaryCount }, () => false),
+                              beltIsSillCornice: false,
+                              beltAsRusticationMode: false,
+                            }
+                          : {}),
                       });
                     }}
                     className="accent-[#9A3412]"
@@ -5225,8 +5407,32 @@ export function CalculatorModules({
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={params.beltIsSillCornice}
-                    onChange={(e) => onUpdateParams({ beltIsSillCornice: e.target.checked })}
+                    checked={hasAnySillBelt(params)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      const boundaryCount = Math.max(0, params.levels.floors.length - 1);
+                      if (checked) {
+                        const currentMask = resolveBeltFloorsMask(params);
+                        const nextBeltMask = currentMask.some(Boolean)
+                          ? currentMask
+                          : Array.from({ length: boundaryCount }, (_, idx) => idx === 0);
+                        onUpdateParams({
+                          beltIsAbsent: false,
+                          beltFloors: nextBeltMask,
+                          beltSillFloors: nextBeltMask.map(Boolean),
+                          beltIsSillCornice: true,
+                          hSillCornice: params.hGurt,
+                        });
+                      } else {
+                        onUpdateParams({
+                          beltSillFloors: Array.from({ length: boundaryCount }, () => false),
+                          beltIsSillCornice: false,
+                          ...(params.threeStoryGurtMode === 'third_sohlbank'
+                            ? { threeStoryGurtMode: 'both_gurt' as ThreeStoryGurtMode }
+                            : {}),
+                        });
+                      }
+                    }}
                     className="accent-[#9A3412]"
                   />
                   <span>
@@ -5236,18 +5442,18 @@ export function CalculatorModules({
                   </span>
                 </label>
 
-                {params.beltIsSillCornice && (
+                {hasAnySillBelt(params) && (
                   <div className="pl-5 pt-1">
                     <MeterControl
                       id="calc-belt-sill-h"
                       label="Высота сплошного подоконного пояса h_подокон (N3 > u)"
-                      value={params.hSillCornice}
+                      value={params.hGurt}
                       min={0.1}
-                      max={0.6}
+                      max={0.8}
                       lockKey="hSillCornice"
                       locked={isParamLocked(lockedParams, 'hSillCornice')}
                       onToggleLock={onToggleLock}
-                      onChange={(hSillCornice) => onUpdateParams({ hSillCornice })}
+                      onChange={(val) => onUpdateParams({ hSillCornice: val, hGurt: val })}
                     />
                   </div>
                 )}
@@ -5304,6 +5510,8 @@ export function CalculatorModules({
                               threeStoryGurtMode: gurtModeFromSchemeNumber(num),
                               beltIsAbsent: false,
                               beltFloors: num === 3 ? [true, false] : [true, true],
+                              beltSillFloors: num === 2 ? [false, true] : [false, false],
+                              beltIsSillCornice: num === 2,
                             })
                           }
                           className={`px-2.5 py-1.5 text-left text-[11px] border transition-colors ${
@@ -5348,7 +5556,7 @@ export function CalculatorModules({
                 />
               )}
 
-              {params.beltIsSillCornice && (
+              {hasAnySillBelt(params) && (
                 <WhyBlock
                   ruleId="n3_sill_cornice_over_u"
                   status={summary.sillCorniceCheck.status}

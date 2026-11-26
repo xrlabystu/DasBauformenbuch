@@ -26,15 +26,17 @@ import {
   formatMeters,
   hasAnyActiveBelt,
   isBeltEnabledAboveFloor,
+  isFloorWindowSillBeltActive,
   projection_45,
   projection_console,
+  resolveBeltVerticalBandM,
   resolveEntranceGeometry,
+  resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
-  resolveWindowSillHeightM,
   type FacadeParameters,
   type FacadeSummary,
 } from './rules';
@@ -360,31 +362,33 @@ export function buildFacadeCadDocument(
         return;
       }
 
-      const isThirdSohlbank =
-        params.buildingVariant === 'multi-story' &&
-        params.multiSub === 'three' &&
-        isUpperBelt &&
-        params.threeStoryGurtMode === 'third_sohlbank';
-      const isSillMode = params.beltIsSillCornice || isThirdSohlbank;
-      const sillShiftM = isSillMode ? Math.min(0.45, upperFloorH * 0.16) : 0;
-      const yBeltMm = (floorStartM + sillShiftM) * MM;
+      const beltBand = resolveBeltVerticalBandM(params, verticalGeo, idx) ?? {
+        boundaryIdx: idx,
+        floorStartM,
+        centerM: floorStartM,
+        bottomM: floorStartM - Math.max(0.08, params.hGurt) / 2,
+        topM: floorStartM + Math.max(0.08, params.hGurt) / 2,
+        thicknessM: Math.max(0.08, params.hGurt),
+        isSillMode: false,
+      };
+      const yBeltMm = beltBand.centerM * MM;
 
       if (params.beltAsRusticationMode) {
-        addLine(doc, layerBelts, 0, yBeltMm + 60, totalWidthM * MM, yBeltMm + 60);
-        addLine(doc, layerBelts, 0, yBeltMm + 140, totalWidthM * MM, yBeltMm + 140);
+        addLine(doc, layerBelts, 0, yBeltMm + 50, totalWidthM * MM, yBeltMm + 50);
+        addLine(doc, layerBelts, 0, yBeltMm + 120, totalWidthM * MM, yBeltMm + 120);
         if (params.beltRusticationHasBaseProfile) {
-          addRect(doc, layerBelts, -35, yBeltMm - 70, totalWidthM * MM + 70, 70);
+          addRect(doc, layerBelts, -35, beltBand.bottomM * MM, totalWidthM * MM + 70, (beltBand.centerM - beltBand.bottomM) * MM);
         }
         return;
       }
 
-      const beltThicknessMm = isSillMode ? 120 : Math.max(80, params.hGurt * MM);
+      const beltThicknessMm = beltBand.thicknessM * MM;
       const overhangMm = params.beltMode === 'crowning' ? 110 : 75;
       addRect(
         doc,
         layerBelts,
         -overhangMm,
-        yBeltMm - beltThicknessMm / 2,
+        beltBand.bottomM * MM,
         totalWidthM * MM + overhangMm * 2,
         beltThicknessMm
       );
@@ -512,32 +516,21 @@ export function buildFacadeCadDocument(
     const cxMm = axisM * MM;
     addLine(doc, layerAxes, cxMm, -300, cxMm, corniceTopM * MM + 350);
 
-    floorOffsetsM.forEach((floorStartM, flIdx) => {
+    floorOffsetsM.forEach((_floorStartM, flIdx) => {
       const isDoorReplacedWindow =
         entranceGeo.hasDoor && flIdx === 0 && axIdx === entranceGeo.doorAxisIndex;
       if (isDoorReplacedWindow) {
         return;
       }
-      const flH = floorHeightsM[flIdx];
-      const clearH =
-        levelFloors[flIdx]?.clearHeight ??
-        Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
-      const scaledClearH = clearH * verticalGeo.verticalScale;
-      const isTopSmallest =
-        safeFloors >= 3 &&
-        flIdx === safeFloors - 1 &&
-        summary.variantInfo.rules.upperFloorSmallest;
-      const winHThisFloor = isTopSmallest
-        ? Math.min(safeWinH * 0.78, scaledClearH * 0.64)
-        : Math.min(safeWinH, scaledClearH * 0.72);
-      const sillM = resolveWindowSillHeightM(
+      const winGeo = resolveFloorWindowGeometryM(
         params,
+        verticalGeo,
         flIdx,
-        scaledClearH,
-        winHThisFloor,
-        verticalGeo.verticalScale
+        summary.variantInfo.rules.upperFloorSmallest
       );
-      const winBotM = floorStartM + sillM;
+      const winHThisFloor = winGeo.windowHeightM;
+      const winBotM = winGeo.windowBottomM;
+      const floorHasSillBelt = isFloorWindowSillBeltActive(params, flIdx, safeFloors);
 
       const winXMm = (axisM - safeW / 2) * MM;
       const winYMm = winBotM * MM;
@@ -555,14 +548,15 @@ export function buildFacadeCadDocument(
         : K * MM * 0.55;
 
       if (showRichFraming) {
-        // Наличник + архитрав
+        const bottomExtMm = floorHasSillBelt ? 0 : uMm * 0.5;
+        // Наличник + архитрав (при подоконном карнизе нижняя часть обрамления = 0)
         addRect(
           doc,
           layerOpenings,
           winXMm - uMm,
-          winYMm - uMm * 0.5,
+          winYMm - bottomExtMm,
           winWMm + 2 * uMm,
-          winHMm + uMm * 0.5 + rMm
+          winHMm + bottomExtMm + rMm
         );
         // Фриз (если F > 0; при F = 0 карниз ложится прямо на архитрав R)
         const effectiveFMm = fMm > 0.5 ? Math.max(40, fMm) : 0;
@@ -612,13 +606,14 @@ export function buildFacadeCadDocument(
           );
         }
       } else if (params.withFraming && uMm > 0) {
+        const bottomOtherMm = floorHasSillBelt ? 0 : uMm * 0.45;
         addRect(
           doc,
           layerOpenings,
           winXMm - uMm * 0.65,
-          winYMm - uMm * 0.45,
+          winYMm - bottomOtherMm,
           winWMm + uMm * 1.3,
-          winHMm + uMm * 1.1
+          winHMm + bottomOtherMm + uMm * 0.65
         );
       }
 

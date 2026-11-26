@@ -25,15 +25,18 @@ import {
   formatMeters,
   hasAnyActiveBelt,
   isBeltEnabledAboveFloor,
+  isFloorWindowSillBeltActive,
   mergeStatuses,
   resolveBeltFloorsMask,
+  resolveBeltSillFloorsMask,
+  resolveBeltVerticalBandM,
   resolveEntranceGeometry,
+  resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
-  resolveWindowSillHeightM,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
@@ -1043,8 +1046,12 @@ export function FacadeSvg({
           {safeFloors >= 2 &&
             (() => {
               const beltMask = resolveBeltFloorsMask(params, safeFloors);
+              const beltSillMask = resolveBeltSillFloorsMask(params, safeFloors);
               const anyBeltsOn = hasAnyActiveBelt(params, safeFloors);
-              const firstActiveBoundaryIdx = beltMask.findIndex(Boolean);
+              const firstNormalBoundaryIdx = beltMask.findIndex(
+                (on, boundaryIdx) => on && !beltSillMask[boundaryIdx]
+              );
+              const firstSillBoundaryIdx = beltSillMask.findIndex(Boolean);
               return floorOffsetsM.slice(1).map((floorStartM, idx) => {
                 const upperFloorNum = idx + 2; // 2nd, 3rd...
                 const upperFloorH = floorHeightsM[idx + 1] ?? floorHeightsM[0] ?? safeH;
@@ -1107,19 +1114,23 @@ export function FacadeSvg({
                   );
                 }
 
-              const isThirdSohlbank =
-                params.buildingVariant === 'multi-story' &&
-                params.multiSub === 'three' &&
-                isUpperBelt &&
-                params.threeStoryGurtMode === 'third_sohlbank';
-
-              const isSillMode = params.beltIsSillCornice || isThirdSohlbank;
-              const sillShiftM = isSillMode ? Math.min(0.45, upperFloorH * 0.16) : 0;
-              const yBelt = yFromGroundM(floorStartM + sillShiftM);
-
-              const beltThicknessPx = isSillMode
-                ? 4.5
-                : Math.min(11, Math.max(4, params.hGurt * scale));
+              const beltBand = resolveBeltVerticalBandM(params, verticalGeo, idx) ?? {
+                boundaryIdx: idx,
+                floorStartM,
+                centerM: floorStartM,
+                bottomM: floorStartM - Math.max(0.08, params.hGurt) / 2,
+                topM: floorStartM + Math.max(0.08, params.hGurt) / 2,
+                thicknessM: Math.max(0.08, params.hGurt),
+                isSillMode: false,
+              };
+              const isSillMode = beltBand.isSillMode;
+              const yBelt = yFromGroundM(beltBand.centerM);
+              const beltTopY = yFromGroundM(beltBand.topM);
+              const beltBotY = yFromGroundM(beltBand.bottomM);
+              const rawBeltThicknessPx = Math.max(0, beltBotY - beltTopY);
+              const beltThicknessPx = Math.max(2.5, rawBeltThicknessPx);
+              const beltRectY =
+                rawBeltThicknessPx >= 2.5 ? beltTopY : yBelt - beltThicknessPx / 2;
 
               const beltStroke =
                 isHi('belt') || showNonOk(beltStatus)
@@ -1134,6 +1145,9 @@ export function FacadeSvg({
 
               // Замена ленты рустовкой (Fugenteilung + Fußprofil)
               if (params.beltAsRusticationMode) {
+                const rustHeightPx = Math.max(4, beltBotY - beltTopY);
+                const baseTopY = yFromGroundM(beltBand.centerM);
+                const baseHeightPx = Math.max(2, beltBotY - baseTopY);
                 return (
                   <g
                     key={`gurt-rust-${upperFloorNum}`}
@@ -1143,9 +1157,9 @@ export function FacadeSvg({
                   >
                     <rect
                       x={xM(0)}
-                      y={yBelt - 10}
+                      y={beltTopY}
                       width={facadePxW}
-                      height={14}
+                      height={rustHeightPx}
                       fill={
                         isHi('belt') || showViol(beltStatus)
                           ? fillFor(beltStatus)
@@ -1156,18 +1170,18 @@ export function FacadeSvg({
                     />
                     <line
                       x1={xM(0)}
-                      y1={yBelt - 6}
+                      y1={yFromGroundM(beltBand.centerM + 0.12)}
                       x2={xM(0) + facadePxW}
-                      y2={yBelt - 6}
+                      y2={yFromGroundM(beltBand.centerM + 0.12)}
                       stroke="#78716C"
                       strokeWidth={0.75}
                       strokeDasharray="6 3"
                     />
                     <line
                       x1={xM(0)}
-                      y1={yBelt - 2}
+                      y1={yFromGroundM(beltBand.centerM + 0.05)}
                       x2={xM(0) + facadePxW}
-                      y2={yBelt - 2}
+                      y2={yFromGroundM(beltBand.centerM + 0.05)}
                       stroke="#78716C"
                       strokeWidth={0.75}
                       strokeDasharray="6 3"
@@ -1175,9 +1189,9 @@ export function FacadeSvg({
                     {params.beltRusticationHasBaseProfile && (
                       <rect
                         x={xM(0) - 3}
-                        y={yBelt + 2}
+                        y={baseTopY}
                         width={facadePxW + 6}
-                        height={3.5}
+                        height={baseHeightPx}
                         fill="#D6CEBE"
                         stroke={beltStroke}
                         strokeWidth={0.9}
@@ -1208,7 +1222,7 @@ export function FacadeSvg({
                 >
                   <rect
                     x={xM(0) - (params.beltMode === 'crowning' ? 7 : 5)}
-                    y={yBelt - beltThicknessPx / 2}
+                    y={beltRectY}
                     width={facadePxW + (params.beltMode === 'crowning' ? 14 : 10)}
                     height={beltThicknessPx}
                     fill={beltFill}
@@ -1216,11 +1230,12 @@ export function FacadeSvg({
                     strokeWidth={isHi('belt') || showViol(beltStatus) ? 1.5 : 1}
                     strokeDasharray={isSillMode ? '4 2' : undefined}
                   />
-                  {idx === firstActiveBoundaryIdx && (
+                  {((!isSillMode && idx === firstNormalBoundaryIdx) ||
+                    (isSillMode && idx === firstSillBoundaryIdx)) && (
                     <g>
                       <rect
                         x={xM(0) + facadePxW - 142}
-                        y={yBelt - beltThicknessPx / 2 - 12}
+                        y={beltRectY - 12}
                         width={138}
                         height={11}
                         fill="#FBF9F5"
@@ -1228,7 +1243,7 @@ export function FacadeSvg({
                       />
                       <text
                         x={xM(0) + facadePxW - 6}
-                        y={yBelt - beltThicknessPx / 2 - 4}
+                        y={beltRectY - 4}
                         textAnchor="end"
                         fontSize="8.5"
                         fontFamily="IBM Plex Mono, monospace"
@@ -1439,32 +1454,21 @@ export function FacadeSvg({
                     {...violationHoverProps('axenweite')}
                   />
                 )}
-                {floorOffsetsM.map((floorStartM, flIdx) => {
+                {floorOffsetsM.map((_floorStartM, flIdx) => {
                   const isDoorReplacedWindow =
                     entranceGeo.hasDoor && flIdx === 0 && axIdx === entranceGeo.doorAxisIndex;
                   if (isDoorReplacedWindow) {
                     return null;
                   }
-                  const flH = floorHeightsM[flIdx];
-                  const clearH =
-                    levelFloors[flIdx]?.clearHeight ??
-                    Math.max(2.0, flH - (levelFloors[flIdx]?.slabThickness ?? 0.35));
-                  const scaledClearH = clearH * verticalGeo.verticalScale;
-                  const isTopSmallest =
-                    safeFloors >= 3 &&
-                    flIdx === safeFloors - 1 &&
-                    summary.variantInfo.rules.upperFloorSmallest;
-                  const winHThisFloor = isTopSmallest
-                    ? Math.min(safeWinH * 0.78, scaledClearH * 0.64)
-                    : Math.min(safeWinH, scaledClearH * 0.72);
-                  const sillM = resolveWindowSillHeightM(
+                  const winGeo = resolveFloorWindowGeometryM(
                     params,
+                    verticalGeo,
                     flIdx,
-                    scaledClearH,
-                    winHThisFloor,
-                    verticalGeo.verticalScale
+                    summary.variantInfo.rules.upperFloorSmallest
                   );
-                  const winTopThisM = floorStartM + sillM + winHThisFloor;
+                  const winHThisFloor = winGeo.windowHeightM;
+                  const winTopThisM = winGeo.windowTopM;
+                  const floorHasSillBelt = isFloorWindowSillBeltActive(params, flIdx, safeFloors);
 
                   const winX = xM(axisM - safeW / 2);
                   const winY = yFromGroundM(winTopThisM);
@@ -1493,7 +1497,7 @@ export function FacadeSvg({
                             x={winX - uPx}
                             y={winY - rPx}
                             width={winWpx + 2 * uPx}
-                            height={winHpx + rPx + uPx * 0.5}
+                            height={winHpx + rPx + (floorHasSillBelt ? 0 : uPx * 0.5)}
                             fill={
                               isHi('entablature') || showViol(entablatureStatus)
                                 ? fillFor(entablatureStatus)
@@ -1581,7 +1585,7 @@ export function FacadeSvg({
                           x={winX - uPx * 0.65}
                           y={winY - uPx * 0.65}
                           width={winWpx + uPx * 1.3}
-                          height={winHpx + uPx * 1.1}
+                          height={winHpx + uPx * (floorHasSillBelt ? 0.65 : 1.1)}
                           fill="#EAE3D3"
                           stroke="#57534E"
                           strokeWidth={0.8}

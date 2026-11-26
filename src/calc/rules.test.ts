@@ -77,7 +77,10 @@ import {
   getVariantPreset,
   h_from_w_ratio,
   hasAnyActiveBelt,
+  hasAnySillBelt,
   isBeltEnabledAboveFloor,
+  isBeltSillModeAboveFloor,
+  isFloorWindowSillBeltActive,
   isKnownGoodRatio,
   kD_from_cornerPier,
   mergeStatuses,
@@ -91,8 +94,10 @@ import {
   projection_console,
   ratio_from_AH,
   resolveBeltFloorsMask,
+  resolveBeltVerticalBandM,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
@@ -1905,7 +1910,303 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(badResult.passed, false);
     assert.equal(badResult.overallStatus, 'violation');
   });
+
+  it('48. Высота пилястр уменьшается сверху/снизу при наличии межэтажных лент (пилястра не пересекает ленты)', () => {
+    const base = createDefaultParamsForTypology('urban_house'); // 3 этажа
+    const allFloorsPilasters = {
+      ...base,
+      hSocle: 1.5,
+      useFullFloorAsSocle: false,
+      hGurt: 0.4,
+      beltAsRusticationMode: false,
+      beltIsSillCornice: false,
+      pilasterFloors: [true, true, true],
+      beltIsAbsent: true,
+      beltFloors: [false, false],
+    };
+
+    const sumNoBelts = evaluateFacadeSummary(allFloorsPilasters, { expertMode: true });
+    const vg = resolveScaledVerticalGeometry(allFloorsPilasters, sumNoBelts.derivedGeometry);
+    const spansNoBelts = resolvePilasterElevationSpans(allFloorsPilasters, sumNoBelts.derivedGeometry);
+    // Без лент все 3 этажа объединяются в один сплошной пилястр от верха цоколя до wallTopM
+    assert.equal(spansNoBelts.length, 1);
+    assertClose(spansNoBelts[0].bottomM, 1.5);
+    assertClose(spansNoBelts[0].topM, vg.wallTopM);
+
+    // 1. Включаем ленты над 1-м и 2-м этажами -> пилястры режутся на 3 непересекающихся участка
+    const withBothBelts = {
+      ...allFloorsPilasters,
+      beltIsAbsent: false,
+      beltFloors: [true, true],
+    };
+    const sumBothBelts = evaluateFacadeSummary(withBothBelts, { expertMode: true });
+    const spansBoth = resolvePilasterElevationSpans(withBothBelts, sumBothBelts.derivedGeometry);
+    const band0 = resolveBeltVerticalBandM(withBothBelts, vg, 0)!;
+    const band1 = resolveBeltVerticalBandM(withBothBelts, vg, 1)!;
+
+    assert.equal(spansBoth.length, 3);
+    // 1-й этаж: только лента над ним -> уменьшение сверху до band0.bottomM
+    assertClose(spansBoth[0].bottomM, 1.5);
+    assertClose(spansBoth[0].topM, band0.bottomM);
+    assert.ok(spansBoth[0].topM < vg.floorOffsetsM[1]);
+
+    // 2-й этаж: лента под ним и лента над ним -> уменьшение и снизу (band0.topM), и сверху (band1.bottomM)
+    assertClose(spansBoth[1].bottomM, band0.topM);
+    assertClose(spansBoth[1].topM, band1.bottomM);
+    assert.ok(spansBoth[1].bottomM > vg.floorOffsetsM[1]);
+    assert.ok(spansBoth[1].topM < vg.floorOffsetsM[2]);
+    assertClose(spansBoth[1].topM - spansBoth[1].bottomM, vg.floorHeightsM[1] - withBothBelts.hGurt);
+
+    // 3-й этаж: лента под ним -> уменьшение снизу до band1.topM
+    assertClose(spansBoth[2].bottomM, band1.topM);
+    assertClose(spansBoth[2].topM, vg.wallTopM);
+    assert.ok(spansBoth[2].bottomM > vg.floorOffsetsM[2]);
+
+    // 2. DWG-проверка: ни один прямоугольник пилястр не пересекает диапазоны лент
+    const cadBoth = buildFacadeCadDocument(withBothBelts, sumBothBelts);
+    const pilEnts = Array.from(cadBoth.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '06_PILASTERS'
+    );
+    assert.ok(pilEnts.length >= 6);
+    for (const ent of pilEnts) {
+      const verts = (ent as { vertices?: Array<{ location: { y: number } }> }).vertices;
+      if (!verts || verts.length === 0) continue;
+      const ysM = verts.map((v) => v.location.y / 1000);
+      const minY = Math.min(...ysM);
+      const maxY = Math.max(...ysM);
+      for (const band of [band0, band1]) {
+        const overlapsBand = maxY > band.bottomM + 1e-4 && minY < band.topM - 1e-4;
+        assert.equal(
+          overlapsBand,
+          false,
+          `Pilaster [${minY.toFixed(3)}, ${maxY.toFixed(3)}] must not intersect belt [${band.bottomM.toFixed(3)}, ${band.topM.toFixed(3)}]`
+        );
+      }
+    }
+
+    // 3. Лента только над 1-м этажом ([true, false]): 1-й этаж подрезан сверху, 2-й и 3-й объединены и подрезаны снизу
+    const onlyLowerBelt = {
+      ...allFloorsPilasters,
+      beltIsAbsent: false,
+      beltFloors: [true, false],
+    };
+    const sumOnlyLower = evaluateFacadeSummary(onlyLowerBelt, { expertMode: true });
+    const spansOnlyLower = resolvePilasterElevationSpans(onlyLowerBelt, sumOnlyLower.derivedGeometry);
+    assert.equal(spansOnlyLower.length, 2);
+    assertClose(spansOnlyLower[0].topM, band0.bottomM);
+    assertClose(spansOnlyLower[1].bottomM, band0.topM);
+    assertClose(spansOnlyLower[1].topM, vg.wallTopM);
+  });
+
+  it('49. Превращение ленты в подоконный карниз: 1/12..1/6, < гл. карниза и цоколя, привязка к низу окна и обнуление низа обрамления', () => {
+    const base = createDefaultParamsForTypology('urban_house'); // 3 этажа
+    const sillBase = {
+      ...base,
+      withFraming: true,
+      useFullFloorAsSocle: false,
+      hSocle: 1.4,
+      hMain: 0.72,
+      hGurt: 0.36, // внутри [3.6/12=0.30, 3.6/6=0.60] и < min(0.72, 1.4)
+      useFloorToFloorForBelt: true,
+      beltAsRusticationMode: false,
+      beltIsAbsent: false,
+      beltFloors: [true, false],
+      beltSillFloors: [true, false],
+      beltIsSillCornice: true,
+      hSillCornice: 0.36,
+      pilasterFloors: [true, true, true],
+    };
+
+    assert.equal(hasAnySillBelt(sillBase), true);
+    assert.equal(isBeltSillModeAboveFloor(sillBase, 0), true);
+    assert.equal(isBeltSillModeAboveFloor(sillBase, 1), false);
+    assert.equal(isFloorWindowSillBeltActive(sillBase, 0), false);
+    assert.equal(isFloorWindowSillBeltActive(sillBase, 1), true);
+    assert.equal(isFloorWindowSillBeltActive(sillBase, 2), false);
+
+    // 1. Нормативная валидация: диапазон 1/12..1/6 и обязательно < hMain, < hSocle
+    const okSummary = evaluateFacadeSummary(sillBase, { expertMode: true });
+    assert.equal(okSummary.beltHeightCheck.status, 'ok');
+
+    const tooTallForCornice = {
+      ...sillBase,
+      hMain: 0.35, // hGurt = 0.36 >= hMain (0.35), даже будучи в 1/12..1/6!
+    };
+    assert.equal(
+      evaluateFacadeSummary(tooTallForCornice, { expertMode: true }).beltHeightCheck.status,
+      'violation'
+    );
+
+    const tooTallForSocle = {
+      ...sillBase,
+      hSocle: 0.34, // hGurt = 0.36 >= hSocle (0.34)
+    };
+    assert.equal(
+      evaluateFacadeSummary(tooTallForSocle, { expertMode: true }).beltHeightCheck.status,
+      'violation'
+    );
+
+    const outOfRangeSixth = {
+      ...sillBase,
+      hMain: 1.1,
+      hSocle: 1.5,
+      hGurt: Number((okSummary.beltHeightCheck.range[1] + 0.05).toFixed(3)),
+    };
+    assert.equal(
+      evaluateFacadeSummary(outOfRangeSixth, { expertMode: true }).beltHeightCheck.status,
+      'violation'
+    );
+
+    // 2. Геометрия: лента поднята до низа окна 2-го этажа и двигается при изменении отметки низа окна
+    const vg = resolveScaledVerticalGeometry(sillBase, okSummary.derivedGeometry);
+    const winGeo1 = resolveFloorWindowGeometryM(sillBase, vg, 1);
+    const band0 = resolveBeltVerticalBandM(sillBase, vg, 0)!;
+    assert.equal(band0.isSillMode, true);
+    assertClose(band0.topM, winGeo1.windowBottomM);
+    assertClose(band0.bottomM, winGeo1.windowBottomM - 0.36);
+    assert.ok(band0.topM > vg.floorOffsetsM[1] + 0.15);
+
+    const movedSillParams = {
+      ...sillBase,
+      windowSillHeights: [undefined, 0.95],
+    };
+    const movedSummary = evaluateFacadeSummary(movedSillParams, { expertMode: true });
+    const vgMoved = resolveScaledVerticalGeometry(movedSillParams, movedSummary.derivedGeometry);
+    const winGeoMoved = resolveFloorWindowGeometryM(movedSillParams, vgMoved, 1);
+    const bandMoved = resolveBeltVerticalBandM(movedSillParams, vgMoved, 0)!;
+    assertClose(winGeoMoved.sillM, 0.95);
+    assertClose(bandMoved.topM, winGeoMoved.windowBottomM);
+    assertClose(bandMoved.bottomM, winGeoMoved.windowBottomM - 0.36);
+    assert.ok(bandMoved.topM > band0.topM);
+
+    // Пилястры подрезаются ровно по смещённому подоконному карнизу без пересечения
+    const spansMoved = resolvePilasterElevationSpans(movedSillParams, movedSummary.derivedGeometry);
+    assert.equal(spansMoved.length, 2);
+    assert.ok(spansMoved[0].topM <= bandMoved.bottomM + 1e-4);
+    assertClose(spansMoved[0].topM, Math.min(vgMoved.floorOffsetsM[1], bandMoved.bottomM));
+    assertClose(spansMoved[1].bottomM, bandMoved.topM);
+
+    // 3. DWG-проверка: на 2-м этаже нижняя часть обрамления = 0 (равна winBottomM), а на 1-м/3-м с обычной границей выступает вниз
+    const cad = buildFacadeCadDocument(movedSillParams, movedSummary);
+    const beltEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '04_BELTS'
+    );
+    const beltRects = beltEnts
+      .map((ent) => (ent as { vertices?: Array<{ location: { y: number } }> }).vertices)
+      .filter((v): v is Array<{ location: { y: number } }> => Boolean(v && v.length >= 4));
+    assert.equal(beltRects.length, 1);
+    const beltMaxYM = Math.max(...beltRects[0].map((v) => v.location.y / 1000));
+    const beltMinYM = Math.min(...beltRects[0].map((v) => v.location.y / 1000));
+    assertClose(beltMaxYM, winGeoMoved.windowBottomM);
+    assertClose(beltMinYM, winGeoMoved.windowBottomM - 0.36);
+
+    // На 2-м этаже (flIdx=1) все прямоугольники обрамления окна должны иметь minY >= winGeoMoved.windowBottomM (нижняя часть обрамления = 0)
+    const openEnts = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '05_WINDOWS_DOORS'
+    );
+    const floor2WindowTopMax = winGeoMoved.windowTopM + movedSummary.framingResult.T + 0.1;
+    const floor2OpenRects = openEnts
+      .map((ent) => (ent as { vertices?: Array<{ location: { y: number } }> }).vertices)
+      .filter((v): v is Array<{ location: { y: number } }> => Boolean(v && v.length >= 4))
+      .map((verts) => {
+        const ys = verts.map((v) => v.location.y / 1000);
+        return { minY: Math.min(...ys), maxY: Math.max(...ys) };
+      })
+      .filter((r) => r.minY >= vgMoved.floorOffsetsM[1] && r.maxY <= floor2WindowTopMax);
+    assert.ok(floor2OpenRects.length >= 2);
+    for (const r of floor2OpenRects) {
+      assert.ok(
+        r.minY >= winGeoMoved.windowBottomM - 1e-4,
+        `Floor 2 framing minY (${r.minY.toFixed(4)}) must not go below window bottom (${winGeoMoved.windowBottomM.toFixed(4)}) when sill belt is active`
+      );
+    }
+
+    // Без подоконного карниза на 2-м этаже (обычная лента) обрамление выступает ниже низа окна на 0.5 * u
+    const normalBeltParams = {
+      ...movedSillParams,
+      beltSillFloors: [false, false],
+      beltIsSillCornice: false,
+    };
+    const normalSummary = evaluateFacadeSummary(normalBeltParams, { expertMode: true });
+    const cadNormal = buildFacadeCadDocument(normalBeltParams, normalSummary);
+    const normalFloor2MinYs = Array.from(cadNormal.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '05_WINDOWS_DOORS')
+      .map((ent) => (ent as { vertices?: Array<{ location: { y: number } }> }).vertices)
+      .filter((v): v is Array<{ location: { y: number } }> => Boolean(v && v.length >= 4))
+      .map((verts) => {
+        const ys = verts.map((v) => v.location.y / 1000);
+        return { minY: Math.min(...ys), maxY: Math.max(...ys) };
+      })
+      .filter((r) => r.minY >= vgMoved.floorOffsetsM[1] && r.maxY <= floor2WindowTopMax)
+      .map((r) => r.minY);
+    assert.ok(normalFloor2MinYs.some((y) => Math.abs(y - (winGeoMoved.windowBottomM - normalBeltParams.u * 0.5)) < 1e-3));
+
+    // 4. Независимая активация для любой из нескольких созданных лент:
+    // Включаем обе ленты ([true, true]), но превращаем в подоконный карниз ТОЛЬКО верхнюю ленту ([false, true]), даже при legacy-флаге third_sohlbank
+    const onlySecondBeltSill = {
+      ...movedSillParams,
+      threeStoryGurtMode: 'both_gurt' as const,
+      beltFloors: [true, true],
+      beltSillFloors: [false, true],
+      beltIsSillCornice: true,
+    };
+    assert.equal(isBeltSillModeAboveFloor(onlySecondBeltSill, 0), false);
+    assert.equal(isBeltSillModeAboveFloor(onlySecondBeltSill, 1), true);
+    assert.equal(isFloorWindowSillBeltActive(onlySecondBeltSill, 1), false);
+    assert.equal(isFloorWindowSillBeltActive(onlySecondBeltSill, 2), true);
+
+    const mixedSummary = evaluateFacadeSummary(onlySecondBeltSill, { expertMode: true });
+    const vgMixed = resolveScaledVerticalGeometry(onlySecondBeltSill, mixedSummary.derivedGeometry);
+    const mixedBand0 = resolveBeltVerticalBandM(onlySecondBeltSill, vgMixed, 0)!;
+    const mixedBand1 = resolveBeltVerticalBandM(onlySecondBeltSill, vgMixed, 1)!;
+    const winGeoFloor3 = resolveFloorWindowGeometryM(onlySecondBeltSill, vgMixed, 2);
+
+    // Нижняя лента остаётся на отметке перекрытия 1→2 этажа
+    assert.equal(mixedBand0.isSillMode, false);
+    assertClose(mixedBand0.centerM, vgMixed.floorOffsetsM[1]);
+    // Верхняя лента поднимается к низу окон 3-го этажа
+    assert.equal(mixedBand1.isSillMode, true);
+    assertClose(mixedBand1.topM, winGeoFloor3.windowBottomM);
+    assertClose(mixedBand1.bottomM, winGeoFloor3.windowBottomM - 0.36);
+
+    // Проверка DWG: на 2-м этаже обрамление выступает ниже окна, а на 3-м этаже низ обрамления = 0
+    const cadMixed = buildFacadeCadDocument(onlySecondBeltSill, mixedSummary);
+    const mixedOpenRects = Array.from(cadMixed.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '05_WINDOWS_DOORS')
+      .map((ent) => (ent as { vertices?: Array<{ location: { y: number } }> }).vertices)
+      .filter((v): v is Array<{ location: { y: number } }> => Boolean(v && v.length >= 4))
+      .map((verts) => {
+        const ys = verts.map((v) => v.location.y / 1000);
+        return { minY: Math.min(...ys), maxY: Math.max(...ys) };
+      });
+    const f2Rects = mixedOpenRects.filter(
+      (r) => r.minY >= vgMixed.floorOffsetsM[1] && r.maxY <= winGeoMoved.windowTopM + mixedSummary.framingResult.T + 0.1
+    );
+    const f3Rects = mixedOpenRects.filter(
+      (r) => r.minY >= vgMixed.floorOffsetsM[2] && r.maxY <= winGeoFloor3.windowTopM + onlySecondBeltSill.u + 0.1
+    );
+    assert.ok(f2Rects.some((r) => Math.abs(r.minY - (winGeoMoved.windowBottomM - onlySecondBeltSill.u * 0.5)) < 1e-3));
+    assert.ok(f3Rects.length >= 2);
+    for (const r of f3Rects) {
+      assert.ok(
+        r.minY >= winGeoFloor3.windowBottomM - 1e-4,
+        `Floor 3 framing minY (${r.minY.toFixed(4)}) must not go below window bottom (${winGeoFloor3.windowBottomM.toFixed(4)})`
+      );
+    }
+
+    // Проверка приоритета beltSillFloors над legacy-полем threeStoryGurtMode = 'third_sohlbank'
+    const overrideLegacy = {
+      ...onlySecondBeltSill,
+      threeStoryGurtMode: 'third_sohlbank' as const,
+      beltSillFloors: [true, false],
+    };
+    assert.equal(isBeltSillModeAboveFloor(overrideLegacy, 0), true);
+    assert.equal(isBeltSillModeAboveFloor(overrideLegacy, 1), false);
+    assert.equal(resolveBeltVerticalBandM(overrideLegacy, vgMixed, 0)!.isSillMode, true);
+    assert.equal(resolveBeltVerticalBandM(overrideLegacy, vgMixed, 1)!.isSillMode, false);
+  });
 });
+
 
 
 

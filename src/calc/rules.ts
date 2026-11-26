@@ -1333,7 +1333,7 @@ export function checkBeltHeight(
   floorHeight: number,
   hSocle: number,
   hMain: number,
-  options: { allowModestLowerFloor?: boolean } = {}
+  options: { allowModestLowerFloor?: boolean; isSillCornice?: boolean } = {}
 ): {
   h: number;
   range: [number, number];
@@ -1346,7 +1346,10 @@ export function checkBeltHeight(
   formula: string;
   page: string;
 } {
-  const { allowModestLowerFloor = false } = options;
+  const { allowModestLowerFloor = false, isSillCornice = false } = options;
+  const kindLabel = isSillCornice
+    ? 'подоконный карниз (превращённый из поясного)'
+    : 'поясной карниз (лента)';
   const range: [number, number] = [floorHeight / 12, floorHeight / 6];
   const inRange = hGurt >= range[0] - EPS && hGurt <= range[1] + EPS;
   const belowMain = hGurt < hMain - EPS;
@@ -1367,20 +1370,20 @@ export function checkBeltHeight(
   } else if (!belowSocle || !belowMain) {
     status = 'violation';
     explanation = !belowSocle
-      ? `Нарушение (S. 16): поясной карниз (лента) ${formatMeters(hGurt)} м ≥ высоты цоколя ${formatMeters(hSocle)} м.`
-      : `Нарушение (S. 16): поясной карниз (лента) ${formatMeters(hGurt)} м ≥ главного карниза ${formatMeters(hMain)} м.`;
+      ? `Нарушение (S. 16): ${kindLabel} ${formatMeters(hGurt)} м ≥ высоты цоколя ${formatMeters(hSocle)} м (должен выглядеть меньше цоколя).`
+      : `Нарушение (S. 16): ${kindLabel} ${formatMeters(hGurt)} м ≥ главного карниза ${formatMeters(hMain)} м (должен выглядеть меньше главного карниза).`;
   } else if (hGurt > range[1] + EPS) {
     status = 'violation';
-    explanation = `Высота ленты h = ${formatMeters(hGurt)} м превышает h_нижн/6 (${formatMeters(range[1])} м, S. 16).`;
+    explanation = `Нарушение (S. 16): высота ${isSillCornice ? 'подоконного карниза' : 'ленты'} h = ${formatMeters(hGurt)} м превышает 1/6 высоты этажа (${formatMeters(range[1])} м).`;
   } else if (hGurt < range[0] - EPS) {
     // A3: На S. 16 меньшие высоты чем H_floor/12 оправданы при скромном 1-м этаже ("je nach Umständen berechtigt"), поэтому никогда не дают violation
     status = allowModestLowerFloor ? 'ok' : 'approx';
     explanation = allowModestLowerFloor
-      ? `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м) — оправдано при скромном и простом решении 1-го этажа (S. 16).`
-      : `Высота ленты h = ${formatMeters(hGurt)} м меньше h_нижн/12 (${formatMeters(range[0])} м) — по S. 16 допустимо при скромном первом этаже (approx).`;
+      ? `Высота ${isSillCornice ? 'подоконного карниза' : 'ленты'} h = ${formatMeters(hGurt)} м меньше 1/12 высоты этажа (${formatMeters(range[0])} м) — оправдано при скромном и простом решении 1-го этажа (S. 16).`
+      : `Высота ${isSillCornice ? 'подоконного карниза' : 'ленты'} h = ${formatMeters(hGurt)} м меньше 1/12 высоты этажа (${formatMeters(range[0])} м) — по S. 16 допустимо при скромном первом этаже (approx).`;
   } else {
     status = 'ok';
-    explanation = `Поясной карниз (лента) h = ${formatMeters(hGurt)} м входит в диапазон 1/12…1/6 высоты этажа ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м) и подчинён главному карнизу и цоколю (S. 16).`;
+    explanation = `${isSillCornice ? 'Подоконный карниз (из поясного)' : 'Поясной карниз (лента)'} h = ${formatMeters(hGurt)} м входит в диапазон 1/12…1/6 высоты этажа ([${formatMeters(range[0])}, ${formatMeters(range[1])}] м) и подчинён главному карнизу и цоколю (S. 16).`;
   }
 
   return {
@@ -2686,6 +2689,67 @@ export function hasAnyActiveBelt(
 }
 
 /**
+ * Возвращает булеву маску превращения активной межэтажной ленты в подоконный карниз (Sohlbankgesimse):
+ * индекс i соответствует границе над (i+1)-м этажом (под окнами (i+2)-го этажа).
+ */
+export function resolveBeltSillFloorsMask(
+  params: FacadeParameters,
+  totalFloors = params.levels.floors.length
+): boolean[] {
+  const activeMask = resolveBeltFloorsMask(params, totalFloors);
+  return activeMask.map((beltOn, idx) => {
+    if (!beltOn) return false;
+    if (params.beltSillFloors !== undefined) {
+      return Boolean(params.beltSillFloors[idx]);
+    }
+    const upperFloorNum = idx + 2;
+    if (
+      params.buildingVariant === 'multi-story' &&
+      params.multiSub === 'three' &&
+      upperFloorNum === 3 &&
+      params.threeStoryGurtMode === 'third_sohlbank'
+    ) {
+      return true;
+    }
+    return Boolean(params.beltIsSillCornice);
+  });
+}
+
+export function isBeltSillModeAboveFloor(
+  params: FacadeParameters,
+  lowerFloorIdx: number,
+  totalFloors = params.levels.floors.length
+): boolean {
+  if (lowerFloorIdx < 0 || lowerFloorIdx >= totalFloors - 1) {
+    return false;
+  }
+  const mask = resolveBeltSillFloorsMask(params, totalFloors);
+  return Boolean(mask[lowerFloorIdx]);
+}
+
+export function hasAnySillBelt(
+  params: FacadeParameters,
+  totalFloors = params.levels.floors.length
+): boolean {
+  return resolveBeltSillFloorsMask(params, totalFloors).some(Boolean);
+}
+
+/**
+ * Проверяет, превращена ли лента под данным этажом floorIndex в подоконный карниз
+ * (тогда нижняя часть обрамления на этом этаже исчезает (= 0), а лента поднимается до низа окна).
+ */
+export function isFloorWindowSillBeltActive(
+  params: FacadeParameters,
+  floorIndex: number,
+  totalFloors = params.levels.floors.length
+): boolean {
+  if (floorIndex <= 0 || floorIndex >= totalFloors) {
+    return false;
+  }
+  return isBeltSillModeAboveFloor(params, floorIndex - 1, totalFloors);
+}
+
+/**
  * Возвращает высоту низа окна (подоконника) относительно уровня пола этажа (в метрах).
  * Если пользователь задал отметку в windowSillHeights[floorIndex], используется она (с клампингом в габарите этажа),
  * иначе — стандартное автоматическое центрирование (clearH - winH) * 0.36.
@@ -2707,11 +2771,149 @@ export function resolveWindowSillHeightM(
   return Math.min(Math.max(0, scaledCustom), maxSill);
 }
 
+export interface FloorWindowGeometryM {
+  floorIndex: number;
+  floorStartM: number;
+  sillM: number;
+  windowBottomM: number;
+  windowHeightM: number;
+  windowTopM: number;
+}
+
+/**
+ * Единая вертикальная геометрия окна этажа floorIndex (от уровня земли):
+ * используется в SVG, DWG и привязке подоконного карниза к низу оконного проёма.
+ */
+export function resolveFloorWindowGeometryM(
+  params: FacadeParameters,
+  vg: Pick<ScaledVerticalGeometry, 'floorOffsetsM' | 'floorHeightsM' | 'verticalScale'>,
+  floorIndex: number,
+  upperFloorSmallest?: boolean
+): FloorWindowGeometryM {
+  const safeFloors = vg.floorOffsetsM.length;
+  const floorStartM = vg.floorOffsetsM[floorIndex] ?? 0;
+  const flH = vg.floorHeightsM[floorIndex] ?? vg.floorHeightsM[0] ?? params.H;
+  const rawFloor = params.levels.floors[floorIndex];
+  const clearH =
+    rawFloor?.clearHeight ?? Math.max(2.0, flH - (rawFloor?.slabThickness ?? 0.35));
+  const scaledClearH = clearH * vg.verticalScale;
+  const resolvedUpperSmallest =
+    upperFloorSmallest ??
+    getVariantPreset(params.buildingVariant, params.multiSub).rules.upperFloorSmallest;
+  const isTopSmallest =
+    safeFloors >= 3 && floorIndex === safeFloors - 1 && resolvedUpperSmallest;
+  const safeWinH = Math.max(0.6, params.h);
+  const windowHeightM = isTopSmallest
+    ? Math.min(safeWinH * 0.78, scaledClearH * 0.64)
+    : Math.min(safeWinH, scaledClearH * 0.72);
+  const sillM = resolveWindowSillHeightM(
+    params,
+    floorIndex,
+    scaledClearH,
+    windowHeightM,
+    vg.verticalScale
+  );
+  const windowBottomM = floorStartM + sillM;
+  return {
+    floorIndex,
+    floorStartM,
+    sillM,
+    windowBottomM,
+    windowHeightM,
+    windowTopM: windowBottomM + windowHeightM,
+  };
+}
+
+export interface BeltVerticalBand {
+  boundaryIdx: number;
+  floorStartM: number;
+  centerM: number;
+  bottomM: number;
+  topM: number;
+  thicknessM: number;
+  isSillMode: boolean;
+}
+
+/**
+ * Единые вертикальные габариты межэтажной ленты (Gurtgesims) в метрах
+ * на границе между этажом boundaryIdx (снизу) и boundaryIdx + 1 (сверху).
+ * Если лента превращена в подоконный карниз, она поднимается до низа оконного проёма
+ * верхнего этажа (topM = windowBottomM) и имеет толщину hGurt.
+ */
+export function resolveBeltVerticalBandM(
+  params: FacadeParameters,
+  vg: Pick<ScaledVerticalGeometry, 'floorOffsetsM' | 'floorHeightsM' | 'verticalScale'>,
+  boundaryIdx: number
+): BeltVerticalBand | null {
+  const floorCount = vg.floorOffsetsM.length;
+  if (boundaryIdx < 0 || boundaryIdx >= floorCount - 1) {
+    return null;
+  }
+  const floorStartM = vg.floorOffsetsM[boundaryIdx + 1];
+  const upperFloorNum = boundaryIdx + 2;
+  const isUpperBelt = upperFloorNum === 3;
+  const isThirdSohlbank =
+    params.buildingVariant === 'multi-story' &&
+    params.multiSub === 'three' &&
+    isUpperBelt &&
+    params.threeStoryGurtMode === 'third_sohlbank';
+  const isSillMode =
+    params.beltSillFloors !== undefined
+      ? Boolean(params.beltSillFloors[boundaryIdx])
+      : isThirdSohlbank || Boolean(params.beltIsSillCornice);
+
+  if (params.beltAsRusticationMode) {
+    const winBottomM = isSillMode
+      ? resolveFloorWindowGeometryM(params, vg, boundaryIdx + 1).windowBottomM
+      : floorStartM;
+    const centerM = isSillMode ? winBottomM - 0.16 : floorStartM;
+    const bottomM = centerM - (params.beltRusticationHasBaseProfile ? 0.07 : 0.02);
+    const topM = isSillMode ? winBottomM : centerM + 0.16;
+    return {
+      boundaryIdx,
+      floorStartM,
+      centerM,
+      bottomM,
+      topM,
+      thicknessM: topM - bottomM,
+      isSillMode,
+    };
+  }
+
+  const thicknessM = Math.max(0.08, params.hGurt);
+  if (isSillMode) {
+    const winGeo = resolveFloorWindowGeometryM(params, vg, boundaryIdx + 1);
+    const topM = winGeo.windowBottomM;
+    const bottomM = topM - thicknessM;
+    return {
+      boundaryIdx,
+      floorStartM,
+      centerM: (topM + bottomM) / 2,
+      bottomM,
+      topM,
+      thicknessM,
+      isSillMode: true,
+    };
+  }
+
+  return {
+    boundaryIdx,
+    floorStartM,
+    centerM: floorStartM,
+    bottomM: floorStartM - thicknessM / 2,
+    topM: floorStartM + thicknessM / 2,
+    thicknessM,
+    isSillMode: false,
+  };
+}
+
 /**
  * Разрешает поэтажные вертикальные диапазоны пилястр / лопаток:
  * - учитывает включение/отключение на каждом этаже;
  * - низ любого фрагмента пилястра (с базой или без) строго >= верха цоколя;
- * - объединяет смежные активные этажи в непрерывный ордер.
+ * - при наличии активной ленты над этажом уменьшает пилястр сверху (до низа ленты);
+ * - при наличии активной ленты под этажом уменьшает пилястр снизу (от верха ленты);
+ * - объединяет смежные активные этажи без ленты между ними в непрерывный ордер.
  */
 export function resolvePilasterElevationSpans(
   params: FacadeParameters,
@@ -2730,8 +2932,25 @@ export function resolvePilasterElevationSpans(
   const rawSpans: PilasterElevationSpan[] = [];
   for (let i = 0; i < floorCount; i += 1) {
     if (!isPilasterEnabledOnFloor(params, i, floorCount)) continue;
-    const rawBot = i === 0 ? 0 : vg.floorOffsetsM[i];
-    const rawTop = vg.floorOffsetsM[i] + vg.floorHeightsM[i];
+    let rawBot = i === 0 ? 0 : vg.floorOffsetsM[i];
+    let rawTop = vg.floorOffsetsM[i] + vg.floorHeightsM[i];
+
+    // Лента под этажом i (между этажом i-1 и этажом i) -> уменьшаем пилястр снизу
+    if (i > 0 && isBeltEnabledAboveFloor(params, i - 1, floorCount)) {
+      const lowerBelt = resolveBeltVerticalBandM(params, vg, i - 1);
+      if (lowerBelt) {
+        rawBot = Math.max(rawBot, lowerBelt.topM);
+      }
+    }
+
+    // Лента над этажом i (между этажом i и этажом i+1) -> уменьшаем пилястр сверху
+    if (i < floorCount - 1 && isBeltEnabledAboveFloor(params, i, floorCount)) {
+      const upperBelt = resolveBeltVerticalBandM(params, vg, i);
+      if (upperBelt) {
+        rawTop = Math.min(rawTop, upperBelt.bottomM);
+      }
+    }
+
     const clampedBot = Math.max(rawBot, socleTopM);
     if (rawTop - clampedBot > 0.15) {
       rawSpans.push({
@@ -2980,7 +3199,7 @@ export interface BeltHeightResult {
 export function beltHeight(
   inp: BeltInput,
   customHeight?: number,
-  options: { allowModestLowerFloor?: boolean } = {}
+  options: { allowModestLowerFloor?: boolean; isSillCornice?: boolean } = {}
 ): BeltHeightResult {
   const min = inp.hLowerFloor / 12;
   const max = inp.hLowerFloor / 6;
@@ -4104,6 +4323,7 @@ export interface FacadeParameters {
   beltRusticationHasBaseProfile: boolean;
   beltIsAbsent: boolean;
   beltFloors?: boolean[];
+  beltSillFloors?: boolean[];
   beltIsSillCornice: boolean;
   beltOnlySillUnderSecond: boolean;
   beltAlignsWithRecesses: boolean;
@@ -4295,7 +4515,10 @@ export function evaluateFacadeSummary(
   const windowCheck = check_window(params.w, params.h, params.diagTolerance);
   const framingWidthCheck = checkFramingWidth(params.u, params.w);
   const sillPlateCheck = checkSillPlateHeight(params.hSill, params.w);
-  const sillCorniceCheck = checkSillCorniceHeight(params.hSillCornice, effectiveU);
+  const hasSillBelt = hasAnySillBelt(params, params.levels.floors.length);
+  const sillCorniceHeightForN3 =
+    hasSillBelt && params.beltSillFloors !== undefined ? params.hGurt : params.hSillCornice;
+  const sillCorniceCheck = checkSillCorniceHeight(sillCorniceHeightForN3, effectiveU);
   const windowRowsCheck = checkWindowRows(
     params.h,
     params.rustRowHeight,
@@ -4432,6 +4655,7 @@ export function evaluateFacadeSummary(
       }
     : beltHeight(beltInput, params.hGurt, {
         allowModestLowerFloor: params.allowModestFirstFloorForBelt,
+        isSillCornice: hasSillBelt,
       });
 
   // C5: Если для пояса выбрана высота в свету вместо пол-пол (S. 16: Geschosshöhe) -> approx + heuristic
@@ -4500,7 +4724,7 @@ export function evaluateFacadeSummary(
     floorHeight: effectiveBeltFloorH,
     totalHeight: effectiveTotalHeight,
     isAbsent: !hasBelts,
-    isSillCornice: params.beltIsSillCornice,
+    isSillCornice: hasSillBelt,
     onlySillUnderSecond: params.beltOnlySillUnderSecond,
     alignsWithRecesses: params.beltAlignsWithRecesses,
     hasRustication: params.beltAsRusticationMode,
@@ -4832,14 +5056,14 @@ export function evaluateFacadeSummary(
               : beltCrowningCheck.explanation,
       targetElement: 'belt',
     },
-    ...(params.beltIsSillCornice
+    ...(hasSillBelt
       ? [
           {
             id: 'n3_sill_cornice_over_u',
             title: 'N3: Высота сплошного подоконного пояса (> u)',
             page: sillCorniceCheck.page,
             formula: sillCorniceCheck.formula,
-            valueText: `h_подокон. = ${formatMeters(params.hSillCornice)} м vs u = ${formatMeters(effectiveU)} м`,
+            valueText: `h_подокон. = ${formatMeters(sillCorniceHeightForN3)} м vs u = ${formatMeters(effectiveU)} м`,
             status: sillCorniceCheck.status,
             sourceStatus: sillCorniceCheck.sourceStatus,
             priority: 'P1' as RulePriority,
@@ -5373,6 +5597,7 @@ export function applyBuildingVariantPreset(
         ? false
         : Boolean(prev.beltFloors?.[idx])
     ),
+    beltSillFloors: Array.from({ length: Math.max(0, floors - 1) }, () => false),
     pilasterFloors: nextPilasterFloors,
     beltIsSillCornice: false,
     beltOnlySillUnderSecond: false,
@@ -5435,6 +5660,14 @@ export function applyFloorCountPreset(
     floors === 1 || prev.beltIsAbsent ? false : Boolean(prev.beltFloors?.[idx])
   );
 
+  const nextBeltSillFloors = Array.from({ length: Math.max(0, floors - 1) }, (_, idx) =>
+    floors === 1 || !nextBeltFloors[idx]
+      ? false
+      : prev.beltSillFloors !== undefined
+        ? Boolean(prev.beltSillFloors[idx])
+        : Boolean(prev.beltIsSillCornice)
+  );
+
   return {
     buildingVariant: variant,
     multiSub,
@@ -5448,6 +5681,8 @@ export function applyFloorCountPreset(
     useFullFloorAsSocle: floors === 1 ? false : prev.useFullFloorAsSocle,
     beltIsAbsent: floors === 1 ? true : !nextBeltFloors.some(Boolean),
     beltFloors: nextBeltFloors,
+    beltSillFloors: nextBeltSillFloors,
+    beltIsSillCornice: nextBeltSillFloors.some(Boolean),
     pilasterFloors: nextPilasterFloors,
     beltUpperFloorHeight: levels.floors[1]?.floorToFloor ?? floor1F2F,
   };
@@ -5589,6 +5824,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     beltRusticationHasBaseProfile: true,
     beltIsAbsent: true,
     beltFloors: Array.from({ length: Math.max(0, floors - 1) }, () => false),
+    beltSillFloors: Array.from({ length: Math.max(0, floors - 1) }, () => false),
     beltIsSillCornice: false,
     beltOnlySillUnderSecond: false,
     beltAlignsWithRecesses: true,
