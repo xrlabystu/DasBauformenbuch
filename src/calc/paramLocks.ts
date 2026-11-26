@@ -4,6 +4,7 @@ import {
   computeDerivedGeometry,
   framing_from_T,
   framing_from_module,
+  resolveWindowAxisStepsM,
   syncLevelsWithH,
   type BuildingLevelsInput,
   type FacadeParameters,
@@ -53,6 +54,9 @@ export function filterUnlockedPatch(
     if (value === undefined) continue;
     if (key === 'levels' || key === 'socleParts') continue;
     if (key === 'u' && (locks['u'] || locks['R'])) {
+      continue;
+    }
+    if (key === 'ordinaryPierAxisSpacings' && locks['A']) {
       continue;
     }
     if (locks[key]) {
@@ -214,8 +218,44 @@ export function computeNextFacadeParams(
     }
   }
 
-  const D = next.isRisalitCentered ? next.risalitWidth / 2 : D_from_A(next.A, next.k_D);
-  const dg = computeDerivedGeometry(next.levels, next.A, D, next.axesCount, next.hMain);
+  if (
+    !isParamLocked(lockedParams, 'A') &&
+    'ordinaryPierAxisSpacings' in rawPatch &&
+    rawPatch.ordinaryPierAxisSpacings === undefined
+  ) {
+    next.ordinaryPierAxisSpacings = undefined;
+  }
+
+  if (
+    patch.axesCount !== undefined &&
+    patch.axesCount !== prev.axesCount &&
+    !('ordinaryPierAxisSpacings' in rawPatch) &&
+    next.ordinaryPierAxisSpacings &&
+    next.ordinaryPierAxisSpacings.length > 0
+  ) {
+    const nextGapCount = Math.max(0, Math.round(next.axesCount) - 2);
+    next.ordinaryPierAxisSpacings =
+      nextGapCount > 0
+        ? Array.from(
+            { length: nextGapCount },
+            (_, idx) => next.ordinaryPierAxisSpacings?.[idx] ?? next.A
+          )
+        : undefined;
+  }
+
+  const axisStepsM = next.axesCount >= 2 ? resolveWindowAxisStepsM(next) : [];
+  const effectiveAForD = axisStepsM[0] ?? next.A;
+  const D = next.isRisalitCentered
+    ? next.risalitWidth / 2
+    : D_from_A(effectiveAForD, next.k_D);
+  const dg = computeDerivedGeometry(
+    next.levels,
+    next.A,
+    D,
+    next.axesCount,
+    next.hMain,
+    axisStepsM
+  );
 
   if (!isHLocked && (patch.levels !== undefined || patch.floors !== undefined)) {
     next.H = dg.H_max;

@@ -33,10 +33,13 @@ import {
   resolveEntranceGeometry,
   resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
+  resolveOrdinaryPierAxesM,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowAxesM,
+  resolveWindowAxisStepsM,
   type FacadeParameters,
   type FacadeSummary,
 } from './rules';
@@ -278,14 +281,26 @@ export function buildFacadeCadDocument(
   const safeW = Math.max(0.4, params.w);
   const safeWinH = Math.max(0.6, params.h);
   const effectiveU = params.withFraming ? Math.max(0, params.u) : 0;
+  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
+  const axisStepsM = resolveWindowAxisStepsM(params);
+  const effectiveAForD = axisStepsM[0] ?? safeA;
   const D = params.isRisalitCentered
     ? Math.max(0.6, params.risalitWidth / 2)
-    : Math.max(0.5, safeA * params.k_D);
+    : Math.max(0.5, effectiveAForD * params.k_D);
 
-  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const levelFloors = params.levels.floors;
   const safeFloors = Math.min(10, Math.max(1, levelFloors.length));
-  const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
+  const axesM = resolveWindowAxesM(D, axisStepsM);
+  const hasVariedAxisSteps =
+    axisStepsM.length >= 2 &&
+    axisStepsM.some((step) => Math.abs(step - axisStepsM[0]) > 1e-4);
+  const ordinaryPierAxesM = params.showOrdinaryPierAxes
+    ? resolveOrdinaryPierAxesM(axesM)
+    : [];
+  const layerPierAxes =
+    ordinaryPierAxesM.length > 0
+      ? ensureLayer(doc, '07B_PIER_AXES', 4, axisLineType)
+      : null;
   const totalWidthM = summary.derivedGeometry.facadeWidth;
 
   const verticalGeo = resolveScaledVerticalGeometry(params, summary.derivedGeometry);
@@ -342,7 +357,7 @@ export function buildFacadeCadDocument(
     const yTop = floorOffsetsM[1] * MM;
     const colH = Math.max(200, yTop - yBot);
     for (let i = 0; i < axesM.length - 1; i++) {
-      const colCenterMm = (axesM[i] + safeA / 2) * MM;
+      const colCenterMm = ((axesM[i] + axesM[i + 1]) / 2) * MM;
       addRect(doc, layerPilasters, colCenterMm - 140, yBot + 120, 280, Math.max(200, colH - 240));
       addRect(doc, layerPilasters, colCenterMm - 190, yBot, 380, 120);
       addRect(doc, layerPilasters, colCenterMm - 190, yTop - 120, 380, 120);
@@ -764,15 +779,29 @@ export function buildFacadeCadDocument(
     `D = ${formatMeters(D, 2)} м`
   );
   if (axesM.length >= 2) {
-    addHorizontalDimension(
-      doc,
-      layerDims,
-      axesM[0] * MM,
-      axesM[1] * MM,
-      topDimY,
-      wallTopM * MM,
-      `A = ${formatMeters(safeA, 2)} м`
-    );
+    if (!hasVariedAxisSteps) {
+      addHorizontalDimension(
+        doc,
+        layerDims,
+        axesM[0] * MM,
+        axesM[1] * MM,
+        topDimY,
+        wallTopM * MM,
+        `A = ${formatMeters(safeA, 2)} м`
+      );
+    } else {
+      axisStepsM.forEach((stepM, idx) => {
+        addHorizontalDimension(
+          doc,
+          layerDims,
+          axesM[idx] * MM,
+          axesM[idx + 1] * MM,
+          topDimY,
+          wallTopM * MM,
+          `A${idx + 1} = ${formatMeters(stepM, 2)} м`
+        );
+      });
+    }
   }
   addHorizontalDimension(
     doc,
@@ -785,7 +814,7 @@ export function buildFacadeCadDocument(
   );
 
   // Нижние размеры: p_cor, w / w_v, p / p_c
-  const p_inter = safeA - safeW - 2 * effectiveU;
+  const p_inter = (axisStepsM[0] ?? safeA) - safeW - 2 * effectiveU;
   const w_v = safeW + 2 * effectiveU;
   const botDimY1 = -550;
   const botDimY2 = -1050;
@@ -811,17 +840,66 @@ export function buildFacadeCadDocument(
       : `w = ${formatMeters(safeW, 2)} м`
   );
   if (axesM.length >= 2) {
-    addHorizontalDimension(
-      doc,
-      layerDims,
-      (axesM[0] + safeW / 2 + effectiveU) * MM,
-      (axesM[1] - safeW / 2 - effectiveU) * MM,
-      botDimY1,
-      0,
-      params.withFraming
-        ? `p_c = ${formatMeters(p_inter, 2)} м`
-        : `p = ${formatMeters(p_inter, 2)} м`
-    );
+    if (!hasVariedAxisSteps) {
+      addHorizontalDimension(
+        doc,
+        layerDims,
+        (axesM[0] + safeW / 2 + effectiveU) * MM,
+        (axesM[1] - safeW / 2 - effectiveU) * MM,
+        botDimY1,
+        0,
+        params.withFraming
+          ? `p_c = ${formatMeters(p_inter, 2)} м`
+          : `p = ${formatMeters(p_inter, 2)} м`
+      );
+    } else {
+      axisStepsM.forEach((stepM, idx) => {
+        const pierW = Math.max(0, stepM - safeW - 2 * effectiveU);
+        addHorizontalDimension(
+          doc,
+          layerDims,
+          (axesM[idx] + safeW / 2 + effectiveU) * MM,
+          (axesM[idx + 1] - safeW / 2 - effectiveU) * MM,
+          botDimY1,
+          0,
+          params.withFraming
+            ? `p_c${idx + 1} = ${formatMeters(pierW, 2)} м`
+            : `p${idx + 1} = ${formatMeters(pierW, 2)} м`
+        );
+      });
+    }
+  }
+
+  // 9б. Оси рядовых простенков (строго ниже уровня земли y <= 0) и их размерная цепочка
+  if (ordinaryPierAxesM.length > 0 && layerPierAxes) {
+    const botDimY3 = -1550;
+    ordinaryPierAxesM.forEach((pierAxisM, pIdx) => {
+      const pxMm = pierAxisM * MM;
+      addLine(doc, layerPierAxes, pxMm, 0, pxMm, -1850);
+      addText(doc, layerPierAxes, `П${pIdx + 1}`, pxMm, -1980, 125, {
+        hAlign: TextHorizontalAlignment.Center,
+        vAlign: TextVerticalAlignmentType.Top,
+      });
+    });
+
+    const nodesM = [0, ...ordinaryPierAxesM, totalWidthM];
+    nodesM.slice(0, -1).forEach((fromM, segIdx) => {
+      const toM = nodesM[segIdx + 1];
+      const distM = toM - fromM;
+      const isInnerPierStep = segIdx > 0 && segIdx < nodesM.length - 2;
+      const label = isInnerPierStep
+        ? `A_п = ${formatMeters(distM, 2)} м`
+        : `${formatMeters(distM, 2)} м`;
+      addHorizontalDimension(
+        doc,
+        layerDims,
+        fromM * MM,
+        toM * MM,
+        botDimY3,
+        0,
+        label
+      );
+    });
   }
 
   // Правые высотные размеры: цоколь, этаж H, общая высота H_зд
@@ -858,7 +936,7 @@ export function buildFacadeCadDocument(
   );
 
   // 10. Подпись чертежа и сводка параметров снизу
-  const footerY = -1700;
+  const footerY = ordinaryPierAxesM.length > 0 ? -2450 : -1700;
   addText(
     doc,
     layerNotes,

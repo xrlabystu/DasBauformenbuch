@@ -209,7 +209,8 @@ export function computeDerivedGeometry(
   A: number,
   D: number,
   axesCount: number,
-  hMain: number
+  hMain: number,
+  axisStepsM?: number[]
 ): DerivedGeometry {
   const clearHeights = levels.floors.map((f) =>
     f.clearHeight !== undefined && Number.isFinite(f.clearHeight)
@@ -229,12 +230,17 @@ export function computeDerivedGeometry(
     ? levels.manualTotalHeight!
     : wallTopElevation + Math.max(0, hMain);
   const safeAxesCount = Math.max(1, Math.round(axesCount));
+  const stepsCount = Math.max(0, safeAxesCount - 1);
+  const totalAxesSpan =
+    axisStepsM && axisStepsM.length === stepsCount
+      ? axisStepsM.reduce((sum, step) => sum + step, 0)
+      : stepsCount * A;
   const facadeWidth =
     levels.facadeWidthOverride !== undefined &&
     Number.isFinite(levels.facadeWidthOverride) &&
     levels.facadeWidthOverride > 0
       ? levels.facadeWidthOverride
-      : 2 * D + Math.max(0, safeAxesCount - 1) * A;
+      : 2 * D + totalAxesSpan;
 
   return {
     clearHeights,
@@ -3010,6 +3016,121 @@ export function resolvePilasterXPositions(
   return result;
 }
 
+/**
+ * Координаты осей рядовых простенков (м от левого угла фасада):
+ * каждая вертикальная ось делит соответствующий рядовой простенок ровно пополам,
+ * располагаясь в середине между соседними оконными осями.
+ */
+export function resolveOrdinaryPierAxesM(axesM: number[]): number[] {
+  if (axesM.length < 2) return [];
+  const result: number[] = [];
+  for (let i = 0; i < axesM.length - 1; i += 1) {
+    result.push((axesM[i] + axesM[i + 1]) / 2);
+  }
+  return result;
+}
+
+/**
+ * Отступ от угла фасада до ближайшей оси рядового простенка (м): D + A / 2.
+ */
+export function resolveOrdinaryPierAxisEdgeOffsetM(D: number, A: number): number {
+  return D + A / 2;
+}
+
+/**
+ * Шаги между соседними оконными осями (м) с учётом заданных расстояний между осями рядовых простенков.
+ * Если ordinaryPierAxisSpacings не задан — все шаги равны A.
+ * Если заданы расстояния S_i = П_{i+1} - П_i, шаги A_k решаются так, чтобы (A_i + A_{i+1}) / 2 = S_i,
+ * а каждый простенок оставался не меньше минимальной ширины проёма.
+ */
+export function resolveWindowAxisStepsM(
+  params: Pick<
+    FacadeParameters,
+    'axesCount' | 'A' | 'w' | 'u' | 'withFraming' | 'ordinaryPierAxisSpacings'
+  >
+): number[] {
+  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
+  const stepsCount = safeAxesCount - 1;
+  const baseA = Math.max(1.0, params.A);
+  if (
+    !params.ordinaryPierAxisSpacings ||
+    params.ordinaryPierAxisSpacings.length === 0 ||
+    stepsCount < 2
+  ) {
+    return Array.from({ length: stepsCount }, () => baseA);
+  }
+
+  const effU = params.withFraming ? Math.max(0, params.u) : 0;
+  const minStep = Math.max(0.4, params.w) + 2 * effU + 0.05;
+  const maxStep = 12.0;
+  const spacings = Array.from({ length: stepsCount - 1 }, (_, idx) => {
+    const raw = params.ordinaryPierAxisSpacings?.[idx];
+    return raw !== undefined && Number.isFinite(raw) ? Math.max(minStep, raw) : baseA;
+  });
+
+  const firstSpacing = spacings[0];
+  if (spacings.every((s) => Math.abs(s - firstSpacing) < 1e-6)) {
+    const uniformStep = Math.max(minStep, firstSpacing);
+    return Array.from({ length: stepsCount }, () => uniformStep);
+  }
+
+  const c: number[] = [0];
+  for (let i = 0; i < spacings.length; i += 1) {
+    c.push(2 * spacings[i] - c[i]);
+  }
+  const avgS = spacings.reduce((sum, s) => sum + s, 0) / spacings.length;
+  let a0Opt = 0;
+  for (let i = 0; i < stepsCount; i += 1) {
+    const sign = i % 2 === 0 ? 1 : -1;
+    a0Opt += sign * (avgS - c[i]);
+  }
+  a0Opt /= stepsCount;
+
+  let low = -Infinity;
+  let high = Infinity;
+  for (let i = 0; i < stepsCount; i += 1) {
+    if (i % 2 === 0) {
+      low = Math.max(low, minStep - c[i]);
+      high = Math.min(high, maxStep - c[i]);
+    } else {
+      low = Math.max(low, c[i] - maxStep);
+      high = Math.min(high, c[i] - minStep);
+    }
+  }
+  const a0 =
+    low <= high ? Math.max(low, Math.min(high, a0Opt)) : (low + high) / 2;
+
+  return c.map((ci, idx) =>
+    Number(Math.max(minStep, idx % 2 === 0 ? ci + a0 : ci - a0).toFixed(4))
+  );
+}
+
+/**
+ * Координаты оконных осей (м от левого угла фасада) по шагам между ними.
+ */
+export function resolveWindowAxesM(D: number, stepsM: number[]): number[] {
+  const axes: number[] = [D];
+  let cur = D;
+  for (let i = 0; i < stepsM.length; i += 1) {
+    cur += stepsM[i];
+    axes.push(cur);
+  }
+  return axes;
+}
+
+/**
+ * Ширины каждого рядового простенка (м) в соответствии с шагами оконных осей.
+ */
+export function resolveOrdinaryPierWidthsM(
+  stepsM: number[],
+  w: number,
+  u: number,
+  withFraming: boolean
+): number[] {
+  const effU = withFraming ? Math.max(0, u) : 0;
+  return stepsM.map((step) => Math.max(0, step - w - 2 * effU));
+}
+
 export interface VerticalSocleAndPilasterBounds {
   socleTopM: number;
   pilasterBottomM: number;
@@ -4249,6 +4370,8 @@ export interface FacadeParameters {
   buildingVariant: BuildingVariant;
   multiSub: MultiSub;
   axesCount: number;
+  showOrdinaryPierAxes?: boolean;
+  ordinaryPierAxisSpacings?: number[];
   entrancePosition: EntrancePosition;
   hasEntrance: boolean;
   entrancePlacement: EntrancePlacement;
@@ -4433,16 +4556,19 @@ export function evaluateFacadeSummary(
   const { expertMode = false } = options;
   const variantInfo = getVariantPreset(params.buildingVariant, params.multiSub);
   const safeAxesCount = Math.max(1, Math.round(params.axesCount));
+  const axisStepsM = safeAxesCount >= 2 ? resolveWindowAxisStepsM(params) : [];
+  const effectiveAForD = axisStepsM[0] ?? params.A;
   const D = params.isRisalitCentered
     ? params.risalitWidth / 2
-    : D_from_A(params.A, params.k_D);
+    : D_from_A(effectiveAForD, params.k_D);
 
   const derivedGeometry = computeDerivedGeometry(
     params.levels,
     params.A,
     D,
     safeAxesCount,
-    params.hMain
+    params.hMain,
+    axisStepsM
   );
 
   // Используем поэтажную модель (если задана; обратная совместимость если передан totalHeight вручную)
@@ -4471,12 +4597,14 @@ export function evaluateFacadeSummary(
   );
 
   const effectiveU = params.withFraming ? params.u : 0;
-  const pierNoFrame = p_from_Aw(params.A, params.w, params.buildingType);
-  const pierWithFrame = pc_from_Awu(params.A, params.w, effectiveU, params.buildingType);
+  const minAxisStep = axisStepsM.length > 0 ? Math.min(...axisStepsM) : params.A;
+  const pierNoFrame = p_from_Aw(minAxisStep, params.w, params.buildingType);
+  const pierWithFrame = pc_from_Awu(minAxisStep, params.w, effectiveU, params.buildingType);
   const pierResult = params.withFraming ? pierWithFrame : pierNoFrame;
 
   const p_corner = p_corner_from_Dwu(D, params.w, effectiveU);
-  const p_intermediate = params.withFraming ? pierWithFrame.p_c : pierNoFrame.p;
+  const firstPierWidth = Math.max(0, effectiveAForD - params.w - 2 * effectiveU);
+  const p_intermediate = axisStepsM.length > 0 ? firstPierWidth : (params.withFraming ? pierWithFrame.p_c : pierNoFrame.p);
   const cornerCheck = check_corner(
     params.buildingType,
     p_corner,
@@ -5572,6 +5700,7 @@ export function applyBuildingVariantPreset(
     levels: alignedLevels,
     A,
     axesCount,
+    ordinaryPierAxisSpacings: undefined,
     entrancePosition: keepEntranceDisabled
       ? 'none'
       : axesCount % 2 === 1
@@ -5748,6 +5877,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     buildingVariant,
     multiSub,
     axesCount: defaultAxesCount,
+    showOrdinaryPierAxes: false,
     entrancePosition: 'none',
     hasEntrance: false,
     entrancePlacement: 'facade_center',

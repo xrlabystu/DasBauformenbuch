@@ -44,9 +44,14 @@ import {
   resolveBeltSillFloorsMask,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
+  resolveOrdinaryPierAxesM,
+  resolveOrdinaryPierAxisEdgeOffsetM,
+  resolveOrdinaryPierWidthsM,
   resolvePilasterElevationSpans,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowAxesM,
+  resolveWindowAxisStepsM,
   resolveWindowSillHeightM,
   schemeNumberFromGurtMode,
   socleHeight,
@@ -704,12 +709,12 @@ export function CalculatorModules({
                   onChange={(A) => {
                     if (axesSolveMode === 'find_H' && !isParamLocked(lockedParams, 'H')) {
                       const [n, m] = getActiveAxRatio();
-                      onUpdateParams({ A, H: H_from_A(A, n, m) });
+                      onUpdateParams({ A, H: H_from_A(A, n, m), ordinaryPierAxisSpacings: [] });
                     } else if (axesSolveMode === 'find_w' && !isParamLocked(lockedParams, 'w')) {
                       const wMax = params.withFraming ? Math.max(0.4, A / 2 - 2 * params.u) : w_max_from_A(A);
-                      onUpdateParams({ A, w: wMax });
+                      onUpdateParams({ A, w: wMax, ordinaryPierAxisSpacings: [] });
                     } else {
-                      onUpdateParams({ A });
+                      onUpdateParams({ A, ordinaryPierAxisSpacings: [] });
                     }
                   }}
                 />
@@ -856,7 +861,7 @@ export function CalculatorModules({
                               A_from_pier_wu(safePier, params.w, params.u, params.withFraming)
                             ).toFixed(3)
                           );
-                          onUpdateParams({ A: nextA });
+                          onUpdateParams({ A: nextA, ordinaryPierAxisSpacings: [] });
                         } else if (!wLocked) {
                           const nextW = Number(
                             Math.max(
@@ -926,6 +931,194 @@ export function CalculatorModules({
                           {formatMeters(summary.cornerCheck.D)} м ({formatMeters(params.k_D, 2)})
                         </strong>
                       </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Оси рядовых простенков">
+              {(() => {
+                const axisStepsM = resolveWindowAxisStepsM(params);
+                const axesM = resolveWindowAxesM(summary.cornerCheck.D, axisStepsM);
+                const ordinaryPierAxesM = resolveOrdinaryPierAxesM(axesM);
+                const pierAxesCount = ordinaryPierAxesM.length;
+                const pierWidthsM = resolveOrdinaryPierWidthsM(
+                  axisStepsM,
+                  params.w,
+                  params.u,
+                  params.withFraming
+                );
+                const pierAxisSpacingsM = ordinaryPierAxesM
+                  .slice(0, -1)
+                  .map((x, idx) => Number((ordinaryPierAxesM[idx + 1] - x).toFixed(3)));
+                const hasVariedPierSpacings =
+                  pierAxisSpacingsM.length >= 2 &&
+                  pierAxisSpacingsM.some((s) => Math.abs(s - pierAxisSpacingsM[0]) > 1e-3);
+                const effU = params.withFraming ? Math.max(0, params.u) : 0;
+                const minPierStep = Math.max(
+                  1.0,
+                  Number((params.w + 2 * effU + 0.1).toFixed(2))
+                );
+                const pierEdgeOffsetM = resolveOrdinaryPierAxisEdgeOffsetM(
+                  summary.cornerCheck.D,
+                  axisStepsM[0] ?? params.A
+                );
+                return (
+                  <div className="space-y-3.5">
+                    <label className="flex items-start gap-2 text-xs text-[#1C1917] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(params.showOrdinaryPierAxes)}
+                        onChange={(e) =>
+                          onUpdateParams({ showOrdinaryPierAxes: e.target.checked })
+                        }
+                        className="mt-0.5 accent-[#0F766E]"
+                      />
+                      <span>
+                        Показать оси рядовых простенков (вертикальные линии по центру каждого
+                        рядового простенка, видны ниже уровня земли со своей размерной цепочкой)
+                      </span>
+                    </label>
+
+                    <MeterControl
+                      id="calc-ordinary-pier-axes-spacing"
+                      label="Единое расстояние между осями рядовых простенков"
+                      value={params.A}
+                      min={minPierStep}
+                      max={6.0}
+                      lockKey="A"
+                      locked={isParamLocked(lockedParams, 'A')}
+                      onToggleLock={onToggleLock}
+                      onOpenGlossaryTerm={onOpenGlossaryTerm}
+                      note="Задаёт одинаковое расстояние между всеми осями рядовых простенков и пересчитывает ширину простенков."
+                      onChange={(nextDist) => {
+                        if (axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A') {
+                          setAxesSolveMode('check');
+                        }
+                        if (axesSolveMode === 'find_H' && !isParamLocked(lockedParams, 'H')) {
+                          const [n, m] = getActiveAxRatio();
+                          onUpdateParams({
+                            A: nextDist,
+                            H: H_from_A(nextDist, n, m),
+                            ordinaryPierAxisSpacings: [],
+                          });
+                        } else if (
+                          axesSolveMode === 'find_w' &&
+                          !isParamLocked(lockedParams, 'w')
+                        ) {
+                          const wMax = params.withFraming
+                            ? Math.max(0.4, nextDist / 2 - 2 * params.u)
+                            : w_max_from_A(nextDist);
+                          onUpdateParams({
+                            A: nextDist,
+                            w: wMax,
+                            ordinaryPierAxisSpacings: [],
+                          });
+                        } else {
+                          onUpdateParams({ A: nextDist, ordinaryPierAxisSpacings: [] });
+                        }
+                      }}
+                    />
+
+                    {pierAxisSpacingsM.length > 0 && (
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5] space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-medium uppercase tracking-wider text-[#57534E]">
+                            Индивидуальные расстояния между осями простенков
+                          </span>
+                          {hasVariedPierSpacings && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateParams({ ordinaryPierAxisSpacings: [] })
+                              }
+                              className="px-2 py-0.5 text-[10px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors"
+                            >
+                              Выровнять
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-3">
+                          {pierAxisSpacingsM.map((spacingM, idx) => (
+                            <MeterControl
+                              key={`pier-axis-gap-${idx}`}
+                              id={`calc-pier-axis-gap-${idx}`}
+                              label={`Расстояние П${idx + 1} — П${idx + 2}`}
+                              value={spacingM}
+                              min={minPierStep}
+                              max={6.0}
+                              locked={isParamLocked(lockedParams, 'A')}
+                              onOpenGlossaryTerm={onOpenGlossaryTerm}
+                              onChange={(val) => {
+                                if (
+                                  axesSolveMode === 'find_A' ||
+                                  axesSolveMode === 'find_p_A'
+                                ) {
+                                  setAxesSolveMode('check');
+                                }
+                                const nextSpacings = pierAxisSpacingsM.map((cur, sIdx) =>
+                                  sIdx === idx ? val : cur
+                                );
+                                const nextSteps = resolveWindowAxisStepsM({
+                                  ...params,
+                                  ordinaryPierAxisSpacings: nextSpacings,
+                                });
+                                const avgA = Number(
+                                  (
+                                    nextSteps.reduce((s, step) => s + step, 0) /
+                                    Math.max(1, nextSteps.length)
+                                  ).toFixed(4)
+                                );
+                                const isNowUniform = nextSpacings.every(
+                                  (s) => Math.abs(s - avgA) < 1e-4
+                                );
+                                onUpdateParams({
+                                  A: avgA,
+                                  ordinaryPierAxisSpacings: isNowUniform ? [] : nextSpacings,
+                                });
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-[11px]">
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">
+                          Осей простенков
+                        </span>
+                        <strong>{pierAxesCount}</strong>
+                      </div>
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">
+                          От угла до П1
+                        </span>
+                        <strong>{formatMeters(pierEdgeOffsetM)} м</strong>
+                      </div>
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">
+                          Ширина фасада W
+                        </span>
+                        <strong>{formatMeters(summary.derivedGeometry.facadeWidth)} м</strong>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono tabular-nums text-[11px]">
+                      {pierWidthsM.map((pw, idx) => (
+                        <div
+                          key={`pier-width-readout-${idx}`}
+                          className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]"
+                        >
+                          <span className="block text-[10px] text-[#78716C] uppercase">
+                            {params.withFraming
+                              ? `Простенок ${idx + 1} (p_c)`
+                              : `Простенок ${idx + 1} (p)`}
+                          </span>
+                          <strong>{formatMeters(pw)} м</strong>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );

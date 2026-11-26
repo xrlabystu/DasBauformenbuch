@@ -99,10 +99,15 @@ import {
   resolveEntrancePositionFromSettings,
   resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
+  resolveOrdinaryPierAxesM,
+  resolveOrdinaryPierAxisEdgeOffsetM,
+  resolveOrdinaryPierWidthsM,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowAxesM,
+  resolveWindowAxisStepsM,
   resolveWindowSillHeightM,
   rusticationRows,
   socleHeight,
@@ -2204,6 +2209,143 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assert.equal(isBeltSillModeAboveFloor(overrideLegacy, 1), false);
     assert.equal(resolveBeltVerticalBandM(overrideLegacy, vgMixed, 0)!.isSillMode, true);
     assert.equal(resolveBeltVerticalBandM(overrideLegacy, vgMixed, 1)!.isSillMode, false);
+  });
+
+  it('50. Оси рядовых простенков: середина простенков, видимость только ниже уровня земли и своя размерная цепочка в DWG', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    assert.equal(base.showOrdinaryPierAxes, false);
+
+    // По умолчанию (showOrdinaryPierAxes = false) в DWG нет слоя осей рядовых простенков
+    const defaultSum = evaluateFacadeSummary(base, { expertMode: true });
+    const defaultCad = buildFacadeCadDocument(base, defaultSum);
+    const defaultPierLines = Array.from(defaultCad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '07B_PIER_AXES'
+    );
+    assert.equal(defaultPierLines.length, 0);
+
+    // 4 оконные оси -> 3 рядовых простенка и 3 оси рядовых простенков
+    const withPierAxes = {
+      ...base,
+      axesCount: 4,
+      A: 3.2,
+      k_D: 0.75,
+      w: 1.2,
+      u: 0.2,
+      withFraming: true,
+      showOrdinaryPierAxes: true,
+    };
+    const D = D_from_A(withPierAxes.A, withPierAxes.k_D); // 2.4
+    const axesM = Array.from({ length: withPierAxes.axesCount }, (_, i) => D + i * withPierAxes.A);
+    const pierAxesM = resolveOrdinaryPierAxesM(axesM);
+    assert.equal(pierAxesM.length, 3);
+
+    // Каждая ось делит рядовой простенок [axesM[i] + w/2 + u, axesM[i+1] - w/2 - u] строго пополам
+    for (let i = 0; i < pierAxesM.length; i += 1) {
+      const pierLeft = axesM[i] + withPierAxes.w / 2 + withPierAxes.u;
+      const pierRight = axesM[i + 1] - withPierAxes.w / 2 - withPierAxes.u;
+      assertClose(pierAxesM[i], (pierLeft + pierRight) / 2);
+    }
+
+    // Расстояние между соседними осями рядовых простенков равно шагу A, а от угла до П1 = D + A/2
+    assertClose(pierAxesM[1] - pierAxesM[0], withPierAxes.A);
+    assertClose(pierAxesM[2] - pierAxesM[1], withPierAxes.A);
+    assertClose(pierAxesM[0], resolveOrdinaryPierAxisEdgeOffsetM(D, withPierAxes.A));
+
+    // DWG: вертикальные линии 07B_PIER_AXES строго ниже уровня земли (y <= 0) и своя размерная цепочка
+    const sum = evaluateFacadeSummary(withPierAxes, { expertMode: true });
+    const cad = buildFacadeCadDocument(withPierAxes, sum);
+    const pierEntities = Array.from(cad.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '07B_PIER_AXES'
+    );
+    const pierLines = pierEntities.filter((ent) => {
+      const e = ent as unknown as {
+        startPoint?: { x: number; y: number };
+        endPoint?: { x: number; y: number };
+      };
+      return e.startPoint !== undefined && e.endPoint !== undefined;
+    }) as unknown as Array<{
+      startPoint: { x: number; y: number };
+      endPoint: { x: number; y: number };
+    }>;
+
+    assert.equal(pierLines.length, 3);
+    pierLines.forEach((line, idx) => {
+      assertClose(line.startPoint.x / 1000, pierAxesM[idx]);
+      assertClose(line.endPoint.x / 1000, pierAxesM[idx]);
+      const maxY = Math.max(line.startPoint.y, line.endPoint.y);
+      const minY = Math.min(line.startPoint.y, line.endPoint.y);
+      assert.ok(maxY <= 0, `Pier axis line must not extend above ground (y=0), got maxY=${maxY}`);
+      assert.ok(minY < 0, `Pier axis line must extend below ground (y=0), got minY=${minY}`);
+    });
+
+    const dimTexts = Array.from(cad.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+
+    assert.ok(
+      dimTexts.some((t) => t.includes(`A_п = ${withPierAxes.A.toFixed(2)} м`)),
+      `DWG dimensions must contain pier axes spacing A_п = ${withPierAxes.A.toFixed(2)} м, got: ${dimTexts.join(', ')}`
+    );
+    assert.ok(
+      dimTexts.some((t) => t === `${pierAxesM[0].toFixed(2)} м`),
+      `DWG dimensions must contain edge-to-pier-axis offset ${pierAxesM[0].toFixed(2)} м`
+    );
+  });
+
+  it('51. Задание размеров между осями рядовых простенков: пересчёт ширин простенков, геометрии фасада и DWG', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    // 5 оконных осей -> 4 рядовых простенка (П1..П4) и 3 интервала между осями простенков
+    const custom = {
+      ...base,
+      axesCount: 5,
+      A: 3.2,
+      k_D: 0.75,
+      w: 1.0,
+      u: 0.15,
+      withFraming: true,
+      showOrdinaryPierAxes: true,
+      ordinaryPierAxisSpacings: [3.0, 3.8, 3.0],
+    };
+
+    const steps = resolveWindowAxisStepsM(custom);
+    assert.equal(steps.length, 4);
+    assertClose(steps[0], 2.2);
+    assertClose(steps[1], 3.8);
+    assertClose(steps[2], 3.8);
+    assertClose(steps[3], 2.2);
+
+    const D = D_from_A(steps[0], custom.k_D);
+    const axesM = resolveWindowAxesM(D, steps);
+    const pierAxesM = resolveOrdinaryPierAxesM(axesM);
+    assert.equal(pierAxesM.length, 4);
+
+    // Расстояния между осями рядовых простенков точно соответствуют заданным [3.0, 3.8, 3.0]
+    assertClose(pierAxesM[1] - pierAxesM[0], 3.0);
+    assertClose(pierAxesM[2] - pierAxesM[1], 3.8);
+    assertClose(pierAxesM[3] - pierAxesM[2], 3.0);
+
+    // Ширины простенков меняются соответственно: w_v = 1.0 + 2*0.15 = 1.3
+    const pierWidths = resolveOrdinaryPierWidthsM(steps, custom.w, custom.u, custom.withFraming);
+    assertClose(pierWidths[0], 0.9);
+    assertClose(pierWidths[1], 2.5);
+    assertClose(pierWidths[2], 2.5);
+    assertClose(pierWidths[3], 0.9);
+
+    // Проверка пересчёта ширины фасада и DWG-размеров
+    const sum = evaluateFacadeSummary(custom, { expertMode: true });
+    assertClose(sum.derivedGeometry.facadeWidth, 2 * D + 2.2 + 3.8 + 3.8 + 2.2);
+
+    const cad = buildFacadeCadDocument(custom, sum);
+    const dimTexts = Array.from(cad.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '08_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+
+    assert.ok(dimTexts.includes('A_п = 3.00 м'));
+    assert.ok(dimTexts.includes('A_п = 3.80 м'));
+    assert.ok(dimTexts.includes('p_c1 = 0.90 м'));
+    assert.ok(dimTexts.includes('p_c2 = 2.50 м'));
   });
 });
 

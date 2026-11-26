@@ -33,10 +33,13 @@ import {
   resolveEntranceGeometry,
   resolveFloorWindowGeometryM,
   resolveMainCorniceLayers,
+  resolveOrdinaryPierAxesM,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
+  resolveWindowAxesM,
+  resolveWindowAxisStepsM,
   type FacadeParameters,
   type FacadeSummary,
   type FacadeTargetElement,
@@ -138,14 +141,23 @@ export function FacadeSvg({
   const safeW = Math.max(0.4, params.w);
   const safeWinH = Math.max(0.6, params.h);
   const effectiveU = params.withFraming ? Math.max(0, params.u) : 0;
+  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
+  const axisStepsM = resolveWindowAxisStepsM(params);
+  const effectiveAForD = axisStepsM[0] ?? safeA;
   const D = params.isRisalitCentered
     ? Math.max(0.6, params.risalitWidth / 2)
-    : Math.max(0.5, safeA * params.k_D);
+    : Math.max(0.5, effectiveAForD * params.k_D);
 
-  const safeAxesCount = Math.min(10, Math.max(2, Math.round(params.axesCount)));
   const levelFloors = params.levels.floors;
   const safeFloors = Math.min(10, Math.max(1, levelFloors.length));
-  const axesM = Array.from({ length: safeAxesCount }, (_, i) => D + i * safeA);
+  const axesM = resolveWindowAxesM(D, axisStepsM);
+  const hasVariedAxisSteps =
+    axisStepsM.length >= 2 &&
+    axisStepsM.some((step) => Math.abs(step - axisStepsM[0]) > 1e-4);
+  const ordinaryPierAxesM = params.showOrdinaryPierAxes
+    ? resolveOrdinaryPierAxesM(axesM)
+    : [];
+  const hasPierAxesDimChain = ordinaryPierAxesM.length > 0;
 
   // Общая ширина фасада из DerivedGeometry
   const totalWidthM = summary.derivedGeometry.facadeWidth;
@@ -169,11 +181,13 @@ export function FacadeSvg({
   const wallHeightM = wallTopM - groundToFloor1;
 
   const svgW = 928;
-  const svgH = safeFloors >= 7 ? 620 : safeFloors >= 4 ? 540 : 470;
+  const baseSvgH = safeFloors >= 7 ? 620 : safeFloors >= 4 ? 540 : 470;
+  const extraBottomPx = hasPierAxesDimChain ? 48 : 0;
+  const svgH = baseSvgH + extraBottomPx;
   const padLeft = 152;
   const padRight = 104;
   const padTop = 64;
-  const padBottom = 86;
+  const padBottom = 86 + extraBottomPx;
   const drawW = svgW - padLeft - padRight;
   const drawH = svgH - padTop - padBottom;
 
@@ -549,7 +563,7 @@ export function FacadeSvg({
   }, [checksByElement, hideValidation]);
 
   const p_corner = D - safeW / 2 - effectiveU;
-  const p_inter = safeA - safeW - 2 * effectiveU;
+  const p_inter = (axisStepsM[0] ?? safeA) - safeW - 2 * effectiveU;
   const w_v = safeW + 2 * effectiveU;
 
   const isHi = (el: FacadeTargetElement) => highlightedElement === el;
@@ -1004,7 +1018,7 @@ export function FacadeSvg({
             floorOffsetsM[1] - Math.max(floorOffsetsM[0], visualSocleTopM) > 0.35 && (
             <g opacity={0.75}>
               {axesM.slice(0, -1).map((axX, idx) => {
-                const colX = xM(axX + safeA / 2);
+                const colX = xM((axX + (axesM[idx + 1] ?? axX + safeA)) / 2);
                 const yBot = yFromGroundM(Math.max(floorOffsetsM[0], visualSocleTopM));
                 const yTop = yFromGroundM(floorOffsetsM[1]);
                 return (
@@ -1929,14 +1943,29 @@ export function FacadeSvg({
             'corner'
           )}
           {axesM.length >= 2 &&
-            renderDimLine(
-              xM(axesM[0]),
-              xM(axesM[1]),
-              padTop - 26,
-              hideValidation ? `A = ${formatMeters(safeA)}` : `A = ${formatMeters(safeA)} (${STATUS_TAG[ahStatus]})`,
-              ahStatus,
-              'axenweite'
-            )}
+            (!hasVariedAxisSteps
+              ? renderDimLine(
+                  xM(axesM[0]),
+                  xM(axesM[1]),
+                  padTop - 26,
+                  hideValidation
+                    ? `A = ${formatMeters(safeA)}`
+                    : `A = ${formatMeters(safeA)} (${STATUS_TAG[ahStatus]})`,
+                  ahStatus,
+                  'axenweite'
+                )
+              : axisStepsM.map((stepM, idx) => (
+                  <g key={`top-step-${idx}`}>
+                    {renderDimLine(
+                      xM(axesM[idx]),
+                      xM(axesM[idx + 1]),
+                      padTop - 26,
+                      `A${idx + 1}=${formatMeters(stepM)}`,
+                      ahStatus,
+                      'axenweite'
+                    )}
+                  </g>
+                )))}
 
           {/* BOTTOM DIMENSION LINES: p_corner, w / w_v, p / p_c */}
           {renderDimLine(
@@ -1958,20 +1987,174 @@ export function FacadeSvg({
             'window'
           )}
           {axesM.length >= 2 &&
-            renderDimLine(
-              xM(axesM[0] + safeW / 2 + effectiveU),
-              xM(axesM[1] - safeW / 2 - effectiveU),
-              groundY + 26,
-              params.withFraming
-                ? hideValidation
-                  ? `p_c = ${formatMeters(p_inter)}`
-                  : `p_c = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`
-                : hideValidation
-                  ? `p = ${formatMeters(p_inter)}`
-                  : `p = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`,
-              pierStatus,
-              params.withFraming ? 'framing_pier' : 'pier'
-            )}
+            (!hasVariedAxisSteps
+              ? renderDimLine(
+                  xM(axesM[0] + safeW / 2 + effectiveU),
+                  xM(axesM[1] - safeW / 2 - effectiveU),
+                  groundY + 26,
+                  params.withFraming
+                    ? hideValidation
+                      ? `p_c = ${formatMeters(p_inter)}`
+                      : `p_c = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`
+                    : hideValidation
+                      ? `p = ${formatMeters(p_inter)}`
+                      : `p = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`,
+                  pierStatus,
+                  params.withFraming ? 'framing_pier' : 'pier'
+                )
+              : axisStepsM.map((stepM, idx) => {
+                  const pierW = Math.max(0, stepM - safeW - 2 * effectiveU);
+                  return (
+                    <g key={`bot-pier-${idx}`}>
+                      {renderDimLine(
+                        xM(axesM[idx] + safeW / 2 + effectiveU),
+                        xM(axesM[idx + 1] - safeW / 2 - effectiveU),
+                        groundY + 26,
+                        params.withFraming
+                          ? `p_c${idx + 1}=${formatMeters(pierW)}`
+                          : `p${idx + 1}=${formatMeters(pierW)}`,
+                        pierStatus,
+                        params.withFraming ? 'framing_pier' : 'pier'
+                      )}
+                    </g>
+                  );
+                }))}
+
+          {/* Ordinary Pier Axes (ONLY below ground level) + dedicated dimension chain */}
+          {hasPierAxesDimChain && (() => {
+            const pierColor = '#0F766E';
+            const chainY = groundY + 96;
+            const axisBottomY = groundY + 114;
+            const nodesM = [0, ...ordinaryPierAxesM, totalWidthM];
+            return (
+              <g aria-label="Оси рядовых простенков ниже уровня земли">
+                {/* Крайние выносные линии от углов фасада вниз */}
+                <line
+                  x1={xM(0)}
+                  y1={groundY}
+                  x2={xM(0)}
+                  y2={chainY + 6}
+                  stroke={pierColor}
+                  strokeOpacity={0.55}
+                  strokeWidth={0.9}
+                  strokeDasharray="3 2"
+                />
+                <line
+                  x1={xM(totalWidthM)}
+                  y1={groundY}
+                  x2={xM(totalWidthM)}
+                  y2={chainY + 6}
+                  stroke={pierColor}
+                  strokeOpacity={0.55}
+                  strokeWidth={0.9}
+                  strokeDasharray="3 2"
+                />
+
+                {/* Вертикальные оси рядовых простенков — строго от groundY вниз */}
+                {ordinaryPierAxesM.map((pierAxisM, pIdx) => {
+                  const px = xM(pierAxisM);
+                  return (
+                    <g key={`pier-axis-${pIdx}`}>
+                      <line
+                        x1={px}
+                        y1={groundY}
+                        x2={px}
+                        y2={axisBottomY}
+                        stroke={pierColor}
+                        strokeWidth={1.2}
+                        strokeDasharray="6 2 2 2"
+                      />
+                      <text
+                        x={px}
+                        y={axisBottomY + 11}
+                        textAnchor="middle"
+                        fontSize="9"
+                        fontFamily="IBM Plex Mono, monospace"
+                        fontWeight={600}
+                        fill={pierColor}
+                      >
+                        {`П${pIdx + 1}`}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Собственная размерная цепочка осей рядовых простенков */}
+                {nodesM.slice(0, -1).map((fromM, segIdx) => {
+                  const toM = nodesM[segIdx + 1];
+                  const distM = toM - fromM;
+                  const x1 = xM(fromM);
+                  const x2 = xM(toM);
+                  const midX = (x1 + x2) / 2;
+                  const segWidthPx = Math.abs(x2 - x1);
+                  const isInnerPierStep =
+                    segIdx > 0 && segIdx < nodesM.length - 2;
+                  const label = isInnerPierStep
+                    ? `A_п=${formatMeters(distM)}`
+                    : `${formatMeters(distM)}`;
+                  return (
+                    <g key={`pier-dim-${segIdx}`}>
+                      <line
+                        x1={x1}
+                        y1={chainY - 4}
+                        x2={x1}
+                        y2={chainY + 4}
+                        stroke={pierColor}
+                        strokeWidth={1.15}
+                      />
+                      <line
+                        x1={x2}
+                        y1={chainY - 4}
+                        x2={x2}
+                        y2={chainY + 4}
+                        stroke={pierColor}
+                        strokeWidth={1.15}
+                      />
+                      <line
+                        x1={x1}
+                        y1={chainY}
+                        x2={x2}
+                        y2={chainY}
+                        stroke={pierColor}
+                        strokeWidth={1.25}
+                      />
+                      {segWidthPx > 14 && (
+                        <>
+                          <polygon
+                            points={`${x1},${chainY} ${x1 + 4.5},${chainY - 2.3} ${x1 + 4.5},${chainY + 2.3}`}
+                            fill={pierColor}
+                          />
+                          <polygon
+                            points={`${x2},${chainY} ${x2 - 4.5},${chainY - 2.3} ${x2 - 4.5},${chainY + 2.3}`}
+                            fill={pierColor}
+                          />
+                        </>
+                      )}
+                      <rect
+                        x={midX - Math.max(18, label.length * 3.1)}
+                        y={chainY - 14}
+                        width={Math.max(36, label.length * 6.2)}
+                        height={12}
+                        fill="#FBF9F5"
+                        fillOpacity={0.94}
+                      />
+                      <text
+                        x={midX}
+                        y={chainY - 4.5}
+                        textAnchor="middle"
+                        fontSize="9.5"
+                        fontFamily="IBM Plex Mono, monospace"
+                        fontWeight={500}
+                        fill={pierColor}
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })()}
 
           {/* RIGHT VERTICAL DIMENSION: h_socle, H_max & H_total */}
           {(() => {
