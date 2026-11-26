@@ -4423,36 +4423,8 @@ export function CalculatorModules({
               )}
             </div>
 
-            {/* Этажность и общая высота здания */}
-            <CollapsibleSection title="Этажность и высота цоколя" subtle>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1C1917]">
-                  <span>Число этажей здания</span>
-                  <LockToggleButton
-                    lockKey="floors"
-                    locked={isParamLocked(lockedParams, 'floors')}
-                    onToggleLock={onToggleLock}
-                    label="Число этажей"
-                  />
-                </span>
-                <div className="grid grid-cols-5 gap-1">
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((fl) => (
-                    <button
-                      key={fl}
-                      type="button"
-                      disabled={isParamLocked(lockedParams, 'floors')}
-                      onClick={() => onUpdateParams(applyFloorCountPreset(params, fl))}
-                      className={`px-2 py-1 text-[11px] font-mono border disabled:opacity-45 ${
-                        params.levels.floors.length === fl
-                          ? 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917]'
-                          : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
-                      }`}
-                    >
-                      {fl} эт.
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Высота цоколя и общая высота здания */}
+            <CollapsibleSection title="Высота цоколя" subtle>
 
               <div className="p-2.5 border border-[#E5DFD3] bg-[#FBF9F5] font-mono text-xs flex flex-wrap justify-between gap-2">
                 <span>
