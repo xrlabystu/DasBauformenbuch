@@ -1267,89 +1267,135 @@ function SocleHierarchyPlate({
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
       <div className="xl:col-span-8">
         <DetailSvgCanvas {...canvasProps}>
-          {/* 3-part socle section */}
-          <rect
-            x={secX - 8}
-            y={secTopY}
-            width={secW + 16}
-            height={deckH}
-            fill="#DFD6C3"
-            stroke="#1C1917"
-            strokeWidth={1.2}
-          />
-          <rect
-            x={secX}
-            y={secTopY + deckH}
-            width={secW}
-            height={rumpfH}
-            fill="#EAE3D3"
-            stroke="#1C1917"
-            strokeWidth={1.2}
-          />
-          {Array.from({ length: Math.max(0, nCourses - 1) }).map((_, i) => {
-            const ry = secTopY + deckH + ((i + 1) / nCourses) * rumpfH;
-            return (
-              <line
-                key={i}
-                x1={secX}
-                y1={ry}
-                x2={secX + secW}
-                y2={ry}
-                stroke="#57534E"
-                strokeWidth={0.9}
+          {params.isSimpleSocle ? (
+            <>
+              <rect
+                x={secX}
+                y={secTopY}
+                width={secW}
+                height={secH}
+                fill="#EAE3D3"
+                stroke="#1C1917"
+                strokeWidth={1.2}
               />
-            );
-          })}
-          <rect
-            x={secX - 10}
-            y={secTopY + deckH + rumpfH}
-            width={secW + 20}
-            height={fussH}
-            fill="#D6CEBE"
-            stroke="#1C1917"
-            strokeWidth={1.2}
-          />
+              <text
+                x={secX + secW / 2}
+                y={secTopY + secH / 2 - 4}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#1C1917"
+              >
+                Простой цоколь
+              </text>
+              <text
+                x={secX + secW / 2}
+                y={secTopY + secH / 2 + 10}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#57534E"
+              >
+                {formatMeters(effectiveSocleH, 2)} м
+              </text>
+              <text
+                x={secX + secW / 2}
+                y={svgH - 12}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#57534E"
+              >
+                простой прямоугольник
+              </text>
+            </>
+          ) : (
+            <>
+              {/* 3-part socle section */}
+              <rect
+                x={secX - 8}
+                y={secTopY}
+                width={secW + 16}
+                height={deckH}
+                fill="#DFD6C3"
+                stroke="#1C1917"
+                strokeWidth={1.2}
+              />
+              <rect
+                x={secX}
+                y={secTopY + deckH}
+                width={secW}
+                height={rumpfH}
+                fill="#EAE3D3"
+                stroke="#1C1917"
+                strokeWidth={1.2}
+              />
+              {Array.from({ length: Math.max(0, nCourses - 1) }).map((_, i) => {
+                const ry = secTopY + deckH + ((i + 1) / nCourses) * rumpfH;
+                return (
+                  <line
+                    key={i}
+                    x1={secX}
+                    y1={ry}
+                    x2={secX + secW}
+                    y2={ry}
+                    stroke="#57534E"
+                    strokeWidth={0.9}
+                  />
+                );
+              })}
+              <rect
+                x={secX - 10}
+                y={secTopY + deckH + rumpfH}
+                width={secW + 20}
+                height={fussH}
+                fill="#D6CEBE"
+                stroke="#1C1917"
+                strokeWidth={1.2}
+              />
 
-          <text
-            x={secX + secW / 2}
-            y={secTopY + deckH / 2 + 3}
-            textAnchor="middle"
-            fontSize="9.5"
-            fontFamily="IBM Plex Mono, monospace"
-            fill="#1C1917"
-          >
-            Deck {formatMeters(deck, 2)} м
-          </text>
-          <text
-            x={secX + secW / 2}
-            y={secTopY + deckH + rumpfH / 2 + 3}
-            textAnchor="middle"
-            fontSize="9.5"
-            fontFamily="IBM Plex Mono, monospace"
-            fill="#1C1917"
-          >
-            {hasSocleRust ? `Rumpf (${n} ряд.)` : 'Rumpf (гладкий)'}
-          </text>
-          <text
-            x={secX + secW / 2}
-            y={secTopY + deckH + rumpfH + fussH / 2 + 3}
-            textAnchor="middle"
-            fontSize="9.5"
-            fontFamily="IBM Plex Mono, monospace"
-            fill="#1C1917"
-          >
-            Fuß {formatMeters(fuss, 2)} м
-          </text>
-          <text
-            x={secX + secW / 2}
-            y={svgH - 12}
-            textAnchor="middle"
-            fontSize="9.5"
-            fontFamily="IBM Plex Mono, monospace"
-            fill="#57534E"
-          >
-            3 части (эвристика)
-          </text>
+              <text
+                x={secX + secW / 2}
+                y={secTopY + deckH / 2 + 3}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#1C1917"
+              >
+                Deck {formatMeters(deck, 2)} м
+              </text>
+              <text
+                x={secX + secW / 2}
+                y={secTopY + deckH + rumpfH / 2 + 3}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#1C1917"
+              >
+                {hasSocleRust ? `Rumpf (${n} ряд.)` : 'Rumpf (гладкий)'}
+              </text>
+              <text
+                x={secX + secW / 2}
+                y={secTopY + deckH + rumpfH + fussH / 2 + 3}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#1C1917"
+              >
+                Fuß {formatMeters(fuss, 2)} м
+              </text>
+              <text
+                x={secX + secW / 2}
+                y={svgH - 12}
+                textAnchor="middle"
+                fontSize="9.5"
+                fontFamily="IBM Plex Mono, monospace"
+                fill="#57534E"
+              >
+                3 части (эвристика)
+              </text>
+            </>
+          )}
 
           {/* Hierarchy Bars */}
           <text

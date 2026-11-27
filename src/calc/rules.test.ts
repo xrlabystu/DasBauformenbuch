@@ -132,6 +132,7 @@ import {
 import { BRAUSEWETTER_PAGES } from '../data/brausewetter_1895.ts';
 import { countSearchMatches, findGlossaryEntryByTerm } from '../utils/termHighlight.tsx';
 import {
+  buildDetailPlateCadDocument,
   buildFacadeCadDocument,
   exportDetailPlateToDwg,
   exportFacadeToDwg,
@@ -2415,6 +2416,69 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     const sumReset = evaluateFacadeSummary(reset, { expertMode: true });
     const vgReset = resolveScaledVerticalGeometry(reset, sumReset.derivedGeometry);
     assertClose(vgReset.corniceBottomM, vgReset.topFloorTopM);
+  });
+
+  it('53. Кнопка «Простой цоколь»: цоколь становится единым прямоугольником в фасаде и деталировке без Fuß/Rumpf/Deck', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    assert.equal(base.isSimpleSocle, false);
+
+    // По умолчанию (трёхчастный цоколь): 3 прямоугольника на слое 02_SOCLE и Fuß/Rumpf/Deck в деталировке
+    const sum3 = evaluateFacadeSummary(base, { expertMode: true });
+    const cad3 = buildFacadeCadDocument(base, sum3);
+    const socleEnts3 = Array.from(cad3.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '02_SOCLE'
+    );
+    assert.equal(socleEnts3.length, 3);
+
+    const detail3 = buildDetailPlateCadDocument('socle', base, sum3);
+    const detail3Dims = Array.from(detail3.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '04_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+    assert.ok(detail3Dims.some((t) => t.startsWith('Fuß ')));
+    assert.ok(detail3Dims.some((t) => t.startsWith('Deck ')));
+
+    // Активируем «Простой цоколь» (даже при включённой рустовке должен рисоваться простой прямоугольник)
+    const simple = computeNextFacadeParams(
+      { ...base, hasSocleRustication: true },
+      { isSimpleSocle: true },
+      {}
+    );
+    assert.equal(simple.isSimpleSocle, true);
+
+    const sumSimple = evaluateFacadeSummary(simple, { expertMode: true });
+    const cadSimple = buildFacadeCadDocument(simple, sumSimple);
+    const socleEntsSimple = Array.from(cadSimple.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '02_SOCLE'
+    );
+    assert.equal(socleEntsSimple.length, 1, 'Simple socle must emit a single rectangle in DWG');
+    const rectVerts = (
+      socleEntsSimple[0] as unknown as {
+        vertices?: Array<{ location: { x: number; y: number } }>;
+      }
+    ).vertices;
+    assert.equal(rectVerts?.length, 4);
+    assertClose(Math.min(...rectVerts!.map((v) => v.location.x)), 0);
+    assertClose(
+      Math.max(...rectVerts!.map((v) => v.location.x)) / 1000,
+      sumSimple.derivedGeometry.facadeWidth
+    );
+
+    const detailSimple = buildDetailPlateCadDocument('socle', simple, sumSimple);
+    const detailSimpleGeom = Array.from(detailSimple.modelSpace?.entities ?? []).filter(
+      (ent) => ent.layer?.name === '01_DETAIL_GEOMETRY'
+    );
+    assert.equal(detailSimpleGeom.length, 1, 'Simple socle detail plate must emit 1 rectangle');
+    const detailSimpleDims = Array.from(detailSimple.modelSpace?.entities ?? [])
+      .filter((ent) => ent.layer?.name === '04_DIMENSIONS')
+      .map((ent) => (ent as { value?: string }).value)
+      .filter((v): v is string => typeof v === 'string');
+    assert.equal(detailSimpleDims.some((t) => t.includes('Fuß') || t.includes('Rumpf') || t.includes('Deck')), false);
+    assert.ok(detailSimpleDims.some((t) => t.startsWith('h_s = ')));
+
+    // Замок на isSimpleSocle защищает от изменения
+    const locked = computeNextFacadeParams(simple, { isSimpleSocle: false }, { isSimpleSocle: true });
+    assert.equal(locked.isSimpleSocle, true);
   });
 });
 

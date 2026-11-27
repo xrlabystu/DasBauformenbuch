@@ -329,7 +329,8 @@ export function buildFacadeCadDocument(
   addLine(doc, layerWalls, -1000, 0, totalWidthM * MM + 1000, 0);
   addRect(doc, layerWalls, 0, 0, totalWidthM * MM, wallTopM * MM);
 
-  // 2. Цоколь и рустовка (трёхчастное деление сохраняется и при включении всего 1-го этажа в цоколь)
+  // 2. Цоколь и рустовка (простой прямоугольник либо трёхчастное деление)
+  const isSimpleSocle = Boolean(params.isSimpleSocle);
   const partsSum = Math.max(
     0.01,
     summary.threePartSocleResult.fuss +
@@ -339,22 +340,26 @@ export function buildFacadeCadDocument(
   const deckM = (summary.threePartSocleResult.deck / partsSum) * visualSocleTopM;
   const fussM = (summary.threePartSocleResult.fuss / partsSum) * visualSocleTopM;
   const rumpfM = Math.max(0.05, visualSocleTopM - deckM - fussM);
-  const hasSocleRust = params.hasSocleRustication !== false;
+  const hasSocleRust = !isSimpleSocle && params.hasSocleRustication !== false;
   const rustCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
-  addRect(doc, layerSocle, -30, 0, totalWidthM * MM + 60, visualSocleTopM * MM);
-  addRect(doc, layerSocle, -45, 0, totalWidthM * MM + 90, fussM * MM);
-  addRect(
-    doc,
-    layerSocle,
-    -45,
-    (visualSocleTopM - deckM) * MM,
-    totalWidthM * MM + 90,
-    deckM * MM
-  );
-  for (let r = 1; r < rustCourses; r++) {
-    const yRust = (fussM + (r / rustCourses) * rumpfM) * MM;
-    addLine(doc, layerSocle, -20, yRust, totalWidthM * MM + 20, yRust);
+  if (isSimpleSocle) {
+    addRect(doc, layerSocle, 0, 0, totalWidthM * MM, visualSocleTopM * MM);
+  } else {
+    addRect(doc, layerSocle, -30, 0, totalWidthM * MM + 60, visualSocleTopM * MM);
+    addRect(doc, layerSocle, -45, 0, totalWidthM * MM + 90, fussM * MM);
+    addRect(
+      doc,
+      layerSocle,
+      -45,
+      (visualSocleTopM - deckM) * MM,
+      totalWidthM * MM + 90,
+      deckM * MM
+    );
+    for (let r = 1; r < rustCourses; r++) {
+      const yRust = (fussM + (r / rustCourses) * rumpfM) * MM;
+      addLine(doc, layerSocle, -20, yRust, totalWidthM * MM + 20, yRust);
+    }
   }
 
   // 3. Колоннада нижнего яруса (если включена и не ниже верха цоколя)
@@ -1250,6 +1255,7 @@ export function buildDetailPlateCadDocument(
     addVerticalDimension(doc, layerDims, 0, tcMm, -wallWidthMm - 250, -wallWidthMm, `T_c = ${formatMeters(params.Tc)} м`);
     addHorizontalDimension(doc, layerDims, 0, overhangMm, tcMm + 220, tcMm, `Вынос = ${formatMeters(projM)} м`);
   } else if (plateId === 'socle') {
+    const isSimpleSocle = Boolean(params.isSimpleSocle);
     const effectiveSocleH = params.useFullFloorAsSocle
       ? summary.derivedGeometry.floor1FullHeight
       : params.hSocle;
@@ -1260,29 +1266,34 @@ export function buildDetailPlateCadDocument(
     const deckMm = (deck / totalParts) * totalMm;
     const rumpfMm = Math.max(50, totalMm - fussMm - deckMm);
     const secW = 900;
-    const hasSocleRust = params.hasSocleRustication !== false;
+    const hasSocleRust = !isSimpleSocle && params.hasSocleRustication !== false;
     const nCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
-    addRect(doc, layerGeom, -60, 0, secW + 120, fussMm);
-    addRect(doc, layerGeom, 0, fussMm, secW, rumpfMm);
-    addRect(doc, layerGeom, -45, fussMm + rumpfMm, secW + 90, deckMm);
-    for (let i = 1; i < nCourses; i += 1) {
-      const y = fussMm + (i / nCourses) * rumpfMm;
-      addLine(doc, layerGrid, 0, y, secW, y);
-    }
+    if (isSimpleSocle) {
+      addRect(doc, layerGeom, 0, 0, secW, totalMm);
+      addVerticalDimension(doc, layerDims, 0, totalMm, -320, 0, `h_s = ${formatMeters(effectiveSocleH, 2)} м`);
+    } else {
+      addRect(doc, layerGeom, -60, 0, secW + 120, fussMm);
+      addRect(doc, layerGeom, 0, fussMm, secW, rumpfMm);
+      addRect(doc, layerGeom, -45, fussMm + rumpfMm, secW + 90, deckMm);
+      for (let i = 1; i < nCourses; i += 1) {
+        const y = fussMm + (i / nCourses) * rumpfMm;
+        addLine(doc, layerGrid, 0, y, secW, y);
+      }
 
-    addVerticalDimension(doc, layerDims, 0, fussMm, secW + 280, secW + 60, `Fuß ${formatMeters(fuss, 2)} м`);
-    addVerticalDimension(
-      doc,
-      layerDims,
-      fussMm,
-      fussMm + rumpfMm,
-      secW + 280,
-      secW,
-      hasSocleRust ? `Rumpf (${nCourses} ряд.)` : 'Rumpf (гладкий)'
-    );
-    addVerticalDimension(doc, layerDims, fussMm + rumpfMm, totalMm, secW + 280, secW + 45, `Deck ${formatMeters(deck, 2)} м`);
-    addVerticalDimension(doc, layerDims, 0, totalMm, -320, -60, `h_s = ${formatMeters(effectiveSocleH, 2)} м`);
+      addVerticalDimension(doc, layerDims, 0, fussMm, secW + 280, secW + 60, `Fuß ${formatMeters(fuss, 2)} м`);
+      addVerticalDimension(
+        doc,
+        layerDims,
+        fussMm,
+        fussMm + rumpfMm,
+        secW + 280,
+        secW,
+        hasSocleRust ? `Rumpf (${nCourses} ряд.)` : 'Rumpf (гладкий)'
+      );
+      addVerticalDimension(doc, layerDims, fussMm + rumpfMm, totalMm, secW + 280, secW + 45, `Deck ${formatMeters(deck, 2)} м`);
+      addVerticalDimension(doc, layerDims, 0, totalMm, -320, -60, `h_s = ${formatMeters(effectiveSocleH, 2)} м`);
+    }
   } else {
     // belt
     const beltMeta = BELT_CLASSES.find((c) => c.type === params.beltType) ?? BELT_CLASSES[2];

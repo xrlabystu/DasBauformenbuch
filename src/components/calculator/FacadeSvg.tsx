@@ -672,7 +672,8 @@ export function FacadeSvg({
   const deckPxH = Math.max(3, (summary.threePartSocleResult.deck / partsSum) * plinthPxH);
   const fussPxH = Math.max(3, (summary.threePartSocleResult.fuss / partsSum) * plinthPxH);
   const rumpfPxH = Math.max(4, plinthPxH - deckPxH - fussPxH);
-  const hasSocleRust = params.hasSocleRustication !== false;
+  const isSimpleSocle = Boolean(params.isSimpleSocle);
+  const hasSocleRust = !isSimpleSocle && params.hasSocleRustication !== false;
   const rustCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
 
   // Главный ярус для подробного показа сандрика
@@ -888,9 +889,9 @@ export function FacadeSvg({
             {...violationHoverProps('socle')}
           >
             <rect
-              x={xM(0) - 3}
+              x={isSimpleSocle ? xM(0) : xM(0) - 3}
               y={yFromGroundM(visualSocleTopM)}
-              width={facadePxW + 6}
+              width={isSimpleSocle ? facadePxW : facadePxW + 6}
               height={plinthPxH}
               fill={
                 isHi('socle')
@@ -904,40 +905,44 @@ export function FacadeSvg({
               }
               strokeWidth={isHi('socle') || showViol(socleStatus) ? 1.8 : 1.2}
             />
-            <rect
-              x={xM(0) - 5}
-              y={yFromGroundM(visualSocleTopM)}
-              width={facadePxW + 10}
-              height={deckPxH}
-              fill="#DDD4C0"
-              stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
-              strokeWidth={0.95}
-            />
-            {Array.from({ length: Math.max(0, rustCourses - 1) }).map((_, rIdx) => {
-              const lineY =
-                yFromGroundM(visualSocleTopM) + deckPxH + ((rIdx + 1) / rustCourses) * rumpfPxH;
-              return (
-                <line
-                  key={rIdx}
-                  x1={xM(0) - 2}
-                  y1={lineY}
-                  x2={xM(0) + facadePxW + 2}
-                  y2={lineY}
-                  stroke="#78716C"
-                  strokeOpacity={0.55}
-                  strokeWidth={0.8}
+            {!isSimpleSocle && (
+              <>
+                <rect
+                  x={xM(0) - 5}
+                  y={yFromGroundM(visualSocleTopM)}
+                  width={facadePxW + 10}
+                  height={deckPxH}
+                  fill="#DDD4C0"
+                  stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
+                  strokeWidth={0.95}
                 />
-              );
-            })}
-            <rect
-              x={xM(0) - 5}
-              y={groundY - fussPxH}
-              width={facadePxW + 10}
-              height={fussPxH}
-              fill="#D6CEBE"
-              stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
-              strokeWidth={0.95}
-            />
+                {Array.from({ length: Math.max(0, rustCourses - 1) }).map((_, rIdx) => {
+                  const lineY =
+                    yFromGroundM(visualSocleTopM) + deckPxH + ((rIdx + 1) / rustCourses) * rumpfPxH;
+                  return (
+                    <line
+                      key={rIdx}
+                      x1={xM(0) - 2}
+                      y1={lineY}
+                      x2={xM(0) + facadePxW + 2}
+                      y2={lineY}
+                      stroke="#78716C"
+                      strokeOpacity={0.55}
+                      strokeWidth={0.8}
+                    />
+                  );
+                })}
+                <rect
+                  x={xM(0) - 5}
+                  y={groundY - fussPxH}
+                  width={facadePxW + 10}
+                  height={fussPxH}
+                  fill="#D6CEBE"
+                  stroke={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
+                  strokeWidth={0.95}
+                />
+              </>
+            )}
             <rect
               x={xM(0) + 6}
               y={yFromGroundM(visualSocleTopM / 2) - 6}
@@ -953,7 +958,13 @@ export function FacadeSvg({
               fontFamily="IBM Plex Mono, monospace"
               fill={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
             >
-              Цоколь {formatMeters(effectiveSocleH)} м ({hasSocleRust ? `${summary.rusticationCheck.n} ряд.` : 'гладкий'})
+              Цоколь {formatMeters(effectiveSocleH)} м (
+              {isSimpleSocle
+                ? 'простой'
+                : hasSocleRust
+                  ? `${summary.rusticationCheck.n} ряд.`
+                  : 'гладкий'}
+              )
             </text>
           </g>
 

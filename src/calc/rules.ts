@@ -4468,6 +4468,7 @@ export interface FacadeParameters {
   hMain: number;
   corniceBottomOffsetM?: number;
   hGurt: number;
+  isSimpleSocle?: boolean;
   socleParts: ThreePartSocleParts;
   hPlate: number;
   hOtherSum: number;
@@ -5973,6 +5974,7 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     hSocle: finalHSocle,
     hMain: finalHMain,
     hGurt,
+    isSimpleSocle: false,
     socleParts: { fuss: 0.25, rumpf: 0.55, deck: 0.2 },
     hPlate: 0.16,
     hOtherSum: 0.12,

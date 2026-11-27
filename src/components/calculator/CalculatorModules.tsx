@@ -4672,73 +4672,134 @@ export function CalculatorModules({
 
             {/* Трёхчастность цоколя и доминирование плиты */}
             <CollapsibleSection title="Трёхчастное деление цоколя и плита (S. 10)" badge="эвристика" subtle>
+              {(() => {
+                const isSimpleSocle = Boolean(params.isSimpleSocle);
+                const isSimpleSocleLocked = isParamLocked(lockedParams, 'isSimpleSocle');
+                return (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 border border-[#E5DFD3] bg-[#FBF9F5]">
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="block text-xs font-medium text-[#1C1917]">
+                          {isSimpleSocle
+                            ? 'Простой цоколь активен — отображается единым прямоугольником'
+                            : 'Трёхчастный профиль (Fuß / Rumpf / Deck)'}
+                        </span>
+                        <span className="block text-[11px] text-[#57534E]">
+                          {isSimpleSocle
+                            ? 'Настройки подножия, тела и карниза цоколя отключены.'
+                            : 'Нажмите «Простой цоколь», чтобы убрать трёхчастное деление и рисовать цоколь простым прямоугольником.'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          aria-pressed={isSimpleSocle}
+                          disabled={isSimpleSocleLocked}
+                          onClick={() => onUpdateParams({ isSimpleSocle: !isSimpleSocle })}
+                          className={`px-3 py-1.5 text-xs font-medium border transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                            isSimpleSocle
+                              ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412] hover:bg-[#7C2D12]'
+                              : 'bg-[#FBF9F5] text-[#1C1917] border-[#1C1917]/40 hover:bg-[#EAE3D5]'
+                          }`}
+                        >
+                          Простой цоколь
+                        </button>
+                        <LockToggleButton
+                          lockKey="isSimpleSocle"
+                          locked={isSimpleSocleLocked}
+                          onToggleLock={onToggleLock}
+                          label="Простой цоколь"
+                        />
+                      </div>
+                    </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <MeterControl
-                  id="calc-part-fuss"
-                  label="Подножие (Fuß)"
-                  value={params.socleParts.fuss * 100}
-                  min={10}
-                  max={45}
-                  step={1}
-                  unit="%"
-                  lockKey="socleParts.fuss"
-                  locked={isParamLocked(lockedParams, 'socleParts.fuss')}
-                  onToggleLock={onToggleLock}
-                  onChange={(pct) =>
-                    onUpdateParams({ socleParts: { ...params.socleParts, fuss: pct / 100 } })
-                  }
-                />
-                <MeterControl
-                  id="calc-part-rumpf"
-                  label="Тело (Rumpf)"
-                  value={params.socleParts.rumpf * 100}
-                  min={25}
-                  max={75}
-                  step={1}
-                  unit="%"
-                  lockKey="socleParts.rumpf"
-                  locked={isParamLocked(lockedParams, 'socleParts.rumpf')}
-                  onToggleLock={onToggleLock}
-                  onChange={(pct) =>
-                    onUpdateParams({ socleParts: { ...params.socleParts, rumpf: pct / 100 } })
-                  }
-                />
-                <MeterControl
-                  id="calc-part-deck"
-                  label="Карниз (Deck)"
-                  value={params.socleParts.deck * 100}
-                  min={10}
-                  max={40}
-                  step={1}
-                  unit="%"
-                  lockKey="socleParts.deck"
-                  locked={isParamLocked(lockedParams, 'socleParts.deck')}
-                  onToggleLock={onToggleLock}
-                  onChange={(pct) =>
-                    onUpdateParams({ socleParts: { ...params.socleParts, deck: pct / 100 } })
-                  }
-                />
-              </div>
+                    <div className={`grid grid-cols-1 sm:grid-cols-3 gap-3 ${isSimpleSocle ? 'opacity-50' : ''}`}>
+                      <MeterControl
+                        id="calc-part-fuss"
+                        label="Подножие (Fuß)"
+                        value={params.socleParts.fuss * 100}
+                        min={10}
+                        max={45}
+                        step={1}
+                        unit="%"
+                        disabled={isSimpleSocle}
+                        lockKey="socleParts.fuss"
+                        locked={isParamLocked(lockedParams, 'socleParts.fuss')}
+                        onToggleLock={onToggleLock}
+                        onChange={(pct) =>
+                          onUpdateParams({ socleParts: { ...params.socleParts, fuss: pct / 100 } })
+                        }
+                      />
+                      <MeterControl
+                        id="calc-part-rumpf"
+                        label="Тело (Rumpf)"
+                        value={params.socleParts.rumpf * 100}
+                        min={25}
+                        max={75}
+                        step={1}
+                        unit="%"
+                        disabled={isSimpleSocle}
+                        lockKey="socleParts.rumpf"
+                        locked={isParamLocked(lockedParams, 'socleParts.rumpf')}
+                        onToggleLock={onToggleLock}
+                        onChange={(pct) =>
+                          onUpdateParams({ socleParts: { ...params.socleParts, rumpf: pct / 100 } })
+                        }
+                      />
+                      <MeterControl
+                        id="calc-part-deck"
+                        label="Карниз (Deck)"
+                        value={params.socleParts.deck * 100}
+                        min={10}
+                        max={40}
+                        step={1}
+                        unit="%"
+                        disabled={isSimpleSocle}
+                        lockKey="socleParts.deck"
+                        locked={isParamLocked(lockedParams, 'socleParts.deck')}
+                        onToggleLock={onToggleLock}
+                        onChange={(pct) =>
+                          onUpdateParams({ socleParts: { ...params.socleParts, deck: pct / 100 } })
+                        }
+                      />
+                    </div>
 
-              <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
-                <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C]">Fuß</span>
-                  <strong>{formatMeters(summary.threePartSocleResult.fuss)} м</strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C]">Rumpf</span>
-                  <strong>{formatMeters(summary.threePartSocleResult.rumpf)} м</strong>
-                </div>
-                <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C]">Deckgesims</span>
-                  <strong>{formatMeters(summary.threePartSocleResult.deck)} м</strong>
-                </div>
-              </div>
+                    {isSimpleSocle ? (
+                      <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5] font-mono tabular-nums text-xs text-[#57534E]">
+                        Простой цоколь: единый прямоугольник высотой{' '}
+                        <strong>
+                          {formatMeters(
+                            params.useFullFloorAsSocle
+                              ? summary.derivedGeometry.floor1FullHeight
+                              : params.hSocle
+                          )}{' '}
+                          м
+                        </strong>{' '}
+                        (без деления на Fuß, Rumpf и Deck).
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
+                        <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                          <span className="block text-[10px] text-[#78716C]">Fuß</span>
+                          <strong>{formatMeters(summary.threePartSocleResult.fuss)} м</strong>
+                        </div>
+                        <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                          <span className="block text-[10px] text-[#78716C]">Rumpf</span>
+                          <strong>{formatMeters(summary.threePartSocleResult.rumpf)} м</strong>
+                        </div>
+                        <div className="p-2 border border-[#E5DFD3] bg-[#FBF9F5]">
+                          <span className="block text-[10px] text-[#78716C]">Deckgesims</span>
+                          <strong>{formatMeters(summary.threePartSocleResult.deck)} м</strong>
+                        </div>
+                      </div>
+                    )}
 
-              {!isExamBlind && (
-                <p className="text-[11px] text-[#57534E]">{summary.threePartSocleResult.note}</p>
-              )}
+                    {!isExamBlind && (
+                      <p className="text-[11px] text-[#57534E]">{summary.threePartSocleResult.note}</p>
+                    )}
+                  </>
+                );
+              })()}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E5DFD3]">
                 <MeterControl
