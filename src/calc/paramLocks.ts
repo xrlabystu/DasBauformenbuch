@@ -10,6 +10,12 @@ import {
   type FacadeParameters,
   type ThreePartSocleParts,
 } from './rules';
+import {
+  captureBrickMasonryBaseArch,
+  coordinateFacadeWithBrickMasonry,
+  restoreBrickMasonryBaseArch,
+  sanitizeBrickParams,
+} from './brickMasonry';
 
 export type LockedParamsMap = Record<string, boolean>;
 
@@ -379,6 +385,114 @@ export function computeNextFacadeParams(
     next.windowSillHeights = Array.from({ length: next.levels.floors.length }, (_, idx) =>
       idx < next.windowSillHeights!.length ? next.windowSillHeights![idx] : undefined
     );
+  }
+
+  // Режим «Лицевая кирпичная кладка»: модульная координация размеров с точностью до 1 мм
+  const wasBrickEnabled = Boolean(prev.brickMasonry?.enabled);
+  const willBrickEnabled = Boolean(next.brickMasonry?.enabled);
+
+  if (!wasBrickEnabled && willBrickEnabled) {
+    const baseArch = captureBrickMasonryBaseArch(next);
+    return coordinateFacadeWithBrickMasonry(next, baseArch, lockedParams).coordinatedParams;
+  }
+
+  if (wasBrickEnabled && !willBrickEnabled) {
+    const cleanBrick = sanitizeBrickParams(next.brickMasonry?.brick ?? prev.brickMasonry?.brick);
+    const restored = prev.brickMasonry?.baseArch
+      ? restoreBrickMasonryBaseArch(next, prev.brickMasonry.baseArch, lockedParams)
+      : next;
+    return {
+      ...restored,
+      brickMasonry: {
+        enabled: false,
+        brick: cleanBrick,
+      },
+    };
+  }
+
+  if (wasBrickEnabled && willBrickEnabled) {
+    const incomingBaseArch = rawPatch.brickMasonry?.baseArch;
+    let baseArch = incomingBaseArch
+      ? {
+          ...incomingBaseArch,
+          levels: {
+            groundToFloor1: incomingBaseArch.levels.groundToFloor1,
+            floors: incomingBaseArch.levels.floors.map((fl) => ({ ...fl })),
+            ...(incomingBaseArch.levels.manualTotalHeight !== undefined
+              ? { manualTotalHeight: incomingBaseArch.levels.manualTotalHeight }
+              : {}),
+          },
+        }
+      : prev.brickMasonry?.baseArch
+        ? {
+            ...prev.brickMasonry.baseArch,
+            levels: {
+              groundToFloor1: prev.brickMasonry.baseArch.levels.groundToFloor1,
+              floors: prev.brickMasonry.baseArch.levels.floors.map((fl) => ({ ...fl })),
+              ...(prev.brickMasonry.baseArch.levels.manualTotalHeight !== undefined
+                ? { manualTotalHeight: prev.brickMasonry.baseArch.levels.manualTotalHeight }
+                : {}),
+            },
+          }
+        : captureBrickMasonryBaseArch(prev);
+
+    if (patch.buildingType !== undefined && patch.buildingType !== prev.buildingType) {
+      baseArch = captureBrickMasonryBaseArch(next);
+    } else {
+      if (patch.A !== undefined) baseArch.A = next.A;
+      if (patch.w !== undefined) baseArch.w = next.w;
+      if (patch.h !== undefined) baseArch.h = next.h;
+      if (patch.k_D !== undefined) baseArch.k_D = next.k_D;
+      if (patch.isRisalitCentered !== undefined) baseArch.isRisalitCentered = next.isRisalitCentered;
+      if (patch.risalitWidth !== undefined) baseArch.risalitWidth = next.risalitWidth;
+      if (patch.hSocle !== undefined) baseArch.hSocle = next.hSocle;
+      if (patch.useFullFloorAsSocle !== undefined) {
+        baseArch.useFullFloorAsSocle = next.useFullFloorAsSocle;
+      }
+      if (patch.hMain !== undefined) baseArch.hMain = next.hMain;
+      if (patch.hGurt !== undefined) baseArch.hGurt = next.hGurt;
+      if (
+        patch.corniceBottomOffsetM !== undefined ||
+        ('corniceBottomOffsetM' in rawPatch && rawPatch.corniceBottomOffsetM === undefined)
+      ) {
+        baseArch.corniceBottomOffsetM = next.corniceBottomOffsetM;
+      }
+      if (patch.hasEntrance !== undefined) baseArch.hasEntrance = next.hasEntrance;
+      if (patch.entranceWidthM !== undefined) baseArch.entranceWidthM = next.entranceWidthM;
+      if (patch.entranceHeightM !== undefined) baseArch.entranceHeightM = next.entranceHeightM;
+      if (patch.entranceBottomM !== undefined) baseArch.entranceBottomM = next.entranceBottomM;
+      if (
+        patch.ordinaryPierAxisSpacings !== undefined ||
+        ('ordinaryPierAxisSpacings' in rawPatch && rawPatch.ordinaryPierAxisSpacings === undefined)
+      ) {
+        baseArch.ordinaryPierAxisSpacings = next.ordinaryPierAxisSpacings
+          ? [...next.ordinaryPierAxisSpacings]
+          : undefined;
+      }
+      if (patch.windowSillHeights !== undefined) {
+        baseArch.windowSillHeights = next.windowSillHeights
+          ? [...next.windowSillHeights]
+          : undefined;
+      }
+      if (patch.levels !== undefined || patch.floors !== undefined || patch.H !== undefined) {
+        baseArch.levels = {
+          groundToFloor1: next.levels.groundToFloor1,
+          floors: next.levels.floors.map((fl) => ({ ...fl })),
+          ...(next.levels.manualTotalHeight !== undefined
+            ? { manualTotalHeight: next.levels.manualTotalHeight }
+            : {}),
+        };
+        baseArch.H = next.H;
+        if (baseArch.windowSillHeights && baseArch.windowSillHeights.length !== next.levels.floors.length) {
+          baseArch.windowSillHeights = Array.from(
+            { length: next.levels.floors.length },
+            (_, idx) => baseArch.windowSillHeights?.[idx]
+          );
+        }
+      }
+    }
+
+    return coordinateFacadeWithBrickMasonry(next, baseArch, lockedParams).coordinatedParams;
   }
 
   return next;

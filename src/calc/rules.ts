@@ -1,4 +1,5 @@
 import rulesDataJson from './rulesData.json';
+import type { BrickMasonryConfig } from './brickMasonry';
 
 export type ValidationStatus = 'ok' | 'approx' | 'violation';
 
@@ -4534,6 +4535,7 @@ export interface FacadeParameters {
   columnProfileType: ColumnProfileType;
   pedimentType: PedimentType;
   pedimentClassical: boolean;
+  brickMasonry?: BrickMasonryConfig;
 }
 
 export interface SummaryCheckItem {
@@ -6039,5 +6041,9 @@ export function createDefaultParamsForTypology(type: BuildingTypeId): FacadePara
     columnProfileType: 'none',
     pedimentType: 'none',
     pedimentClassical: false,
+    brickMasonry: {
+      enabled: false,
+      brick: { L: 250, W: 120, H: 65, Jh: 10, Jv: 10 },
+    },
   };
 }

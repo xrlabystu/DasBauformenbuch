@@ -24,6 +24,7 @@ import {
   countLockedParams,
   type LockedParamsMap,
 } from '../calc/paramLocks';
+import { DEFAULT_BRICK_MASONRY_PARAMS } from '../calc/brickMasonry';
 import type { RuleBookExcerpt } from '../calc/ruleBookRefs';
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../utils/termHighlight';
 import { FacadeSvg } from './calculator/FacadeSvg';
@@ -267,7 +268,17 @@ export function FacadeCalculatorPage({
 
   const handleChangeBuildingType = (type: BuildingTypeId) => {
     const preset = createDefaultParamsForTypology(type);
-    handleUpdateParams(preset);
+    if (params.brickMasonry?.enabled) {
+      handleUpdateParams({
+        ...preset,
+        brickMasonry: {
+          enabled: true,
+          brick: params.brickMasonry.brick,
+        },
+      });
+    } else {
+      handleUpdateParams(preset);
+    }
   };
 
   const handleResetToBookExample = () => {
@@ -615,6 +626,32 @@ export function FacadeCalculatorPage({
               )}
               <button
                 type="button"
+                aria-pressed={Boolean(params.brickMasonry?.enabled)}
+                onClick={() => {
+                  const currentBrick =
+                    params.brickMasonry?.brick ?? DEFAULT_BRICK_MASONRY_PARAMS;
+                  const nextEnabled = !params.brickMasonry?.enabled;
+                  handleUpdateParams({
+                    brickMasonry: {
+                      enabled: nextEnabled,
+                      brick: currentBrick,
+                    },
+                  });
+                  if (nextEnabled) setActiveModule('masonry');
+                }}
+                title="Модульная координация фасада под лицевую кирпичную кладку без подрезки кирпича"
+                className={`px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap shrink-0 ${
+                  params.brickMasonry?.enabled
+                    ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                    : 'bg-[#FBF9F5] text-[#44403C] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                }`}
+              >
+                {params.brickMasonry?.enabled
+                  ? 'Кирпичная кладка: вкл.'
+                  : 'Лицевая кирпичная кладка'}
+              </button>
+              <button
+                type="button"
                 onClick={handleResetToBookExample}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
               >
@@ -694,64 +731,74 @@ export function FacadeCalculatorPage({
 
               {/* Compact Tabular Readout Strip */}
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono tabular-nums text-xs">
-                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Шаг осей A</span>
-                  <strong className="text-sm text-[#1C1917]">{formatMeters(params.A)} м</strong>
-                  <span className="block text-[11px] text-[#57534E]">
-                    A:H = {formatMeters(summary.ahCheck.ratio, 3)}
-                  </span>
-                </div>
-                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">
-                    {params.withFraming ? 'Чистый простенок p_c' : 'Простенок p'}
-                  </span>
-                  <strong className="text-sm text-[#1C1917]">
-                    {formatMeters(
-                      'p_c' in summary.pierResult ? summary.pierResult.p_c : summary.pierResult.p
-                    )}{' '}
-                    м
-                  </strong>
-                  <span className="block text-[11px] text-[#57534E]">
-                    {params.withFraming
-                      ? `w_v = ${formatMeters(params.w + 2 * params.u)} м`
-                      : `w = ${formatMeters(params.w)} м`}
-                  </span>
-                </div>
-                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Угол p_corner</span>
-                  <strong className="text-sm text-[#1C1917]">
-                    {formatMeters(summary.cornerCheck.p_corner)} м
-                  </strong>
-                  <span className="block text-[11px] text-[#57534E]">
-                    D = {formatMeters(summary.cornerCheck.D)} м
-                  </span>
-                </div>
-                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Окно w × h</span>
-                  <strong className="text-sm text-[#1C1917]">
-                    {formatMeters(params.w, 2)} × {formatMeters(params.h, 2)}
-                  </strong>
-                  <span className="block text-[11px] text-[#57534E]">
-                    {isExamBlind
-                      ? `w:h = 1:${formatMeters(params.h / Math.max(0.1, params.w), 2)}`
-                      : `ближ. ${summary.windowCheck.nearestApprox.spec.label}`}
-                  </span>
-                </div>
-                <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
-                  <span className="block text-[10px] text-[#78716C] uppercase">Цоколь / H_зд</span>
-                  <strong className="text-sm text-[#1C1917]">
-                    {formatMeters(
-                      params.useFullFloorAsSocle
-                        ? summary.derivedGeometry.floor1FullHeight
-                        : params.hSocle,
-                      2
-                    )}{' '}
-                    м
-                  </strong>
-                  <span className="block text-[11px] text-[#57534E]">
-                    H_зд={formatMeters(summary.derivedGeometry.totalHeight, 2)} · H_max={formatMeters(summary.derivedGeometry.H_max, 2)}
-                  </span>
-                </div>
+                {(() => {
+                  const dDec = params.brickMasonry?.enabled ? 3 : 2;
+                  return (
+                    <>
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Шаг осей A</span>
+                        <strong className="text-sm text-[#1C1917]">{formatMeters(params.A, dDec)} м</strong>
+                        <span className="block text-[11px] text-[#57534E]">
+                          A:H = {formatMeters(summary.ahCheck.ratio, 3)}
+                        </span>
+                      </div>
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">
+                          {params.withFraming ? 'Чистый простенок p_c' : 'Простенок p'}
+                        </span>
+                        <strong className="text-sm text-[#1C1917]">
+                          {formatMeters(
+                            'p_c' in summary.pierResult
+                              ? summary.pierResult.p_c
+                              : summary.pierResult.p,
+                            dDec
+                          )}{' '}
+                          м
+                        </strong>
+                        <span className="block text-[11px] text-[#57534E]">
+                          {params.withFraming
+                            ? `w_v = ${formatMeters(params.w + 2 * params.u, dDec)} м`
+                            : `w = ${formatMeters(params.w, dDec)} м`}
+                        </span>
+                      </div>
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Угол p_corner</span>
+                        <strong className="text-sm text-[#1C1917]">
+                          {formatMeters(summary.cornerCheck.p_corner, dDec)} м
+                        </strong>
+                        <span className="block text-[11px] text-[#57534E]">
+                          D = {formatMeters(summary.cornerCheck.D, dDec)} м
+                        </span>
+                      </div>
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Окно w × h</span>
+                        <strong className="text-sm text-[#1C1917]">
+                          {formatMeters(params.w, dDec)} × {formatMeters(params.h, dDec)}
+                        </strong>
+                        <span className="block text-[11px] text-[#57534E]">
+                          {isExamBlind
+                            ? `w:h = 1:${formatMeters(params.h / Math.max(0.1, params.w), 2)}`
+                            : `ближ. ${summary.windowCheck.nearestApprox.spec.label}`}
+                        </span>
+                      </div>
+                      <div className="p-3 border border-[#E5DFD3] bg-[#FBF9F5]">
+                        <span className="block text-[10px] text-[#78716C] uppercase">Цоколь / H_зд</span>
+                        <strong className="text-sm text-[#1C1917]">
+                          {formatMeters(
+                            params.useFullFloorAsSocle
+                              ? summary.derivedGeometry.floor1FullHeight
+                              : params.hSocle,
+                            dDec
+                          )}{' '}
+                          м
+                        </strong>
+                        <span className="block text-[11px] text-[#57534E]">
+                          H_зд={formatMeters(summary.derivedGeometry.totalHeight, dDec)} · H_max={formatMeters(summary.derivedGeometry.H_max, dDec)}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               {isExamBlind ? (

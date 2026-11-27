@@ -699,6 +699,13 @@ export function buildFacadeCadDocument(
   // Вертикальная связующая линия цепочки отметок (от уровня земли до верха цепочки)
   addLine(doc, layerDims, leftChainX, 0, leftChainX, chainTopMm);
 
+  const isBrickMasonry = Boolean(params.brickMasonry?.enabled);
+  const dDec = isBrickMasonry ? 3 : 2;
+  const brickNote =
+    isBrickMasonry && params.brickMasonry?.brick
+      ? ` | Кирпичная кладка ${params.brickMasonry.brick.L}×${params.brickMasonry.brick.W}×${params.brickMasonry.brick.H} (швы ${params.brickMasonry.brick.Jh}/${params.brickMasonry.brick.Jv} мм)`
+      : '';
+
   // Отметка уровня земли (отрицательная относительно пола 1-го этажа)
   addLine(doc, layerDims, leftShelfX, 0, 0, 0);
   addLine(doc, layerDims, leftChainX - tickSz, -tickSz, leftChainX + tickSz, tickSz);
@@ -715,7 +722,7 @@ export function buildFacadeCadDocument(
   addText(
     doc,
     layerDims,
-    `-${formatMeters(datum0M, 2)} (земля)`,
+    `-${formatMeters(datum0M, dDec)} (земля)`,
     leftChainX - 100,
     -175,
     120,
@@ -730,7 +737,11 @@ export function buildFacadeCadDocument(
     const yLvlMm = lvlM * MM;
     const relM = lvlM - datum0M;
     const elevLabel =
-      Math.abs(relM) < 0.005 ? '0.00' : `+${formatMeters(relM, 2)}`;
+      Math.abs(relM) < 0.0005
+        ? isBrickMasonry
+          ? '0.000'
+          : '0.00'
+        : `+${formatMeters(relM, dDec)}`;
 
     addLine(doc, layerDims, leftShelfX, yLvlMm, 0, yLvlMm);
     addLine(doc, layerDims, leftChainX - tickSz, yLvlMm - tickSz, leftChainX + tickSz, yLvlMm + tickSz);
@@ -754,7 +765,11 @@ export function buildFacadeCadDocument(
     const yCeilingMm = topFloorCeilingM * MM;
     const relCeilM = topFloorCeilingM - datum0M;
     const ceilLabel =
-      Math.abs(relCeilM) < 0.005 ? '0.00' : `+${formatMeters(relCeilM, 2)}`;
+      Math.abs(relCeilM) < 0.0005
+        ? isBrickMasonry
+          ? '0.000'
+          : '0.00'
+        : `+${formatMeters(relCeilM, dDec)}`;
     addLine(doc, layerDims, 0, yCeilingMm, totalWidthM * MM, yCeilingMm);
     addText(
       doc,
@@ -772,7 +787,11 @@ export function buildFacadeCadDocument(
     const yCorniceBotMm = corniceBottomM * MM;
     const relBotM = corniceBottomM - datum0M;
     const botLabel =
-      Math.abs(relBotM) < 0.005 ? '0.00' : `+${formatMeters(relBotM, 2)}`;
+      Math.abs(relBotM) < 0.0005
+        ? isBrickMasonry
+          ? '0.000'
+          : '0.00'
+        : `+${formatMeters(relBotM, dDec)}`;
     addLine(doc, layerDims, leftShelfX - 200, yCorniceBotMm, 0, yCorniceBotMm);
     addLine(
       doc,
@@ -792,7 +811,7 @@ export function buildFacadeCadDocument(
   floorOffsetsM.forEach((floorStartM, flIdx) => {
     const flH = floorHeightsM[flIdx] ?? safeH;
     const midYMm = (floorStartM + flH / 2) * MM;
-    addText(doc, layerDims, `${formatMeters(flH, 2)} м`, leftChainX - 100, midYMm, 115, {
+    addText(doc, layerDims, `${formatMeters(flH, dDec)} м`, leftChainX - 100, midYMm, 115, {
       hAlign: TextHorizontalAlignment.Right,
       vAlign: TextVerticalAlignmentType.Middle,
     });
@@ -830,7 +849,7 @@ export function buildFacadeCadDocument(
     axesM[0] * MM,
     topDimY,
     wallTopM * MM,
-    `D = ${formatMeters(D, 2)} м`
+    `D = ${formatMeters(D, dDec)} м`
   );
   if (axesM.length >= 2) {
     if (!hasVariedAxisSteps) {
@@ -841,7 +860,7 @@ export function buildFacadeCadDocument(
         axesM[1] * MM,
         topDimY,
         wallTopM * MM,
-        `A = ${formatMeters(safeA, 2)} м`
+        `A = ${formatMeters(safeA, dDec)} м`
       );
     } else {
       axisStepsM.forEach((stepM, idx) => {
@@ -852,7 +871,7 @@ export function buildFacadeCadDocument(
           axesM[idx + 1] * MM,
           topDimY,
           wallTopM * MM,
-          `A${idx + 1} = ${formatMeters(stepM, 2)} м`
+          `A${idx + 1} = ${formatMeters(stepM, dDec)} м`
         );
       });
     }
@@ -864,7 +883,7 @@ export function buildFacadeCadDocument(
     totalWidthM * MM,
     topDimY + 480,
     wallTopM * MM,
-    `W = ${formatMeters(totalWidthM, 2)} м`
+    `W = ${formatMeters(totalWidthM, dDec)} м`
   );
 
   // Нижние размеры: p_cor, w / w_v, p / p_c
@@ -880,7 +899,7 @@ export function buildFacadeCadDocument(
     (axesM[0] - safeW / 2 - effectiveU) * MM,
     botDimY1,
     0,
-    `p_cor = ${formatMeters(p_corner, 2)} м`
+    `p_cor = ${formatMeters(p_corner, dDec)} м`
   );
   addHorizontalDimension(
     doc,
@@ -890,8 +909,8 @@ export function buildFacadeCadDocument(
     botDimY2,
     0,
     params.withFraming
-      ? `w_v = ${formatMeters(w_v, 2)} (w=${formatMeters(safeW, 2)}) м`
-      : `w = ${formatMeters(safeW, 2)} м`
+      ? `w_v = ${formatMeters(w_v, dDec)} (w=${formatMeters(safeW, dDec)}) м`
+      : `w = ${formatMeters(safeW, dDec)} м`
   );
   if (axesM.length >= 2) {
     if (!hasVariedAxisSteps) {
@@ -903,8 +922,8 @@ export function buildFacadeCadDocument(
         botDimY1,
         0,
         params.withFraming
-          ? `p_c = ${formatMeters(p_inter, 2)} м`
-          : `p = ${formatMeters(p_inter, 2)} м`
+          ? `p_c = ${formatMeters(p_inter, dDec)} м`
+          : `p = ${formatMeters(p_inter, dDec)} м`
       );
     } else {
       axisStepsM.forEach((stepM, idx) => {
@@ -917,8 +936,8 @@ export function buildFacadeCadDocument(
           botDimY1,
           0,
           params.withFraming
-            ? `p_c${idx + 1} = ${formatMeters(pierW, 2)} м`
-            : `p${idx + 1} = ${formatMeters(pierW, 2)} м`
+            ? `p_c${idx + 1} = ${formatMeters(pierW, dDec)} м`
+            : `p${idx + 1} = ${formatMeters(pierW, dDec)} м`
         );
       });
     }
@@ -942,8 +961,8 @@ export function buildFacadeCadDocument(
       const distM = toM - fromM;
       const isInnerPierStep = segIdx > 0 && segIdx < nodesM.length - 2;
       const label = isInnerPierStep
-        ? `A_п = ${formatMeters(distM, 2)} м`
-        : `${formatMeters(distM, 2)} м`;
+        ? `A_п = ${formatMeters(distM, dDec)} м`
+        : `${formatMeters(distM, dDec)} м`;
       addHorizontalDimension(
         doc,
         layerDims,
@@ -966,7 +985,7 @@ export function buildFacadeCadDocument(
     visualSocleTopM * MM,
     rightDimX1,
     totalWidthM * MM,
-    `h_s = ${formatMeters(effectiveSocleH, 2)} м`
+    `h_s = ${formatMeters(effectiveSocleH, dDec)} м`
   );
   if (!params.useFullFloorAsSocle) {
     addVerticalDimension(
@@ -976,7 +995,7 @@ export function buildFacadeCadDocument(
       (floorOffsetsM[0] + floorHeightsM[0]) * MM,
       rightDimX1,
       totalWidthM * MM,
-      `H = ${formatMeters(safeH, 2)} м`
+      `H = ${formatMeters(safeH, dDec)} м`
     );
   }
   addVerticalDimension(
@@ -986,7 +1005,7 @@ export function buildFacadeCadDocument(
     corniceTopM * MM,
     rightDimX1,
     totalWidthM * MM,
-    `h_гк = ${formatMeters(corniceM, 2)} м`
+    `h_гк = ${formatMeters(corniceM, dDec)} м`
   );
   addVerticalDimension(
     doc,
@@ -995,7 +1014,7 @@ export function buildFacadeCadDocument(
     corniceTopM * MM,
     rightDimX2,
     totalWidthM * MM,
-    `H_зд = ${formatMeters(totalHeightM, 2)} м`
+    `H_зд = ${formatMeters(totalHeightM, dDec)} м`
   );
 
   // 10. Подпись чертежа и сводка параметров снизу
@@ -1011,7 +1030,7 @@ export function buildFacadeCadDocument(
   addText(
     doc,
     layerNotes,
-    `W = ${formatMeters(totalWidthM, 2)} м | H_зд = ${formatMeters(totalHeightM, 2)} м | A:H = ${formatMeters(summary.ahCheck.ratio, 3)} | Окно = ${formatMeters(safeW, 2)} x ${formatMeters(safeWinH, 2)} м | Гл. карниз = ${formatMeters(corniceM, 2)} м`,
+    `W = ${formatMeters(totalWidthM, dDec)} м | H_зд = ${formatMeters(totalHeightM, dDec)} м | A:H = ${formatMeters(summary.ahCheck.ratio, 3)} | Окно = ${formatMeters(safeW, dDec)} x ${formatMeters(safeWinH, dDec)} м | Гл. карниз = ${formatMeters(corniceM, dDec)} м${brickNote}`,
     0,
     footerY - 300,
     135

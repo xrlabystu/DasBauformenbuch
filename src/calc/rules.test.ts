@@ -143,6 +143,15 @@ import {
   isExamBlindState,
   stripExamNormHints,
 } from './examMode.ts';
+import {
+  BRICK_MASONRY_TECH_WARNING,
+  DEFAULT_BRICK_MASONRY_PARAMS,
+  calcHorizontalModuleMm,
+  calcHorizontalOpeningMm,
+  calcVerticalModuleH1Mm,
+  calcVerticalModuleH2Mm,
+  coordinateFacadeWithBrickMasonry,
+} from './brickMasonry.ts';
 import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
@@ -2479,6 +2488,162 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     // Замок на isSimpleSocle защищает от изменения
     const locked = computeNextFacadeParams(simple, { isSimpleSocle: false }, { isSimpleSocle: true });
     assert.equal(locked.isSimpleSocle, true);
+  });
+
+  it('54. Лицевая кирпичная кладка: горизонтальная и вертикальная модульные формулы, проёмы и пересчёт для нестандартного кирпича', () => {
+    const b = DEFAULT_BRICK_MASONRY_PARAMS; // L=250, W=120, H=65, Jh=10, Jv=10
+    assert.equal(calcHorizontalModuleMm(0.5, b), 120);
+    assert.equal(calcHorizontalModuleMm(1, b), 250);
+    assert.equal(calcHorizontalModuleMm(1.5, b), 380);
+    assert.equal(calcHorizontalModuleMm(2, b), 510);
+    assert.equal(calcHorizontalModuleMm(2.5, b), 640);
+    assert.equal(calcHorizontalModuleMm(3, b), 770);
+    assert.equal(calcHorizontalModuleMm(58, b), 15070);
+    assert.equal(calcHorizontalModuleMm(72, b), 18710);
+
+    // Проёмы между простенками: S(m) + 2*Jv (4 мод = 1050 мм, 6 мод = 1570 мм)
+    assert.equal(calcHorizontalOpeningMm(4, b), 1050);
+    assert.equal(calcHorizontalOpeningMm(6, b), 1570);
+
+    // Сумма простенков и проёмов примера из таблицы (стр. 1): 1290+1050+1290+1050+2070+1570+2070+1050+1290+1050+1290 = 15070
+    const sumFacadeMm =
+      calcHorizontalModuleMm(5, b) +
+      calcHorizontalOpeningMm(4, b) +
+      calcHorizontalModuleMm(5, b) +
+      calcHorizontalOpeningMm(4, b) +
+      calcHorizontalModuleMm(8, b) +
+      calcHorizontalOpeningMm(6, b) +
+      calcHorizontalModuleMm(8, b) +
+      calcHorizontalOpeningMm(4, b) +
+      calcHorizontalModuleMm(5, b) +
+      calcHorizontalOpeningMm(4, b) +
+      calcHorizontalModuleMm(5, b);
+    assert.equal(sumFacadeMm, 15070);
+
+    // Вертикальная система: H1 = N*(H+Jh), H2 = H1 - H
+    assert.equal(calcVerticalModuleH1Mm(1, b), 75);
+    assert.equal(calcVerticalModuleH2Mm(1, b), 10);
+    assert.equal(calcVerticalModuleH1Mm(2, b), 150);
+    assert.equal(calcVerticalModuleH2Mm(2, b), 85);
+    assert.equal(calcVerticalModuleH1Mm(3, b), 225);
+    assert.equal(calcVerticalModuleH2Mm(3, b), 160);
+    assert.equal(calcVerticalModuleH1Mm(4, b), 300);
+    assert.equal(calcVerticalModuleH2Mm(4, b), 235);
+    assert.equal(calcVerticalModuleH1Mm(5, b), 375);
+    assert.equal(calcVerticalModuleH2Mm(5, b), 310);
+
+    // Динамический расчёт при произвольных параметрах кирпича (без зашитых таблиц)
+    const customBrick = { L: 240, W: 115, H: 71, Jh: 12, Jv: 10 };
+    assert.equal(calcHorizontalModuleMm(0.5, customBrick), 115);
+    assert.equal(calcHorizontalModuleMm(1, customBrick), 240);
+    assert.equal(calcHorizontalModuleMm(1.5, customBrick), 365); // 1*(240+10)+115
+    assert.equal(calcHorizontalOpeningMm(4, customBrick), 4 * 240 + 3 * 10 + 20); // 1010
+    assert.equal(calcVerticalModuleH1Mm(3, customBrick), 3 * (71 + 12)); // 249
+    assert.equal(calcVerticalModuleH2Mm(3, customBrick), 249 - 71); // 178
+  });
+
+  it('55. Режим «Лицевая кирпичная кладка»: полная координация фасада (1 мм), сохранность slabThickness, симметрия, отчёт и откат при выключении', () => {
+    const base = createDefaultParamsForTypology('urban_house');
+    const originalSlabs = base.levels.floors.map((fl) => fl.slabThickness);
+    const baseWithEntryAndCustomAxes = computeNextFacadeParams(
+      {
+        ...base,
+        axesCount: 5,
+        hasEntrance: true,
+        entranceWidthM: 1.42,
+        entranceHeightM: 2.55,
+        ordinaryPierAxisSpacings: [2.83, 3.31, 2.83],
+      },
+      {},
+      {}
+    );
+
+    // Включаем режим кирпичной кладки
+    const enabled = computeNextFacadeParams(
+      baseWithEntryAndCustomAxes,
+      {
+        brickMasonry: {
+          enabled: true,
+          brick: { ...DEFAULT_BRICK_MASONRY_PARAMS },
+        },
+      },
+      {}
+    );
+
+    assert.equal(enabled.brickMasonry?.enabled, true);
+    assert.ok(enabled.brickMasonry?.baseArch);
+
+    // 1. Толщины перекрытий (конструктивные несущие слои) НЕ изменяются
+    enabled.levels.floors.forEach((fl, idx) => {
+      assertClose(fl.slabThickness, originalSlabs[idx]);
+    });
+
+    // 2. Горизонтальная точность 1 мм: w = S(m)+2*Jv, простенки = S(m), симметрия сохраняется
+    const wMm = Math.round(enabled.w * 1000);
+    assert.equal((wMm - 20 + 10) % 130, 0); // (w - 2*Jv + Jv) должно делиться на 130 или 130+120
+    const steps = resolveWindowAxisStepsM(enabled);
+    assert.equal(steps.length, 4);
+    assertClose(steps[0], steps[3]);
+    assertClose(steps[1], steps[2]);
+    for (const s of steps) {
+      const pierMm = Math.round(s * 1000) - wMm;
+      const rem = (pierMm + 10) % 130;
+      assert.ok(rem === 0 || rem === 120 || pierMm === 120, `Pier ${pierMm}mm must match horizontal module`);
+    }
+
+    // 3. Вертикальные отметки H2 и высоты H1 согласованы с 75 / 65 мм
+    const hMm = Math.round(enabled.h * 1000);
+    assert.equal(hMm % 75, 0);
+    const hSocleMm = Math.round(enabled.hSocle * 1000);
+    assert.equal((hSocleMm + 65) % 75, 0);
+    const hMainMm = Math.round(enabled.hMain * 1000);
+    assert.equal(hMainMm % 75, 0);
+    const g1Mm = Math.round(enabled.levels.groundToFloor1 * 1000);
+    assert.equal(g1Mm % 75, 0);
+    const sill1FromGroundMm =
+      g1Mm + Math.round((enabled.windowSillHeights?.[0] ?? 0) * 1000);
+    assert.equal((sill1FromGroundMm + 65) % 75, 0);
+
+    // 4. Меняем параметры кирпича на 240x115x71, Jh=12, Jv=10 -> динамический пересчёт от baseArch
+    const customRecomputed = computeNextFacadeParams(
+      enabled,
+      {
+        brickMasonry: {
+          enabled: true,
+          brick: { L: 240, W: 115, H: 71, Jh: 12, Jv: 10 },
+        },
+      },
+      {}
+    );
+    const customHMm = Math.round(customRecomputed.h * 1000);
+    assert.equal(customHMm % (71 + 12), 0);
+    const customSocleMm = Math.round(customRecomputed.hSocle * 1000);
+    assert.equal((customSocleMm + 71) % (71 + 12), 0);
+
+    // 5. Отчёт содержит отклонения, модули, формулы и технологическое предупреждение
+    const report = coordinateFacadeWithBrickMasonry(
+      customRecomputed,
+      customRecomputed.brickMasonry?.baseArch
+    );
+    assert.ok(report.items.length >= 10);
+    assert.ok(report.items.every((it) => it.modularMm - it.originalMm === it.deltaMm));
+    assert.ok(BRICK_MASONRY_TECH_WARNING.includes('технологической реализуемости'));
+
+    // 6. Выключение режима возвращает исходные архитектурные размеры baseArch
+    const disabled = computeNextFacadeParams(
+      customRecomputed,
+      {
+        brickMasonry: {
+          enabled: false,
+          brick: { L: 240, W: 115, H: 71, Jh: 12, Jv: 10 },
+        },
+      },
+      {}
+    );
+    assert.equal(disabled.brickMasonry?.enabled, false);
+    assertClose(disabled.w, baseWithEntryAndCustomAxes.w);
+    assertClose(disabled.h, baseWithEntryAndCustomAxes.h);
+    assertClose(disabled.A, baseWithEntryAndCustomAxes.A);
   });
 });
 

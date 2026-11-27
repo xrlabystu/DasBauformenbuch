@@ -10,6 +10,18 @@ import {
 } from 'lucide-react';
 import { isExamBlindState, stripExamNormHints } from '../../calc/examMode';
 import { isFramingRLocked, isParamLocked, type LockedParamsMap } from '../../calc/paramLocks';
+import {
+  BRICK_MASONRY_TECH_WARNING,
+  DEFAULT_BRICK_MASONRY_PARAMS,
+  calcHorizontalModuleMm,
+  calcHorizontalOpeningMm,
+  calcVerticalModuleH1Mm,
+  calcVerticalModuleH2Mm,
+  captureBrickMasonryBaseArch,
+  coordinateFacadeWithBrickMasonry,
+  sanitizeBrickParams,
+  type BrickMasonryBrickParams,
+} from '../../calc/brickMasonry';
 import { getExcerptForCheckId, type RuleBookExcerpt } from '../../calc/ruleBookRefs';
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../../utils/termHighlight';
 import {
@@ -94,6 +106,7 @@ export type CalculatorModuleId =
   | 'cornice'
   | 'socle'
   | 'belt'
+  | 'masonry'
   | 'summary';
 
 const ExamBlindContext = createContext<boolean>(false);
@@ -451,6 +464,9 @@ export function CalculatorModules({
     }
   }, [params.levels.manualTotalHeight, isEditingManualHeight]);
 
+  const isBrickMasonryEnabled = Boolean(params.brickMasonry?.enabled);
+  const currentBrickParams = sanitizeBrickParams(params.brickMasonry?.brick);
+
   const modules: { id: CalculatorModuleId; label: string }[] = [
     { id: 'axes', label: 'Оси и простенки' },
     { id: 'variants', label: 'Этажность' },
@@ -462,6 +478,10 @@ export function CalculatorModules({
     { id: 'cornice', label: 'Главный карниз' },
     { id: 'socle', label: 'Цоколь' },
     { id: 'belt', label: 'Лента (пояс)' },
+    {
+      id: 'masonry',
+      label: isBrickMasonryEnabled ? 'Кирпич. кладка ●' : 'Кирпичная кладка',
+    },
     ...(!isExamBlind
       ? [
           {
@@ -536,6 +556,40 @@ export function CalculatorModules({
       </div>
 
       <div className="p-4 sm:p-5 space-y-5 overflow-y-auto flex-1 min-h-0">
+        {isBrickMasonryEnabled && activeModule !== 'masonry' && (
+          <div className="p-2.5 border border-[#9A3412]/40 bg-[#9A3412]/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <span className="text-[#44403C]">
+              <strong className="text-[#9A3412]">Лицевая кирпичная кладка:</strong>{' '}
+              размеры фасада автоматически согласуются с модулем {currentBrickParams.L}×
+              {currentBrickParams.W}×{currentBrickParams.H} мм (швы {currentBrickParams.Jh}/
+              {currentBrickParams.Jv} мм).
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => onSelectModule('masonry')}
+                className="px-2 py-0.5 border border-[#9A3412]/50 bg-[#FBF9F5] text-[#9A3412] font-medium hover:bg-[#9A3412]/10 transition-colors"
+              >
+                Отчёт и кирпич
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateParams({
+                    brickMasonry: {
+                      enabled: false,
+                      brick: currentBrickParams,
+                    },
+                  })
+                }
+                className="px-2 py-0.5 border border-[#D6CEBE] bg-[#FBF9F5] text-[#44403C] hover:bg-[#EAE3D5] transition-colors"
+              >
+                Отключить
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 4.1 Оси и простенки */}
         {activeModule === 'axes' && (
           <div className="space-y-4">
@@ -5898,6 +5952,277 @@ export function CalculatorModules({
             )}
           </div>
         )}
+
+        {/* 4.10 Лицевая кирпичная кладка */}
+        {activeModule === 'masonry' && (() => {
+          const coordReport = coordinateFacadeWithBrickMasonry(
+            params,
+            params.brickMasonry?.baseArch,
+            lockedParams
+          );
+          const updateBrickField = (field: keyof BrickMasonryBrickParams, rawValue: number) => {
+            if (!Number.isFinite(rawValue)) return;
+            const nextBrick = sanitizeBrickParams({
+              ...currentBrickParams,
+              [field]: rawValue,
+            });
+            onUpdateParams({
+              brickMasonry: {
+                enabled: isBrickMasonryEnabled,
+                brick: nextBrick,
+                ...(params.brickMasonry?.baseArch ? { baseArch: params.brickMasonry.baseArch } : {}),
+              },
+            });
+          };
+
+          const halfModMm = calcHorizontalModuleMm(0.5, currentBrickParams);
+          const oneModMm = calcHorizontalModuleMm(1, currentBrickParams);
+          const oneHalfModMm = calcHorizontalModuleMm(1.5, currentBrickParams);
+          const stepHorizMm = currentBrickParams.L + currentBrickParams.Jv;
+          const v1H1Mm = calcVerticalModuleH1Mm(1, currentBrickParams);
+          const v1H2Mm = calcVerticalModuleH2Mm(1, currentBrickParams);
+
+          const directionLabel = (dir: 'increase' | 'decrease' | 'unchanged', deltaMm: number) => {
+            if (dir === 'increase') return `+${deltaMm} мм (увеличение)`;
+            if (dir === 'decrease') return `${deltaMm} мм (уменьшение)`;
+            return '0 мм (без изменений)';
+          };
+
+          return (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-2xl font-medium text-[#1C1917]">
+                    4.10. Лицевая кирпичная кладка
+                  </h3>
+                  <p className="mt-1 text-xs text-[#57534E]">
+                    Модульная координация лицевой кладки без подрезки кирпича (точность 1 мм). Несущие перекрытия сохраняются без изменений.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-pressed={isBrickMasonryEnabled}
+                  onClick={() =>
+                    onUpdateParams({
+                      brickMasonry: {
+                        enabled: !isBrickMasonryEnabled,
+                        brick: currentBrickParams,
+                      },
+                    })
+                  }
+                  className={`px-3 py-1.5 text-xs font-semibold border transition-colors shrink-0 ${
+                    isBrickMasonryEnabled
+                      ? 'bg-[#9A3412] text-[#FBF9F5] border-[#9A3412]'
+                      : 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+                  }`}
+                >
+                  {isBrickMasonryEnabled ? 'Режим кладки: ВКЛ.' : 'Включить режим кладки'}
+                </button>
+              </div>
+
+              <CollapsibleSection title="Параметры кирпича и швов (мм)" subtle>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  {(
+                    [
+                      { key: 'L', label: 'Длина L (мм)', min: 60, max: 600 },
+                      { key: 'W', label: 'Ширина W (мм)', min: 40, max: 400 },
+                      { key: 'H', label: 'Высота H (мм)', min: 30, max: 300 },
+                      { key: 'Jh', label: 'Гориз. шов Jh (мм)', min: 2, max: 40 },
+                      { key: 'Jv', label: 'Вертик. шов Jv (мм)', min: 2, max: 40 },
+                    ] as const
+                  ).map((item) => (
+                    <label key={item.key} className="space-y-1 block">
+                      <span className="block text-[11px] font-mono text-[#57534E]">
+                        {item.label}
+                      </span>
+                      <input
+                        type="number"
+                        step={1}
+                        min={item.min}
+                        max={item.max}
+                        value={currentBrickParams[item.key]}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(v)) updateBrickField(item.key, v);
+                        }}
+                        className="w-full px-2.5 py-1.5 font-mono text-xs border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] tabular-nums"
+                      />
+                    </label>
+                  ))}
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateParams({
+                          brickMasonry: {
+                            enabled: isBrickMasonryEnabled,
+                            brick: { ...DEFAULT_BRICK_MASONRY_PARAMS },
+                            ...(params.brickMasonry?.baseArch
+                              ? { baseArch: params.brickMasonry.baseArch }
+                              : {}),
+                          },
+                        })
+                      }
+                      className="w-full px-2.5 py-1.5 text-[11px] font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#44403C] hover:bg-[#EAE3D5] transition-colors"
+                    >
+                      Сброс 250×120×65
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-[#E5DFD3] grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px] text-[#44403C] tabular-nums">
+                  <div className="p-2 bg-[#FBF9F5] border border-[#E5DFD3] space-y-0.5">
+                    <div className="text-[10px] uppercase text-[#78716C]">Горизонтальная система</div>
+                    <div>0,5 мод = W = {halfModMm} мм</div>
+                    <div>1 мод = L = {oneModMm} мм</div>
+                    <div>1,5 мод = L+Jv+W = {oneHalfModMm} мм</div>
+                    <div>Шаг = L+Jv = {stepHorizMm} мм · Проём = S+2·Jv</div>
+                  </div>
+                  <div className="p-2 bg-[#FBF9F5] border border-[#E5DFD3] space-y-0.5">
+                    <div className="text-[10px] uppercase text-[#78716C]">Вертикальная система</div>
+                    <div>H1 (высота) = N·(H+Jh) → 1 мод = {v1H1Mm} мм</div>
+                    <div>H2 (отметка) = H1−H → 1 мод = {v1H2Mm} мм</div>
+                    <div>Разница H1 − H2 = H = {currentBrickParams.H} мм</div>
+                  </div>
+                </div>
+
+                {isBrickMasonryEnabled && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
+                    <span className="text-[#57534E]">
+                      При отключении режима фасад вернётся к исходным архитектурным размерам.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateParams({
+                          brickMasonry: {
+                            enabled: true,
+                            brick: currentBrickParams,
+                            baseArch: captureBrickMasonryBaseArch(params),
+                          },
+                        })
+                      }
+                      className="px-2.5 py-1 border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors"
+                    >
+                      Зафиксировать модульные размеры как исходные
+                    </button>
+                  </div>
+                )}
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                title="Контрольный отчёт координации фасада"
+                badge={`${coordReport.items.length} поз.`}
+              >
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[11px] font-mono tabular-nums">
+                    <thead>
+                      <tr className="border-b border-[#D6CEBE] text-[10px] uppercase text-[#78716C]">
+                        <th className="py-1.5 pr-2 font-medium">Элемент / формула</th>
+                        <th className="py-1.5 px-2 font-medium text-right">Исх.</th>
+                        <th className="py-1.5 px-2 font-medium text-right">Мод.</th>
+                        <th className="py-1.5 px-2 font-medium text-right">Кладка</th>
+                        <th className="py-1.5 pl-2 font-medium text-right">Отклонение</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5DFD3]">
+                      {coordReport.items.map((item) => (
+                        <tr key={item.id} className="align-top">
+                          <td className="py-1.5 pr-2 font-sans">
+                            <div className="font-medium text-[#1C1917]">{item.label}</div>
+                            <div className="font-mono text-[10px] text-[#78716C]">
+                              {item.formulaUsed}
+                            </div>
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-[#57534E] whitespace-nowrap">
+                            {item.originalMm} мм
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-[#1C1917] whitespace-nowrap">
+                            {item.modules}
+                          </td>
+                          <td className="py-1.5 px-2 text-right font-semibold text-[#1C1917] whitespace-nowrap">
+                            {item.modularMm} мм
+                          </td>
+                          <td
+                            className={`py-1.5 pl-2 text-right whitespace-nowrap ${
+                              item.direction === 'unchanged'
+                                ? 'text-[#15803D]'
+                                : item.direction === 'increase'
+                                  ? 'text-[#9A3412]'
+                                  : 'text-[#0F766E]'
+                            }`}
+                          >
+                            {directionLabel(item.direction, item.deltaMm)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 p-3 border border-[#B45309]/45 bg-[#B45309]/[0.07] text-xs text-[#44403C] leading-relaxed">
+                  <strong className="text-[#9A3412]">Технологическое замечание:</strong>{' '}
+                  {BRICK_MASONRY_TECH_WARNING}
+                </div>
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                title="Динамические модульные таблицы (для текущих L, W, H, Jh, Jv)"
+                defaultOpen={false}
+                subtle
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[11px] font-mono tabular-nums">
+                  <div>
+                    <div className="text-[10px] uppercase text-[#78716C] mb-1">
+                      Горизонтальные модули (мм)
+                    </div>
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#D6CEBE] text-[10px] text-[#78716C]">
+                          <th className="py-1 text-left">Мод.</th>
+                          <th className="py-1 text-right">Кладка S</th>
+                          <th className="py-1 text-right">Проём S+2·Jv</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E5DFD3]">
+                        {coordReport.horizontalTablePreview.map((row) => (
+                          <tr key={row.modules}>
+                            <td className="py-0.5 text-[#57534E]">{row.modules}</td>
+                            <td className="py-0.5 text-right text-[#1C1917]">{row.solidMm}</td>
+                            <td className="py-0.5 text-right text-[#9A3412]">{row.openingMm}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase text-[#78716C] mb-1">
+                      Вертикальные модули H1 / H2 (мм)
+                    </div>
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#D6CEBE] text-[10px] text-[#78716C]">
+                          <th className="py-1 text-left">Мод. N</th>
+                          <th className="py-1 text-right">H1 (высота)</th>
+                          <th className="py-1 text-right">H2 (отметка)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E5DFD3]">
+                        {coordReport.verticalTablePreview.map((row) => (
+                          <tr key={row.modules}>
+                            <td className="py-0.5 text-[#57534E]">{row.modules}</td>
+                            <td className="py-0.5 text-right text-[#1C1917]">{row.h1Mm}</td>
+                            <td className="py-0.5 text-right text-[#0F766E]">{row.h2Mm}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </CollapsibleSection>
+            </div>
+          );
+        })()}
 
         {/* 4.9 Сводка фасада */}
         {!isExamBlind && activeModule === 'summary' && (

@@ -675,6 +675,8 @@ export function FacadeSvg({
   const isSimpleSocle = Boolean(params.isSimpleSocle);
   const hasSocleRust = !isSimpleSocle && params.hasSocleRustication !== false;
   const rustCourses = hasSocleRust ? Math.min(12, Math.max(1, summary.rusticationCheck.n)) : 0;
+  const isBrickMasonry = Boolean(params.brickMasonry?.enabled);
+  const dimDecimals = isBrickMasonry ? 3 : 2;
 
   // Главный ярус для подробного показа сандрика
   const activeFramingFloor = safeFloors >= 2 ? 1 : 0;
@@ -704,9 +706,14 @@ export function FacadeSvg({
           </span>
           <span aria-hidden="true">·</span>
           <span className="font-mono text-[11px] text-[#78716C] tabular-nums">
-            W={formatMeters(totalWidthM, 2)} м × H_зд={formatMeters(totalHeightM, 2)} м
+            W={formatMeters(totalWidthM, dimDecimals)} м × H_зд={formatMeters(totalHeightM, dimDecimals)} м
             {!hideValidation ? ` (${rectOriRu})` : ''}
           </span>
+          {isBrickMasonry && params.brickMasonry?.brick && (
+            <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#9A3412]/50 bg-[#9A3412]/10 text-[#9A3412] tabular-nums">
+              Кладка {params.brickMasonry.brick.L}×{params.brickMasonry.brick.W}×{params.brickMasonry.brick.H} (швы {params.brickMasonry.brick.Jh}/{params.brickMasonry.brick.Jv} мм)
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
@@ -1747,7 +1754,7 @@ export function FacadeSvg({
                     fontFamily="IBM Plex Mono, monospace"
                     fill="#9A3412"
                   >
-                    вход ({formatMeters(entranceGeo.doorWidthM, 2)}×{formatMeters(entranceGeo.doorHeightM, 2)})
+                    вход ({formatMeters(entranceGeo.doorWidthM, dimDecimals)}×{formatMeters(entranceGeo.doorHeightM, dimDecimals)})
                   </text>
                 </g>
               );
@@ -1762,8 +1769,8 @@ export function FacadeSvg({
               Math.abs(corniceBottomM - topFloorTopM) > 0.01;
             const chainTopY = yFromGroundM(Math.max(topFloorTopM, corniceBottomM));
             const formatElev = (relM: number) => {
-              if (Math.abs(relM) < 0.005) return '0.00';
-              const val = formatMeters(Math.abs(relM), 2);
+              if (Math.abs(relM) < 0.0005) return isBrickMasonry ? '0.000' : '0.00';
+              const val = formatMeters(Math.abs(relM), dimDecimals);
               return relM > 0 ? `+${val}` : `-${val}`;
             };
             const groundElevText = formatElev(-datum0M);
@@ -1980,7 +1987,7 @@ export function FacadeSvg({
                         fontFamily="IBM Plex Mono, monospace"
                         fill="#57534E"
                       >
-                        {formatMeters(flH, 2)} м
+                        {formatMeters(flH, dimDecimals)} м
                       </text>
                     </g>
                   );
@@ -2027,7 +2034,7 @@ export function FacadeSvg({
             xM(0),
             xM(axesM[0]),
             padTop - 26,
-            hideValidation ? `D = ${formatMeters(D)}` : `D = ${formatMeters(D)} (${STATUS_TAG[cornerStatus]})`,
+            hideValidation ? `D = ${formatMeters(D, dimDecimals)}` : `D = ${formatMeters(D, dimDecimals)} (${STATUS_TAG[cornerStatus]})`,
             cornerStatus,
             'corner'
           )}
@@ -2038,8 +2045,8 @@ export function FacadeSvg({
                   xM(axesM[1]),
                   padTop - 26,
                   hideValidation
-                    ? `A = ${formatMeters(safeA)}`
-                    : `A = ${formatMeters(safeA)} (${STATUS_TAG[ahStatus]})`,
+                    ? `A = ${formatMeters(safeA, dimDecimals)}`
+                    : `A = ${formatMeters(safeA, dimDecimals)} (${STATUS_TAG[ahStatus]})`,
                   ahStatus,
                   'axenweite'
                 )
@@ -2049,7 +2056,7 @@ export function FacadeSvg({
                       xM(axesM[idx]),
                       xM(axesM[idx + 1]),
                       padTop - 26,
-                      `A${idx + 1}=${formatMeters(stepM)}`,
+                      `A${idx + 1}=${formatMeters(stepM, dimDecimals)}`,
                       ahStatus,
                       'axenweite'
                     )}
@@ -2061,7 +2068,7 @@ export function FacadeSvg({
             xM(0),
             xM(axesM[0] - safeW / 2 - effectiveU),
             groundY + 26,
-            `p_cор = ${formatMeters(p_corner)}`,
+            `p_cор = ${formatMeters(p_corner, dimDecimals)}`,
             cornerStatus,
             'corner'
           )}
@@ -2070,8 +2077,8 @@ export function FacadeSvg({
             xM(axesM[0] + safeW / 2 + effectiveU),
             groundY + 52,
             params.withFraming
-              ? `w_v = ${formatMeters(w_v)} (w=${formatMeters(safeW)})`
-              : `w = ${formatMeters(safeW)}`,
+              ? `w_v = ${formatMeters(w_v, dimDecimals)} (w=${formatMeters(safeW, dimDecimals)})`
+              : `w = ${formatMeters(safeW, dimDecimals)}`,
             windowStatus,
             'window'
           )}
@@ -2083,11 +2090,11 @@ export function FacadeSvg({
                   groundY + 26,
                   params.withFraming
                     ? hideValidation
-                      ? `p_c = ${formatMeters(p_inter)}`
-                      : `p_c = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`
+                      ? `p_c = ${formatMeters(p_inter, dimDecimals)}`
+                      : `p_c = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`
                     : hideValidation
-                      ? `p = ${formatMeters(p_inter)}`
-                      : `p = ${formatMeters(p_inter)} (${STATUS_TAG[pierStatus]})`,
+                      ? `p = ${formatMeters(p_inter, dimDecimals)}`
+                      : `p = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`,
                   pierStatus,
                   params.withFraming ? 'framing_pier' : 'pier'
                 )
@@ -2100,8 +2107,8 @@ export function FacadeSvg({
                         xM(axesM[idx + 1] - safeW / 2 - effectiveU),
                         groundY + 26,
                         params.withFraming
-                          ? `p_c${idx + 1}=${formatMeters(pierW)}`
-                          : `p${idx + 1}=${formatMeters(pierW)}`,
+                          ? `p_c${idx + 1}=${formatMeters(pierW, dimDecimals)}`
+                          : `p${idx + 1}=${formatMeters(pierW, dimDecimals)}`,
                         pierStatus,
                         params.withFraming ? 'framing_pier' : 'pier'
                       )}
@@ -2179,8 +2186,8 @@ export function FacadeSvg({
                   const isInnerPierStep =
                     segIdx > 0 && segIdx < nodesM.length - 2;
                   const label = isInnerPierStep
-                    ? `A_п=${formatMeters(distM)}`
-                    : `${formatMeters(distM)}`;
+                    ? `A_п=${formatMeters(distM, dimDecimals)}`
+                    : `${formatMeters(distM, dimDecimals)}`;
                   return (
                     <g key={`pier-dim-${segIdx}`}>
                       <line
@@ -2272,7 +2279,7 @@ export function FacadeSvg({
                     fontFamily="IBM Plex Mono, monospace"
                     fill={strokeFor(socleStatus)}
                   >
-                    h_s={formatMeters(effectiveSocleH, 2)}
+                    h_s={formatMeters(effectiveSocleH, dimDecimals)}
                   </text>
                 </g>
 
@@ -2333,7 +2340,7 @@ export function FacadeSvg({
                     fontWeight={600}
                     fill={strokeFor(corniceStatus)}
                   >
-                    h_гк={formatMeters(corniceM, 2)}
+                    h_гк={formatMeters(corniceM, dimDecimals)}
                   </text>
                 </g>
 
@@ -2348,7 +2355,7 @@ export function FacadeSvg({
                   fontFamily="IBM Plex Mono, monospace"
                   fill="#44403C"
                 >
-                  H_зд={formatMeters(totalHeightM, 1)}
+                  H_зд={formatMeters(totalHeightM, isBrickMasonry ? 3 : 1)}
                 </text>
 
                 {/* Main floor height */}
@@ -2369,7 +2376,7 @@ export function FacadeSvg({
                       fontFamily="IBM Plex Mono, monospace"
                       fill={strokeFor(ahStatus)}
                     >
-                      H={formatMeters(safeH, 2)}
+                      H={formatMeters(safeH, dimDecimals)}
                     </text>
                   </>
                 )}
