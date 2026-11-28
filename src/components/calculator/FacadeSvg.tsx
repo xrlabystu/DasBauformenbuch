@@ -15,6 +15,7 @@ import {
   Move,
   Redo2,
   RotateCcw,
+  Ruler,
   Undo2,
   X,
   XCircle,
@@ -124,6 +125,7 @@ export function FacadeSvg({
   const zoom = view.zoom;
   const pan = view.pan;
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showDimensions, setShowDimensions] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
   const dragStateRef = useRef<{
     active: boolean;
@@ -950,29 +952,33 @@ export function FacadeSvg({
                 />
               </>
             )}
-            <rect
-              x={xM(0) + 6}
-              y={yFromGroundM(visualSocleTopM / 2) - 6}
-              width={185}
-              height={12}
-              fill="#FBF9F5"
-              fillOpacity={0.82}
-            />
-            <text
-              x={xM(0) + 10}
-              y={yFromGroundM(visualSocleTopM / 2) + 3}
-              fontSize="9"
-              fontFamily="IBM Plex Mono, monospace"
-              fill={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
-            >
-              Цоколь {formatMeters(effectiveSocleH)} м (
-              {isSimpleSocle
-                ? 'простой'
-                : hasSocleRust
-                  ? `${summary.rusticationCheck.n} ряд.`
-                  : 'гладкий'}
-              )
-            </text>
+            {showDimensions && (
+              <>
+                <rect
+                  x={xM(0) + 6}
+                  y={yFromGroundM(visualSocleTopM / 2) - 6}
+                  width={185}
+                  height={12}
+                  fill="#FBF9F5"
+                  fillOpacity={0.82}
+                />
+                <text
+                  x={xM(0) + 10}
+                  y={yFromGroundM(visualSocleTopM / 2) + 3}
+                  fontSize="9"
+                  fontFamily="IBM Plex Mono, monospace"
+                  fill={isHi('socle') ? strokeFor(socleStatus) : '#44403C'}
+                >
+                  Цоколь {formatMeters(effectiveSocleH)} м (
+                  {isSimpleSocle
+                    ? 'простой'
+                    : hasSocleRust
+                      ? `${summary.rusticationCheck.n} ряд.`
+                      : 'гладкий'}
+                  )
+                </text>
+              </>
+            )}
           </g>
 
           {/* Highlight overlay: Corner pier (left) */}
@@ -1094,6 +1100,7 @@ export function FacadeSvg({
                 const beltEnabledHere = isBeltEnabledAboveFloor(params, idx, safeFloors);
 
                 if (!beltEnabledHere) {
+                  if (!showDimensions) return null;
                   return (
                     <g
                       key={`gurt-off-${upperFloorNum}`}
@@ -1265,32 +1272,33 @@ export function FacadeSvg({
                     strokeWidth={isHi('belt') || showViol(beltStatus) ? 1.5 : 1}
                     strokeDasharray={isSillMode ? '4 2' : undefined}
                   />
-                  {((!isSillMode && idx === firstNormalBoundaryIdx) ||
-                    (isSillMode && idx === firstSillBoundaryIdx)) && (
-                    <g>
-                      <rect
-                        x={xM(0) + facadePxW - 142}
-                        y={beltRectY - 12}
-                        width={138}
-                        height={11}
-                        fill="#FBF9F5"
-                        fillOpacity={0.9}
-                      />
-                      <text
-                        x={xM(0) + facadePxW - 6}
-                        y={beltRectY - 4}
-                        textAnchor="end"
-                        fontSize="8.5"
-                        fontFamily="IBM Plex Mono, monospace"
-                        fontWeight={isHi('belt') || showNonOk(beltStatus) ? 600 : 400}
-                        fill={beltStroke}
-                      >
-                        {isSillMode ? 'Подокон. ' : 'Лента '}
-                        {formatMeters(params.hGurt, 2)}м
-                        {!hideValidation ? ` (${STATUS_TAG[beltStatus]})` : ''}
-                      </text>
-                    </g>
-                  )}
+                  {showDimensions &&
+                    ((!isSillMode && idx === firstNormalBoundaryIdx) ||
+                      (isSillMode && idx === firstSillBoundaryIdx)) && (
+                      <g>
+                        <rect
+                          x={xM(0) + facadePxW - 142}
+                          y={beltRectY - 12}
+                          width={138}
+                          height={11}
+                          fill="#FBF9F5"
+                          fillOpacity={0.9}
+                        />
+                        <text
+                          x={xM(0) + facadePxW - 6}
+                          y={beltRectY - 4}
+                          textAnchor="end"
+                          fontSize="8.5"
+                          fontFamily="IBM Plex Mono, monospace"
+                          fontWeight={isHi('belt') || showNonOk(beltStatus) ? 600 : 400}
+                          fill={beltStroke}
+                        >
+                          {isSillMode ? 'Подокон. ' : 'Лента '}
+                          {formatMeters(params.hGurt, 2)}м
+                          {!hideValidation ? ` (${STATUS_TAG[beltStatus]})` : ''}
+                        </text>
+                      </g>
+                    )}
                 </g>
               );
             });
@@ -1466,28 +1474,32 @@ export function FacadeSvg({
             const cx = xM(axisM);
             return (
               <g key={`axis-${axIdx}`}>
-                <line
-                  x1={cx}
-                  y1={padTop - 20}
-                  x2={cx}
-                  y2={groundY + 18}
-                  stroke={showViol(ahStatus) ? '#B91C1C' : '#9A3412'}
-                  strokeOpacity={showViol(ahStatus) ? 0.72 : 0.4}
-                  strokeWidth={showViol(ahStatus) ? 1.35 : 0.85}
-                  strokeDasharray="5 3"
-                />
-                {showViol(ahStatus) && (
-                  <line
-                    x1={cx}
-                    y1={padTop - 20}
-                    x2={cx}
-                    y2={groundY + 18}
-                    stroke="transparent"
-                    strokeWidth={14}
-                    className="cursor-pointer"
-                    onClick={() => onSelectElement?.('axenweite')}
-                    {...violationHoverProps('axenweite')}
-                  />
+                {showDimensions && (
+                  <>
+                    <line
+                      x1={cx}
+                      y1={padTop - 20}
+                      x2={cx}
+                      y2={groundY + 18}
+                      stroke={showViol(ahStatus) ? '#B91C1C' : '#9A3412'}
+                      strokeOpacity={showViol(ahStatus) ? 0.72 : 0.4}
+                      strokeWidth={showViol(ahStatus) ? 1.35 : 0.85}
+                      strokeDasharray="5 3"
+                    />
+                    {showViol(ahStatus) && (
+                      <line
+                        x1={cx}
+                        y1={padTop - 20}
+                        x2={cx}
+                        y2={groundY + 18}
+                        stroke="transparent"
+                        strokeWidth={14}
+                        className="cursor-pointer"
+                        onClick={() => onSelectElement?.('axenweite')}
+                        {...violationHoverProps('axenweite')}
+                      />
+                    )}
+                  </>
                 )}
                 {floorOffsetsM.map((_floorStartM, flIdx) => {
                   const isDoorReplacedWindow =
@@ -1746,22 +1758,24 @@ export function FacadeSvg({
                       })}
                     </g>
                   )}
-                  <text
-                    x={doorCx}
-                    y={groundY + 11}
-                    textAnchor="middle"
-                    fontSize="8"
-                    fontFamily="IBM Plex Mono, monospace"
-                    fill="#9A3412"
-                  >
-                    вход ({formatMeters(entranceGeo.doorWidthM, dimDecimals)}×{formatMeters(entranceGeo.doorHeightM, dimDecimals)})
-                  </text>
+                  {showDimensions && (
+                    <text
+                      x={doorCx}
+                      y={groundY + 11}
+                      textAnchor="middle"
+                      fontSize="8"
+                      fontFamily="IBM Plex Mono, monospace"
+                      fill="#9A3412"
+                    >
+                      вход ({formatMeters(entranceGeo.doorWidthM, dimDecimals)}×{formatMeters(entranceGeo.doorHeightM, dimDecimals)})
+                    </text>
+                  )}
                 </g>
               );
             })()}
 
           {/* LEFT VERTICAL ELEVATION DATUM CHAIN (0.00 = 1st floor) & FLOOR TAGS */}
-          {(() => {
+          {showDimensions && (() => {
             const chainX = xM(0) - 18;
             const shelfLeftX = xM(0) - 70;
             const datum0M = floorOffsetsM[0] ?? groundToFloor1;
@@ -1996,7 +2010,7 @@ export function FacadeSvg({
             );
           })()}
 
-          {floorOffsetsM.map((floorStartM, flIdx) => {
+          {showDimensions && floorOffsetsM.map((floorStartM, flIdx) => {
             const flMidY = yFromGroundM(floorStartM + floorHeightsM[flIdx] / 2);
             const flNum = flIdx + 1;
             const isMainTier =
@@ -2030,94 +2044,98 @@ export function FacadeSvg({
           })}
 
           {/* TOP DIMENSION LINES: D and A */}
-          {renderDimLine(
-            xM(0),
-            xM(axesM[0]),
-            padTop - 26,
-            hideValidation ? `D = ${formatMeters(D, dimDecimals)}` : `D = ${formatMeters(D, dimDecimals)} (${STATUS_TAG[cornerStatus]})`,
-            cornerStatus,
-            'corner'
-          )}
-          {axesM.length >= 2 &&
-            (!hasVariedAxisSteps
-              ? renderDimLine(
-                  xM(axesM[0]),
-                  xM(axesM[1]),
-                  padTop - 26,
-                  hideValidation
-                    ? `A = ${formatMeters(safeA, dimDecimals)}`
-                    : `A = ${formatMeters(safeA, dimDecimals)} (${STATUS_TAG[ahStatus]})`,
-                  ahStatus,
-                  'axenweite'
-                )
-              : axisStepsM.map((stepM, idx) => (
-                  <g key={`top-step-${idx}`}>
-                    {renderDimLine(
-                      xM(axesM[idx]),
-                      xM(axesM[idx + 1]),
+          {showDimensions && (
+            <>
+              {renderDimLine(
+                xM(0),
+                xM(axesM[0]),
+                padTop - 26,
+                hideValidation ? `D = ${formatMeters(D, dimDecimals)}` : `D = ${formatMeters(D, dimDecimals)} (${STATUS_TAG[cornerStatus]})`,
+                cornerStatus,
+                'corner'
+              )}
+              {axesM.length >= 2 &&
+                (!hasVariedAxisSteps
+                  ? renderDimLine(
+                      xM(axesM[0]),
+                      xM(axesM[1]),
                       padTop - 26,
-                      `A${idx + 1}=${formatMeters(stepM, dimDecimals)}`,
+                      hideValidation
+                        ? `A = ${formatMeters(safeA, dimDecimals)}`
+                        : `A = ${formatMeters(safeA, dimDecimals)} (${STATUS_TAG[ahStatus]})`,
                       ahStatus,
                       'axenweite'
-                    )}
-                  </g>
-                )))}
+                    )
+                  : axisStepsM.map((stepM, idx) => (
+                      <g key={`top-step-${idx}`}>
+                        {renderDimLine(
+                          xM(axesM[idx]),
+                          xM(axesM[idx + 1]),
+                          padTop - 26,
+                          `A${idx + 1}=${formatMeters(stepM, dimDecimals)}`,
+                          ahStatus,
+                          'axenweite'
+                        )}
+                      </g>
+                    )))}
 
-          {/* BOTTOM DIMENSION LINES: p_corner, w / w_v, p / p_c */}
-          {renderDimLine(
-            xM(0),
-            xM(axesM[0] - safeW / 2 - effectiveU),
-            groundY + 26,
-            `p_cор = ${formatMeters(p_corner, dimDecimals)}`,
-            cornerStatus,
-            'corner'
+              {/* BOTTOM DIMENSION LINES: p_corner, w / w_v, p / p_c */}
+              {renderDimLine(
+                xM(0),
+                xM(axesM[0] - safeW / 2 - effectiveU),
+                groundY + 26,
+                `p_cор = ${formatMeters(p_corner, dimDecimals)}`,
+                cornerStatus,
+                'corner'
+              )}
+              {renderDimLine(
+                xM(axesM[0] - safeW / 2 - effectiveU),
+                xM(axesM[0] + safeW / 2 + effectiveU),
+                groundY + 52,
+                params.withFraming
+                  ? `w_v = ${formatMeters(w_v, dimDecimals)} (w=${formatMeters(safeW, dimDecimals)})`
+                  : `w = ${formatMeters(safeW, dimDecimals)}`,
+                windowStatus,
+                'window'
+              )}
+              {axesM.length >= 2 &&
+                (!hasVariedAxisSteps
+                  ? renderDimLine(
+                      xM(axesM[0] + safeW / 2 + effectiveU),
+                      xM(axesM[1] - safeW / 2 - effectiveU),
+                      groundY + 26,
+                      params.withFraming
+                        ? hideValidation
+                          ? `p_c = ${formatMeters(p_inter, dimDecimals)}`
+                          : `p_c = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`
+                        : hideValidation
+                          ? `p = ${formatMeters(p_inter, dimDecimals)}`
+                          : `p = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`,
+                      pierStatus,
+                      params.withFraming ? 'framing_pier' : 'pier'
+                    )
+                  : axisStepsM.map((stepM, idx) => {
+                      const pierW = Math.max(0, stepM - safeW - 2 * effectiveU);
+                      return (
+                        <g key={`bot-pier-${idx}`}>
+                          {renderDimLine(
+                            xM(axesM[idx] + safeW / 2 + effectiveU),
+                            xM(axesM[idx + 1] - safeW / 2 - effectiveU),
+                            groundY + 26,
+                            params.withFraming
+                              ? `p_c${idx + 1}=${formatMeters(pierW, dimDecimals)}`
+                              : `p${idx + 1}=${formatMeters(pierW, dimDecimals)}`,
+                            pierStatus,
+                            params.withFraming ? 'framing_pier' : 'pier'
+                          )}
+                        </g>
+                      );
+                    }))}
+            </>
           )}
-          {renderDimLine(
-            xM(axesM[0] - safeW / 2 - effectiveU),
-            xM(axesM[0] + safeW / 2 + effectiveU),
-            groundY + 52,
-            params.withFraming
-              ? `w_v = ${formatMeters(w_v, dimDecimals)} (w=${formatMeters(safeW, dimDecimals)})`
-              : `w = ${formatMeters(safeW, dimDecimals)}`,
-            windowStatus,
-            'window'
-          )}
-          {axesM.length >= 2 &&
-            (!hasVariedAxisSteps
-              ? renderDimLine(
-                  xM(axesM[0] + safeW / 2 + effectiveU),
-                  xM(axesM[1] - safeW / 2 - effectiveU),
-                  groundY + 26,
-                  params.withFraming
-                    ? hideValidation
-                      ? `p_c = ${formatMeters(p_inter, dimDecimals)}`
-                      : `p_c = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`
-                    : hideValidation
-                      ? `p = ${formatMeters(p_inter, dimDecimals)}`
-                      : `p = ${formatMeters(p_inter, dimDecimals)} (${STATUS_TAG[pierStatus]})`,
-                  pierStatus,
-                  params.withFraming ? 'framing_pier' : 'pier'
-                )
-              : axisStepsM.map((stepM, idx) => {
-                  const pierW = Math.max(0, stepM - safeW - 2 * effectiveU);
-                  return (
-                    <g key={`bot-pier-${idx}`}>
-                      {renderDimLine(
-                        xM(axesM[idx] + safeW / 2 + effectiveU),
-                        xM(axesM[idx + 1] - safeW / 2 - effectiveU),
-                        groundY + 26,
-                        params.withFraming
-                          ? `p_c${idx + 1}=${formatMeters(pierW, dimDecimals)}`
-                          : `p${idx + 1}=${formatMeters(pierW, dimDecimals)}`,
-                        pierStatus,
-                        params.withFraming ? 'framing_pier' : 'pier'
-                      )}
-                    </g>
-                  );
-                }))}
 
           {/* Ordinary Pier Axes (ONLY below ground level) + dedicated dimension chain */}
-          {hasPierAxesDimChain && (() => {
+          {showDimensions && hasPierAxesDimChain && (() => {
             const pierColor = '#0F766E';
             const chainY = groundY + 96;
             const axisBottomY = groundY + 114;
@@ -2253,7 +2271,7 @@ export function FacadeSvg({
           })()}
 
           {/* RIGHT VERTICAL DIMENSION: h_socle, H_max, h_гк & H_total */}
-          {(() => {
+          {showDimensions && (() => {
             const dimX = xM(totalWidthM) + 28;
             const totalDimX = dimX + 68;
             const yGround = groundY;
@@ -2481,6 +2499,33 @@ export function FacadeSvg({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Bottom toolbar inside orthogonal drawing: toggle dimensions / chains / elevations */}
+      <div className="px-4 py-2 border-t border-[#E5DFD3] bg-[#F3EFE6]/65 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+        <button
+          type="button"
+          onClick={() => setShowDimensions((prev) => !prev)}
+          aria-pressed={!showDimensions}
+          aria-label={
+            showDimensions
+              ? 'Скрыть все размеры, цепочки и отметки на чертеже'
+              : 'Показать все размеры, цепочки и отметки на чертеже'
+          }
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 font-medium border transition-colors whitespace-nowrap shrink-0 ${
+            showDimensions
+              ? 'bg-[#FBF9F5] text-[#1C1917] border-[#D6CEBE] hover:bg-[#EAE3D5]'
+              : 'bg-[#1C1917] text-[#FBF9F5] border-[#1C1917] hover:bg-[#292524]'
+          }`}
+        >
+          <Ruler className="w-3.5 h-3.5" />
+          <span>{showDimensions ? 'Скрыть размеры' : 'Показать размеры'}</span>
+        </button>
+        <span className="text-[11px] font-mono text-[#78716C]">
+          {showDimensions
+            ? 'Показаны размерные цепочки, отметки высот, оси и расстояния'
+            : 'Размерные цепочки, отметки высот, оси и расстояния скрыты'}
+        </span>
       </div>
 
       {/* Compact Interactive Violation Strip below SVG when violations exist */}
