@@ -1,5 +1,15 @@
-import { useMemo, useState } from 'react';
-import { Award, CheckCircle2, GraduationCap, Lock, LogOut, RotateCcw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Award,
+  CheckCircle2,
+  Download,
+  GraduationCap,
+  Lock,
+  LogOut,
+  RotateCcw,
+  Upload,
+  X,
+} from 'lucide-react';
 import {
   D_from_A,
   RULES_DATA,
@@ -25,6 +35,10 @@ import {
   type LockedParamsMap,
 } from '../calc/paramLocks';
 import { DEFAULT_BRICK_MASONRY_PARAMS } from '../calc/brickMasonry';
+import {
+  downloadFacadeSettings,
+  parseFacadeSettingsImport,
+} from '../calc/settingsFile';
 import type { RuleBookExcerpt } from '../calc/ruleBookRefs';
 import { TextWithGlossaryLinks, type GlossaryLookupEntry } from '../utils/termHighlight';
 import { FacadeSvg } from './calculator/FacadeSvg';
@@ -139,6 +153,17 @@ export function FacadeCalculatorPage({
     createDefaultParamsForTypology('urban_house')
   );
   const [localLockedParams, setLocalLockedParams] = useState<LockedParamsMap>({});
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [settingsNotice, setSettingsNotice] = useState<{
+    kind: 'ok' | 'error';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!settingsNotice || settingsNotice.kind !== 'ok') return;
+    const timer = window.setTimeout(() => setSettingsNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [settingsNotice]);
 
   const examMode = controlledExamMode ?? localExamMode;
   const examSubmitted = controlledExamSubmitted ?? localExamSubmitted;
@@ -297,6 +322,52 @@ export function FacadeCalculatorPage({
       return;
     }
     setLocalLockedParams({});
+  };
+
+  const handleExportSettings = () => {
+    downloadFacadeSettings(params, lockedParams);
+    setSettingsNotice({
+      kind: 'ok',
+      text: 'Настройки фасада выгружены в файл формата JSON (.json).',
+    });
+  };
+
+  const handleImportSettingsFile = async (file: File) => {
+    try {
+      const rawText = await file.text();
+      const parsed = parseFacadeSettingsImport(rawText);
+      if (!parsed.ok) {
+        setSettingsNotice({ kind: 'error', text: parsed.error });
+        return;
+      }
+
+      if (onCommitSnapshot) {
+        onCommitSnapshot(() => ({
+          params: parsed.params,
+          lockedParams: parsed.lockedParams,
+        }));
+      } else {
+        setLocalParams(parsed.params);
+        setLocalLockedParams(parsed.lockedParams);
+      }
+      setHighlightedElement(null);
+
+      const importedTypology = getTypology(parsed.params.buildingType).nameRu;
+      const importedLocksCount = countLockedParams(parsed.lockedParams);
+      const warnSuffix =
+        parsed.warnings.length > 0 ? ` (${parsed.warnings.join(' ')})` : '';
+      const locksSuffix =
+        importedLocksCount > 0 ? `, замков: ${importedLocksCount}` : '';
+      setSettingsNotice({
+        kind: 'ok',
+        text: `Настройки импортированы: ${importedTypology}, ${parsed.params.levels.floors.length} эт., ${parsed.params.axesCount} осей${locksSuffix}.${warnSuffix}`,
+      });
+    } catch {
+      setSettingsNotice({
+        kind: 'error',
+        text: 'Не удалось прочитать выбранный файл настроек.',
+      });
+    }
   };
 
   const handleSelectElementFromSvg = (el: FacadeTargetElement) => {
@@ -650,6 +721,42 @@ export function FacadeCalculatorPage({
                   ? 'Кирпичная кладка: вкл.'
                   : 'Лицевая кирпичная кладка'}
               </button>
+              {!isExamBlind && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleExportSettings}
+                    title="Выгрузить текущие параметры фасада и закреплённые замки в файл .json"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Экспорт настроек</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    title="Загрузить ранее сохранённый файл настроек (.json) и построить фасад"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] hover:bg-[#EAE3D5] transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Импорт настроек</span>
+                  </button>
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    aria-label="Импортировать файл настроек фасада (.json)"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) {
+                        void handleImportSettingsFile(file);
+                      }
+                    }}
+                    className="hidden"
+                  />
+                </>
+              )}
               <button
                 type="button"
                 onClick={handleResetToBookExample}
@@ -660,6 +767,27 @@ export function FacadeCalculatorPage({
               </button>
             </div>
           </div>
+
+          {settingsNotice && (
+            <div
+              role={settingsNotice.kind === 'error' ? 'alert' : 'status'}
+              className={`px-4 py-2.5 border flex items-center justify-between gap-3 text-xs ${
+                settingsNotice.kind === 'error'
+                  ? 'border-[#B91C1C]/50 bg-[#FEF2F2] text-[#991B1B]'
+                  : 'border-[#15803D]/40 bg-[#F0FDF4] text-[#166534]'
+              }`}
+            >
+              <span>{settingsNotice.text}</span>
+              <button
+                type="button"
+                onClick={() => setSettingsNotice(null)}
+                aria-label="Закрыть уведомление"
+                className="p-0.5 hover:opacity-75 transition-opacity shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Typology Guidance Line */}
           {!isExamBlind && (

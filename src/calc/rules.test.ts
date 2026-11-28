@@ -155,6 +155,12 @@ import {
   calcVerticalModuleH2Mm,
   coordinateFacadeWithBrickMasonry,
 } from './brickMasonry.ts';
+import {
+  FACADE_SETTINGS_FORMAT,
+  buildFacadeSettingsFilename,
+  exportFacadeSettingsJson,
+  parseFacadeSettingsImport,
+} from './settingsFile.ts';
 import { DwgReader } from '@node-projects/acad-ts';
 
 const TOL = 1e-3;
@@ -2788,5 +2794,92 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
       evaluateFacadeSummary(lockedAllHoriz, { expertMode: true }).derivedGeometry.facadeWidth,
       14.4
     );
+  });
+
+  it('58. Экспорт настроек и импорт настроек (.json): полный цикл сохранения и восстановления фасада с замками и проверкой ошибок', () => {
+    const base = createDefaultParamsForTypology('villa');
+    const configured = computeNextFacadeParams(
+      base,
+      {
+        axesCount: 5,
+        ordinaryPierAxisSpacings: [2.75, 3.35, 2.75],
+        showOrdinaryPierAxes: true,
+        isSimpleSocle: true,
+        corniceBottomOffsetM: -0.15,
+        beltIsAbsent: false,
+        beltFloors: [true, false],
+        beltSillFloors: [true, false],
+        brickMasonry: {
+          enabled: true,
+          brick: { L: 250, W: 120, H: 65, Jh: 10, Jv: 10 },
+        },
+      },
+      {}
+    );
+    const locks: LockedParamsMap = {
+      facadeWidth: true,
+      hMain: true,
+      'beltFloors.0': true,
+    };
+
+    const filename = buildFacadeSettingsFilename(configured);
+    assert.ok(filename.endsWith('.json'));
+    assert.ok(filename.includes('villa'));
+
+    const jsonText = exportFacadeSettingsJson(configured, locks);
+    const rawObj = JSON.parse(jsonText) as Record<string, unknown>;
+    assert.equal(rawObj.format, FACADE_SETTINGS_FORMAT);
+    assert.equal(rawObj.version, 1);
+
+    const imported = parseFacadeSettingsImport(jsonText);
+    assert.equal(imported.ok, true);
+    if (imported.ok) {
+      assert.equal(imported.params.buildingType, 'villa');
+      assert.equal(imported.params.axesCount, 5);
+      assert.equal(imported.params.showOrdinaryPierAxes, true);
+      assert.equal(imported.params.isSimpleSocle, true);
+      assertClose(
+        imported.params.corniceBottomOffsetM ?? 0,
+        configured.corniceBottomOffsetM ?? 0
+      );
+      assertClose(imported.params.brickMasonry?.baseArch?.corniceBottomOffsetM ?? 0, -0.15);
+      assert.deepEqual(imported.params.beltFloors, configured.beltFloors);
+      assert.deepEqual(imported.params.beltSillFloors, configured.beltSillFloors);
+      assert.equal(imported.params.brickMasonry?.enabled, true);
+      assert.ok(imported.params.brickMasonry?.baseArch);
+      assert.deepEqual(imported.lockedParams, locks);
+
+      const sumBefore = evaluateFacadeSummary(configured, { expertMode: true });
+      const sumAfter = evaluateFacadeSummary(imported.params, { expertMode: true });
+      assertClose(sumAfter.derivedGeometry.facadeWidth, sumBefore.derivedGeometry.facadeWidth);
+      assertClose(sumAfter.derivedGeometry.totalHeight, sumBefore.derivedGeometry.totalHeight);
+    }
+
+    // Проверка отклонения некорректных файлов
+    assert.equal(parseFacadeSettingsImport('not valid json').ok, false);
+    assert.equal(parseFacadeSettingsImport('{}').ok, false);
+    assert.equal(
+      parseFacadeSettingsImport(
+        JSON.stringify({ format: 'other-app', version: 1, params: configured })
+      ).ok,
+      false
+    );
+    assert.equal(
+      parseFacadeSettingsImport(
+        JSON.stringify({ format: FACADE_SETTINGS_FORMAT, version: 99, params: configured })
+      ).ok,
+      false
+    );
+
+    // Совместимость с «сырым» JSON параметров
+    const rawImport = parseFacadeSettingsImport(
+      JSON.stringify({ buildingType: 'miethaus', A: 3.1, axesCount: 4 })
+    );
+    assert.equal(rawImport.ok, true);
+    if (rawImport.ok) {
+      assert.equal(rawImport.params.buildingType, 'miethaus');
+      assert.equal(rawImport.params.axesCount, 4);
+      assertClose(rawImport.params.A, 3.1);
+    }
   });
 });
