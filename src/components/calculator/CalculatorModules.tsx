@@ -54,11 +54,13 @@ import {
   projection_console,
   resolveBeltFloorsMask,
   resolveBeltSillFloorsMask,
+  resolveBuildingWidthBounds,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
   resolveOrdinaryPierAxesM,
   resolveOrdinaryPierAxisEdgeOffsetM,
   resolveOrdinaryPierWidthsM,
+  resolveParamsPatchForBuildingWidth,
   resolvePilasterElevationSpans,
   resolveScaledVerticalGeometry,
   resolveSocleAndPilasterBounds,
@@ -467,6 +469,29 @@ export function CalculatorModules({
   const isBrickMasonryEnabled = Boolean(params.brickMasonry?.enabled);
   const currentBrickParams = sanitizeBrickParams(params.brickMasonry?.brick);
 
+  const [isEditingBuildingWidth, setIsEditingBuildingWidth] = useState(false);
+  const [buildingWidthDraft, setBuildingWidthDraft] = useState<string>(() =>
+    String(
+      Number(
+        summary.derivedGeometry.facadeWidth.toFixed(
+          params.brickMasonry?.enabled ? 3 : 2
+        )
+      )
+    )
+  );
+
+  useEffect(() => {
+    if (!isEditingBuildingWidth) {
+      setBuildingWidthDraft(
+        String(
+          Number(
+            summary.derivedGeometry.facadeWidth.toFixed(isBrickMasonryEnabled ? 3 : 2)
+          )
+        )
+      );
+    }
+  }, [summary.derivedGeometry.facadeWidth, isBrickMasonryEnabled, isEditingBuildingWidth]);
+
   const modules: { id: CalculatorModuleId; label: string }[] = [
     { id: 'axes', label: 'Оси и простенки' },
     { id: 'variants', label: 'Этажность' },
@@ -755,7 +780,15 @@ export function CalculatorModules({
                   value={params.A}
                   min={1.4}
                   max={6.0}
-                  disabled={axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A'}
+                  disabled={
+                    axesSolveMode === 'find_A' ||
+                    axesSolveMode === 'find_p_A' ||
+                    (isParamLocked(lockedParams, 'facadeWidth') &&
+                      isParamLocked(
+                        lockedParams,
+                        params.isRisalitCentered ? 'risalitWidth' : 'k_D'
+                      ))
+                  }
                   lockKey="A"
                   locked={isParamLocked(lockedParams, 'A')}
                   onToggleLock={onToggleLock}
@@ -772,6 +805,160 @@ export function CalculatorModules({
                     }
                   }}
                 />
+
+                {(() => {
+                  const widthBounds = resolveBuildingWidthBounds(params);
+                  const isWidthLocked = isParamLocked(lockedParams, 'facadeWidth');
+                  const aLocked = isParamLocked(lockedParams, 'A');
+                  const cornerLockKey = params.isRisalitCentered ? 'risalitWidth' : 'k_D';
+                  const cornerLocked = isParamLocked(lockedParams, cornerLockKey);
+                  const widthDisabled =
+                    isWidthLocked ||
+                    (aLocked && cornerLocked) ||
+                    (Math.max(1, Math.round(params.axesCount)) <= 1 && cornerLocked);
+                  const currentW = summary.derivedGeometry.facadeWidth;
+
+                  const applyBuildingWidth = (nextWidthM: number) => {
+                    if (axesSolveMode === 'find_A' || axesSolveMode === 'find_p_A') {
+                      setAxesSolveMode('check');
+                    }
+                    const patch = resolveParamsPatchForBuildingWidth(
+                      params,
+                      nextWidthM,
+                      lockedParams
+                    );
+                    if (Object.keys(patch).length === 0) return;
+                    if (
+                      axesSolveMode === 'find_H' &&
+                      patch.A !== undefined &&
+                      !isParamLocked(lockedParams, 'H')
+                    ) {
+                      const [n, m] = getActiveAxRatio();
+                      onUpdateParams({ ...patch, H: H_from_A(patch.A, n, m) });
+                    } else if (
+                      axesSolveMode === 'find_w' &&
+                      patch.A !== undefined &&
+                      !isParamLocked(lockedParams, 'w')
+                    ) {
+                      const wMax = params.withFraming
+                        ? Math.max(0.4, patch.A / 2 - 2 * params.u)
+                        : w_max_from_A(patch.A);
+                      onUpdateParams({ ...patch, w: wMax });
+                    } else {
+                      onUpdateParams(patch);
+                    }
+                  };
+
+                  return (
+                    <div
+                      className={`space-y-1.5 ${
+                        isWidthLocked
+                          ? 'p-2 -mx-2 border border-[#9A3412]/35 bg-[#9A3412]/[0.04]'
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <label
+                            htmlFor="calc-facade-width"
+                            className="text-xs font-medium text-[#1C1917]"
+                          >
+                            Ширина здания W (Gesamtbreite)
+                          </label>
+                          <LockToggleButton
+                            lockKey="facadeWidth"
+                            locked={isWidthLocked}
+                            onToggleLock={onToggleLock}
+                            label="Ширина здания W"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <input
+                            id="calc-facade-width-num"
+                            type="number"
+                            value={buildingWidthDraft}
+                            min={widthBounds.minWidth}
+                            max={widthBounds.maxInputWidth}
+                            step="any"
+                            disabled={widthDisabled}
+                            aria-label="Ширина здания W (м)"
+                            onFocus={() => setIsEditingBuildingWidth(true)}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              setBuildingWidthDraft(raw);
+                              const normalized = raw.replace(',', '.').trim();
+                              if (normalized === '') return;
+                              const parsed = parseFloat(normalized);
+                              if (
+                                Number.isFinite(parsed) &&
+                                parsed >= widthBounds.minWidth &&
+                                parsed <= widthBounds.maxInputWidth
+                              ) {
+                                applyBuildingWidth(parsed);
+                              }
+                            }}
+                            onBlur={() => {
+                              setIsEditingBuildingWidth(false);
+                              const normalized = buildingWidthDraft.replace(',', '.').trim();
+                              const parsed = parseFloat(normalized);
+                              if (Number.isFinite(parsed)) {
+                                const clamped = Math.min(
+                                  widthBounds.maxInputWidth,
+                                  Math.max(widthBounds.minWidth, parsed)
+                                );
+                                applyBuildingWidth(clamped);
+                                setBuildingWidthDraft(
+                                  String(
+                                    Number(
+                                      clamped.toFixed(isBrickMasonryEnabled ? 3 : 2)
+                                    )
+                                  )
+                                );
+                              } else {
+                                setBuildingWidthDraft(
+                                  String(
+                                    Number(
+                                      currentW.toFixed(isBrickMasonryEnabled ? 3 : 2)
+                                    )
+                                  )
+                                );
+                              }
+                            }}
+                            className="w-20 px-2 py-1 text-xs font-mono tabular-nums text-right border border-[#D6CEBE] bg-[#FBF9F5] text-[#1C1917] disabled:bg-[#F3EFE6] disabled:text-[#78716C] focus-visible:outline-2 focus-visible:outline-[#9A3412]"
+                          />
+                          <span className="text-[11px] font-mono text-[#78716C]">м</span>
+                        </div>
+                      </div>
+                      <input
+                        id="calc-facade-width"
+                        type="range"
+                        min={widthBounds.minWidth}
+                        max={widthBounds.maxSliderWidth}
+                        step={0.01}
+                        disabled={widthDisabled}
+                        value={Math.min(
+                          widthBounds.maxSliderWidth,
+                          Math.max(widthBounds.minWidth, currentW)
+                        )}
+                        aria-label="Ширина здания W"
+                        onChange={(e) => {
+                          const parsed = parseFloat(e.target.value);
+                          if (Number.isFinite(parsed)) applyBuildingWidth(parsed);
+                        }}
+                        className="w-full accent-[#9A3412] cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                      />
+                      <p className="text-[11px] text-[#78716C]">
+                        {isWidthLocked
+                          ? 'Ширина здания W закреплена замком — при изменении числа осей, шага A или угловых отступов общая ширина фасада сохраняется.'
+                          : widthDisabled
+                            ? 'Шаг осей A и угловой отступ закреплены замками — снимите хотя бы один замок, чтобы менять ширину здания.'
+                            : aLocked
+                              ? 'Шаг осей A закреплён замком — изменение ширины здания W пересчитывает угловые отступы D и простенки.'
+                              : 'Задаёт общую ширину фасада W = 2D + ΣA и пересчитывает шаг осей A (при включённой кладке согласуется с кирпичным модулем).'}
+                      </p>
+                    </div>
+                  );
+                })()}
 
                 {axesSolveMode === 'find_p_A' && (
                   <MeterControl
@@ -881,8 +1068,10 @@ export function CalculatorModules({
                 const currentCornerPier = summary.cornerCheck.p_corner;
                 const aLocked = isParamLocked(lockedParams, 'A');
                 const wLocked = isParamLocked(lockedParams, 'w');
+                const widthLocked = isParamLocked(lockedParams, 'facadeWidth');
                 const cornerLockKey = params.isRisalitCentered ? 'risalitWidth' : 'k_D';
                 const cornerLocked = isParamLocked(lockedParams, cornerLockKey);
+                const aEffectivelyFixed = aLocked || (widthLocked && cornerLocked);
 
                 return (
                   <div className="space-y-4">
@@ -896,11 +1085,15 @@ export function CalculatorModules({
                       value={currentOrdinaryPier}
                       min={0.3}
                       max={4.0}
-                      disabled={aLocked && wLocked}
+                      disabled={aEffectivelyFixed && wLocked}
                       onOpenGlossaryTerm={onOpenGlossaryTerm}
                       note={
-                        aLocked
-                          ? `Шаг осей A закреплён — изменение рядового простенка пересчитывает ширину окна w (${params.withFraming ? 'w = A − p_c − 2u' : 'w = A − p'}).`
+                        aEffectivelyFixed
+                          ? `${
+                              aLocked
+                                ? 'Шаг осей A закреплён'
+                                : 'Ширина W и угол закреплены замками'
+                            } — изменение рядового простенка пересчитывает ширину окна w (${params.withFraming ? 'w = A − p_c − 2u' : 'w = A − p'}).`
                           : params.withFraming
                             ? `Пересчитывает шаг осей A = p_c + w + 2u (норма p_c ≥ w_v = ${formatMeters(params.w + 2 * params.u)} м, S. 5).`
                             : `Пересчитывает шаг осей A = p + w (норма p ≥ w = ${formatMeters(params.w)} м, S. 5).`
@@ -908,7 +1101,7 @@ export function CalculatorModules({
                       onChange={(pierVal) => {
                         const safePier = Math.max(0.1, pierVal);
                         setTargetPierInput(safePier);
-                        if (!aLocked) {
+                        if (!aEffectivelyFixed) {
                           const nextA = Number(
                             Math.max(
                               0.8,
@@ -934,12 +1127,14 @@ export function CalculatorModules({
                       value={currentCornerPier}
                       min={0.3}
                       max={4.5}
-                      disabled={cornerLocked}
+                      disabled={cornerLocked || (widthLocked && aLocked)}
                       onOpenGlossaryTerm={onOpenGlossaryTerm}
                       note={
-                        params.isRisalitCentered
-                          ? `Ось привязана к центру ризалита: D = ${formatMeters(summary.cornerCheck.D)} м (ширина = ${formatMeters(params.risalitWidth)} м).`
-                          : `Пересчитывает отступ до 1-й оси D = ${formatMeters(summary.cornerCheck.D)} м и k_D = ${formatMeters(params.k_D, 3)} (норма k_D ∈ 2/3…5/6, S. 4–5).`
+                        widthLocked && aLocked
+                          ? 'Ширина W и шаг осей A закреплены замками — снимите хотя бы один замок, чтобы менять угловой простенок.'
+                          : params.isRisalitCentered
+                            ? `Ось привязана к центру ризалита: D = ${formatMeters(summary.cornerCheck.D)} м (ширина = ${formatMeters(params.risalitWidth)} м).`
+                            : `Пересчитывает отступ до 1-й оси D = ${formatMeters(summary.cornerCheck.D)} м и k_D = ${formatMeters(params.k_D, 3)} (норма k_D ∈ 2/3…5/6, S. 4–5).`
                       }
                       onChange={(cornerVal) => {
                         const safeCorner = Math.max(0.1, cornerVal);
@@ -1041,6 +1236,13 @@ export function CalculatorModules({
                       value={params.A}
                       min={minPierStep}
                       max={6.0}
+                      disabled={
+                        isParamLocked(lockedParams, 'facadeWidth') &&
+                        isParamLocked(
+                          lockedParams,
+                          params.isRisalitCentered ? 'risalitWidth' : 'k_D'
+                        )
+                      }
                       lockKey="A"
                       locked={isParamLocked(lockedParams, 'A')}
                       onToggleLock={onToggleLock}
@@ -1102,6 +1304,14 @@ export function CalculatorModules({
                               value={spacingM}
                               min={minPierStep}
                               max={6.0}
+                              disabled={
+                                isParamLocked(lockedParams, 'A') ||
+                                (isParamLocked(lockedParams, 'facadeWidth') &&
+                                  isParamLocked(
+                                    lockedParams,
+                                    params.isRisalitCentered ? 'risalitWidth' : 'k_D'
+                                  ))
+                              }
                               locked={isParamLocked(lockedParams, 'A')}
                               onOpenGlossaryTerm={onOpenGlossaryTerm}
                               onChange={(val) => {
@@ -1155,7 +1365,13 @@ export function CalculatorModules({
                         <span className="block text-[10px] text-[#78716C] uppercase">
                           Ширина фасада W
                         </span>
-                        <strong>{formatMeters(summary.derivedGeometry.facadeWidth)} м</strong>
+                        <strong>
+                          {formatMeters(
+                            summary.derivedGeometry.facadeWidth,
+                            isBrickMasonryEnabled ? 3 : 2
+                          )}{' '}
+                          м
+                        </strong>
                       </div>
                     </div>
 
@@ -1683,7 +1899,15 @@ export function CalculatorModules({
                     <button
                       key={ax}
                       type="button"
-                      disabled={isParamLocked(lockedParams, 'axesCount')}
+                      disabled={
+                        isParamLocked(lockedParams, 'axesCount') ||
+                        (isParamLocked(lockedParams, 'facadeWidth') &&
+                          isParamLocked(lockedParams, 'A') &&
+                          isParamLocked(
+                            lockedParams,
+                            params.isRisalitCentered ? 'risalitWidth' : 'k_D'
+                          ))
+                      }
                       onClick={() => onUpdateParams({ axesCount: ax })}
                       className={`px-2 py-1 text-[11px] font-mono border disabled:opacity-45 ${
                         params.axesCount === ax
@@ -1705,6 +1929,14 @@ export function CalculatorModules({
                 max={10}
                 step={1}
                 unit="ос."
+                disabled={
+                  isParamLocked(lockedParams, 'facadeWidth') &&
+                  isParamLocked(lockedParams, 'A') &&
+                  isParamLocked(
+                    lockedParams,
+                    params.isRisalitCentered ? 'risalitWidth' : 'k_D'
+                  )
+                }
                 lockKey="axesCount"
                 locked={isParamLocked(lockedParams, 'axesCount')}
                 onToggleLock={onToggleLock}
@@ -3255,8 +3487,12 @@ export function CalculatorModules({
               <input
                 type="checkbox"
                 checked={params.isRisalitCentered}
+                disabled={
+                  isParamLocked(lockedParams, 'facadeWidth') &&
+                  isParamLocked(lockedParams, 'A')
+                }
                 onChange={(e) => onUpdateParams({ isRisalitCentered: e.target.checked })}
-                className="accent-[#9A3412]"
+                className="accent-[#9A3412] disabled:opacity-45"
               />
               <span>Комната занимает всю ширину ризалита / западающей части (D = ширина / 2)</span>
             </label>
@@ -3268,6 +3504,10 @@ export function CalculatorModules({
                 value={params.risalitWidth}
                 min={2.2}
                 max={8.0}
+                disabled={
+                  isParamLocked(lockedParams, 'facadeWidth') &&
+                  isParamLocked(lockedParams, 'A')
+                }
                 lockKey="risalitWidth"
                 locked={isParamLocked(lockedParams, 'risalitWidth')}
                 onToggleLock={onToggleLock}
@@ -3283,6 +3523,10 @@ export function CalculatorModules({
                   max={1.1}
                   step={0.01}
                   unit="×A"
+                  disabled={
+                    isParamLocked(lockedParams, 'facadeWidth') &&
+                    isParamLocked(lockedParams, 'A')
+                  }
                   lockKey="k_D"
                   locked={isParamLocked(lockedParams, 'k_D')}
                   onToggleLock={onToggleLock}
@@ -3299,7 +3543,11 @@ export function CalculatorModules({
                       <button
                         key={preset.label}
                         type="button"
-                        disabled={isParamLocked(lockedParams, 'k_D')}
+                        disabled={
+                          isParamLocked(lockedParams, 'k_D') ||
+                          (isParamLocked(lockedParams, 'facadeWidth') &&
+                            isParamLocked(lockedParams, 'A'))
+                        }
                         onClick={() => onUpdateParams({ k_D: preset.val })}
                         className="px-2 py-1 text-[11px] font-mono border border-[#D6CEBE] bg-[#F3EFE6] hover:bg-[#EAE3D5] disabled:opacity-45"
                       >

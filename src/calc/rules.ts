@@ -3177,6 +3177,168 @@ export function resolveOrdinaryPierWidthsM(
   return stepsM.map((step) => Math.max(0, step - w - 2 * effU));
 }
 
+export interface BuildingWidthBounds {
+  minWidth: number;
+  maxSliderWidth: number;
+  maxInputWidth: number;
+}
+
+/**
+ * Допустимый диапазон общей ширины здания W (м) для текущего числа осей, окон и обрамлений.
+ */
+export function resolveBuildingWidthBounds(
+  params: Pick<FacadeParameters, 'axesCount' | 'w' | 'u' | 'withFraming'>
+): BuildingWidthBounds {
+  const safeAxesCount = Math.min(10, Math.max(1, Math.round(params.axesCount)));
+  const stepsCount = Math.max(0, safeAxesCount - 1);
+  const effU = params.withFraming ? Math.max(0, params.u) : 0;
+  const minStep = Math.max(0.8, params.w + 2 * effU + 0.05);
+  const minCornerD = params.w / 2 + effU + 0.15;
+  const minWidth = Number(
+    (stepsCount === 0 ? 2 * minCornerD : 2 * minCornerD + stepsCount * minStep).toFixed(2)
+  );
+  const maxSliderWidth = Math.max(
+    24,
+    Number((stepsCount === 0 ? 14 : stepsCount * 6.0 + 9.0).toFixed(1))
+  );
+  return {
+    minWidth,
+    maxSliderWidth,
+    maxInputWidth: 80,
+  };
+}
+
+/**
+ * Пересчитывает параметры осей (A, при необходимости ordinaryPierAxisSpacings или отступ D/k_D)
+ * так, чтобы общая ширина фасада W равнялась targetWidthM с учётом закреплённых замков.
+ */
+export function resolveParamsPatchForBuildingWidth(
+  params: FacadeParameters,
+  targetWidthM: number,
+  lockedParams?: Record<string, boolean>
+): Partial<FacadeParameters> {
+  const bounds = resolveBuildingWidthBounds(params);
+  if (!Number.isFinite(targetWidthM)) return {};
+  const safeTargetW = Math.min(bounds.maxInputWidth, Math.max(bounds.minWidth, targetWidthM));
+
+  const safeAxesCount = Math.min(10, Math.max(1, Math.round(params.axesCount)));
+  const stepsCount = Math.max(0, safeAxesCount - 1);
+  const effU = params.withFraming ? Math.max(0, params.u) : 0;
+  const minStep = Math.max(0.8, params.w + 2 * effU + 0.05);
+  const minCornerD = params.w / 2 + effU + 0.15;
+
+  const aLocked = Boolean(lockedParams?.A);
+  const cornerLocked = Boolean(
+    params.isRisalitCentered ? lockedParams?.risalitWidth : lockedParams?.k_D
+  );
+
+  if ((aLocked && cornerLocked) || (stepsCount === 0 && cornerLocked)) {
+    return {};
+  }
+
+  const stepsM = safeAxesCount >= 2 ? resolveWindowAxisStepsM(params) : [];
+  const currentSpan = stepsM.reduce((sum, s) => sum + s, 0);
+  const currentD = params.isRisalitCentered
+    ? params.risalitWidth / 2
+    : D_from_A(stepsM[0] ?? params.A, params.k_D);
+  const currentW = 2 * currentD + currentSpan;
+  const hasCustomSpacings =
+    Boolean(params.ordinaryPierAxisSpacings && params.ordinaryPierAxisSpacings.length > 0) &&
+    stepsM.some((s) => Math.abs(s - stepsM[0]) > 1e-4);
+
+  if (stepsCount === 0) {
+    const nextD = Math.max(minCornerD, safeTargetW / 2);
+    if (params.isRisalitCentered) {
+      return { risalitWidth: Number((2 * nextD).toFixed(4)) };
+    }
+    return {
+      k_D: Number(Math.max(0.15, nextD / Math.max(0.5, params.A)).toFixed(4)),
+    };
+  }
+
+  if (aLocked && !cornerLocked) {
+    const nextD = Math.max(minCornerD, (safeTargetW - currentSpan) / 2);
+    if (params.isRisalitCentered) {
+      return { risalitWidth: Number((2 * nextD).toFixed(4)) };
+    }
+    return {
+      k_D: Number(Math.max(0.15, nextD / Math.max(0.5, stepsM[0] ?? params.A)).toFixed(4)),
+    };
+  }
+
+  if (params.isRisalitCentered) {
+    const targetSpan = safeTargetW - 2 * currentD;
+    if (targetSpan >= stepsCount * minStep) {
+      if (hasCustomSpacings && currentSpan > 0) {
+        const scale = targetSpan / currentSpan;
+        const scaledSteps = stepsM.map((s) => s * scale);
+        if (scaledSteps.every((s) => s >= minStep)) {
+          const nextSpacings = Array.from({ length: stepsCount - 1 }, (_, idx) =>
+            Number(((scaledSteps[idx] + scaledSteps[idx + 1]) / 2).toFixed(4))
+          );
+          const avgA = Number(
+            (scaledSteps.reduce((sum, s) => sum + s, 0) / stepsCount).toFixed(4)
+          );
+          return { A: avgA, ordinaryPierAxisSpacings: nextSpacings };
+        }
+      }
+      return {
+        A: Number(Math.max(minStep, targetSpan / stepsCount).toFixed(4)),
+        ordinaryPierAxisSpacings: [],
+      };
+    }
+
+    const nextA = Number(minStep.toFixed(4));
+    if (!cornerLocked) {
+      const nextD = Math.max(minCornerD, (safeTargetW - stepsCount * nextA) / 2);
+      return {
+        A: nextA,
+        ordinaryPierAxisSpacings: [],
+        risalitWidth: Number((2 * nextD).toFixed(4)),
+      };
+    }
+    return { A: nextA, ordinaryPierAxisSpacings: [] };
+  }
+
+  if (hasCustomSpacings && currentW > 0) {
+    const scale = safeTargetW / currentW;
+    const scaledSteps = stepsM.map((s) => s * scale);
+    if (scaledSteps.every((s) => s >= minStep)) {
+      const nextSpacings = Array.from({ length: stepsCount - 1 }, (_, idx) =>
+        Number(((scaledSteps[idx] + scaledSteps[idx + 1]) / 2).toFixed(4))
+      );
+      const avgA = Number(
+        (scaledSteps.reduce((sum, s) => sum + s, 0) / stepsCount).toFixed(4)
+      );
+      return { A: avgA, ordinaryPierAxisSpacings: nextSpacings };
+    }
+  }
+
+  const denom = Math.max(0.5, stepsCount + 2 * params.k_D);
+  const idealA = safeTargetW / denom;
+  if (idealA >= minStep) {
+    return {
+      A: Number(idealA.toFixed(4)),
+      ordinaryPierAxisSpacings: [],
+    };
+  }
+
+  const nextA = Number(minStep.toFixed(4));
+  if (!cornerLocked) {
+    const nextD = Math.max(minCornerD, (safeTargetW - stepsCount * nextA) / 2);
+    return {
+      A: nextA,
+      k_D: Number(Math.max(0.15, nextD / nextA).toFixed(4)),
+      ordinaryPierAxisSpacings: [],
+    };
+  }
+
+  return {
+    A: nextA,
+    ordinaryPierAxisSpacings: [],
+  };
+}
+
 export interface VerticalSocleAndPilasterBounds {
   socleTopM: number;
   pilasterBottomM: number;

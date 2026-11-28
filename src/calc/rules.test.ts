@@ -95,6 +95,7 @@ import {
   ratio_from_AH,
   resolveBeltFloorsMask,
   resolveBeltVerticalBandM,
+  resolveBuildingWidthBounds,
   resolveEntranceGeometry,
   resolveEntrancePositionFromSettings,
   resolveFloorWindowGeometryM,
@@ -102,6 +103,7 @@ import {
   resolveOrdinaryPierAxesM,
   resolveOrdinaryPierAxisEdgeOffsetM,
   resolveOrdinaryPierWidthsM,
+  resolveParamsPatchForBuildingWidth,
   resolvePilasterElevationSpans,
   resolvePilasterXPositions,
   resolveScaledVerticalGeometry,
@@ -123,6 +125,7 @@ import {
   filterUnlockedPatch,
   isFramingRLocked,
   isParamLocked,
+  type LockedParamsMap,
 } from './paramLocks.ts';
 import {
   RULE_BOOK_EXCERPTS,
@@ -2645,8 +2648,145 @@ describe('Аудит-фиксы P0, P1, P2, P3 и новые правила S. 1
     assertClose(disabled.h, baseWithEntryAndCustomAxes.h);
     assertClose(disabled.A, baseWithEntryAndCustomAxes.A);
   });
+
+  it('56. Задание общей ширины здания W в разделе «Оси и простенки» с учётом замков, ризалита, индивидуальных шагов и кладки', () => {
+    const base = createDefaultParamsForTypology('urban_house'); // 3 оси, k_D = 0.8
+    const bounds = resolveBuildingWidthBounds(base);
+    assert.ok(bounds.minWidth > 2.0 && bounds.maxSliderWidth >= 20);
+
+    // 1. Обычный пересчёт шага осей A из целевой ширины W = 14.40 м
+    const patchStd = resolveParamsPatchForBuildingWidth(base, 14.4, {});
+    const stdUpdated = computeNextFacadeParams(base, patchStd, {});
+    const sumStd = evaluateFacadeSummary(stdUpdated, { expertMode: true });
+    assertClose(sumStd.derivedGeometry.facadeWidth, 14.4);
+    assertClose(stdUpdated.k_D, base.k_D);
+    assertClose(stdUpdated.A, 14.4 / (2 + 2 * base.k_D));
+
+    // 2. При закреплённом замком A пересчитывается угловой отступ k_D (D)
+    const patchLockedA = resolveParamsPatchForBuildingWidth(stdUpdated, 16.0, { A: true });
+    const lockedAUpdated = computeNextFacadeParams(stdUpdated, patchLockedA, { A: true });
+    const sumLockedA = evaluateFacadeSummary(lockedAUpdated, { expertMode: true });
+    assertClose(lockedAUpdated.A, stdUpdated.A);
+    assertClose(sumLockedA.derivedGeometry.facadeWidth, 16.0);
+
+    // 3. При закреплённых одновременно A и k_D ширина не меняется
+    const patchAllLocked = resolveParamsPatchForBuildingWidth(stdUpdated, 12.0, {
+      A: true,
+      k_D: true,
+    });
+    assert.deepEqual(patchAllLocked, {});
+
+    // 4. Индивидуальные шаги осей масштабируются пропорционально при задании новой ширины W
+    const customAxes = computeNextFacadeParams(
+      {
+        ...base,
+        axesCount: 5,
+        ordinaryPierAxisSpacings: [2.8, 3.4, 2.8],
+      },
+      {},
+      {}
+    );
+    const patchCustom = resolveParamsPatchForBuildingWidth(customAxes, 18.0, {});
+    const customUpdated = computeNextFacadeParams(customAxes, patchCustom, {});
+    const sumCustom = evaluateFacadeSummary(customUpdated, { expertMode: true });
+    assert.ok(Math.abs(sumCustom.derivedGeometry.facadeWidth - 18.0) < 5e-3);
+    const customSteps = resolveWindowAxisStepsM(customUpdated);
+    assertClose(customSteps[0], customSteps[3]);
+    assertClose(customSteps[1], customSteps[2]);
+
+    // 5. Центрированный ризалит (D = risalitWidth/2) сохраняет ширину ризалита и пересчитывает A
+    const risalitBase = { ...base, isRisalitCentered: true, risalitWidth: 4.0 };
+    const patchRis = resolveParamsPatchForBuildingWidth(risalitBase, 12.0, {});
+    const risUpdated = computeNextFacadeParams(risalitBase, patchRis, {});
+    const sumRis = evaluateFacadeSummary(risUpdated, { expertMode: true });
+    assertClose(risUpdated.risalitWidth, 4.0);
+    assertClose(sumRis.derivedGeometry.facadeWidth, 12.0);
+
+    // 6. При включённой лицевой кирпичной кладке целевая ширина согласуется с модулем без подрезки
+    const masonryOn = computeNextFacadeParams(
+      base,
+      { brickMasonry: { enabled: true, brick: { ...DEFAULT_BRICK_MASONRY_PARAMS } } },
+      {}
+    );
+    const patchBrick = resolveParamsPatchForBuildingWidth(masonryOn, 13.5, {});
+    const brickUpdated = computeNextFacadeParams(masonryOn, patchBrick, {});
+    const sumBrick = evaluateFacadeSummary(brickUpdated, { expertMode: true });
+    assert.equal(brickUpdated.brickMasonry?.enabled, true);
+    assert.ok(Math.abs(sumBrick.derivedGeometry.facadeWidth - 13.5) < 0.6);
+  });
+
+  it('57. Замок на ширине здания W (facadeWidth) сохраняет общую ширину при изменении осей, k_D, A, ризалита и типологии', () => {
+    const base = createDefaultParamsForTypology('urban_house'); // 3 оси, k_D = 0.8
+    const width14 = computeNextFacadeParams(
+      base,
+      resolveParamsPatchForBuildingWidth(base, 14.4, {}),
+      {}
+    );
+    const locksW: LockedParamsMap = { facadeWidth: true };
+    assert.equal(isParamLocked(locksW, 'facadeWidth'), true);
+    assert.equal(countLockedParams(locksW), 1);
+
+    // 1. Изменение числа осей 3 -> 5 при замке на W сохраняет W = 14.4 м, пересчитывая шаг A
+    const fiveAxes = computeNextFacadeParams(width14, { axesCount: 5 }, locksW);
+    const sumFive = evaluateFacadeSummary(fiveAxes, { expertMode: true });
+    assert.equal(fiveAxes.axesCount, 5);
+    assertClose(sumFive.derivedGeometry.facadeWidth, 14.4);
+    assertClose(fiveAxes.k_D, width14.k_D);
+
+    // 2. Изменение k_D (или risalitWidth) при замке на W сохраняет W = 14.4 м, пересчитывая A
+    const changedKD = computeNextFacadeParams(width14, { k_D: 0.7 }, locksW);
+    const sumKD = evaluateFacadeSummary(changedKD, { expertMode: true });
+    assertClose(changedKD.k_D, 0.7);
+    assertClose(sumKD.derivedGeometry.facadeWidth, 14.4);
+
+    // 3. Изменение A при замке на W сохраняет W = 14.4 м, пересчитывая k_D (или risalitWidth)
+    const changedA = computeNextFacadeParams(
+      width14,
+      { A: 4.5, ordinaryPierAxisSpacings: [] },
+      locksW
+    );
+    const sumChangedA = evaluateFacadeSummary(changedA, { expertMode: true });
+    assertClose(changedA.A, 4.5);
+    assertClose(sumChangedA.derivedGeometry.facadeWidth, 14.4);
+
+    const risalitBase = { ...width14, isRisalitCentered: true, risalitWidth: 4.0 };
+    const risalitW = evaluateFacadeSummary(risalitBase, { expertMode: true }).derivedGeometry.facadeWidth;
+    const risalitChangedA = computeNextFacadeParams(
+      risalitBase,
+      { A: 4.6, ordinaryPierAxisSpacings: [] },
+      locksW
+    );
+    const sumRisA = evaluateFacadeSummary(risalitChangedA, { expertMode: true });
+    assertClose(risalitChangedA.A, 4.6);
+    assertClose(sumRisA.derivedGeometry.facadeWidth, risalitW);
+
+    // 4. Применение пресета другой типологии с замком на W сохраняет исходную ширину 14.4 м
+    const villaPreset = createDefaultParamsForTypology('villa');
+    const appliedPreset = computeNextFacadeParams(width14, villaPreset, locksW);
+    const sumPreset = evaluateFacadeSummary(appliedPreset, { expertMode: true });
+    assertClose(sumPreset.derivedGeometry.facadeWidth, 14.4);
+
+    // 5. Комбинации замков: { facadeWidth, k_D } блокирует A; { facadeWidth, A, k_D } блокирует axesCount
+    const lockedWKd = computeNextFacadeParams(
+      width14,
+      { A: 5.0 },
+      { facadeWidth: true, k_D: true }
+    );
+    assertClose(lockedWKd.A, width14.A);
+    assertClose(
+      evaluateFacadeSummary(lockedWKd, { expertMode: true }).derivedGeometry.facadeWidth,
+      14.4
+    );
+
+    const lockedAllHoriz = computeNextFacadeParams(
+      width14,
+      { axesCount: 5 },
+      { facadeWidth: true, A: true, k_D: true }
+    );
+    assert.equal(lockedAllHoriz.axesCount, width14.axesCount);
+    assertClose(
+      evaluateFacadeSummary(lockedAllHoriz, { expertMode: true }).derivedGeometry.facadeWidth,
+      14.4
+    );
+  });
 });
-
-
-
-

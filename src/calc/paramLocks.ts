@@ -4,6 +4,8 @@ import {
   computeDerivedGeometry,
   framing_from_T,
   framing_from_module,
+  resolveBuildingWidthBounds,
+  resolveParamsPatchForBuildingWidth,
   resolveWindowAxisStepsM,
   syncLevelsWithH,
   type BuildingLevelsInput,
@@ -263,6 +265,183 @@ export function computeNextFacadeParams(
         : undefined;
   }
 
+  let facadeWidthAdjustedFields = false;
+  if (isParamLocked(lockedParams, 'facadeWidth')) {
+    const prevStepsM = prev.axesCount >= 2 ? resolveWindowAxisStepsM(prev) : [];
+    const prevD = prev.isRisalitCentered
+      ? prev.risalitWidth / 2
+      : D_from_A(prevStepsM[0] ?? prev.A, prev.k_D);
+    const prevDg = computeDerivedGeometry(
+      prev.levels,
+      prev.A,
+      prevD,
+      prev.axesCount,
+      prev.hMain,
+      prevStepsM,
+      prev.corniceBottomOffsetM
+    );
+    const prevW = prevDg.facadeWidth;
+
+    const aLocked = isParamLocked(lockedParams, 'A');
+    const cornerLockKey = next.isRisalitCentered ? 'risalitWidth' : 'k_D';
+    const cornerLocked = isParamLocked(lockedParams, cornerLockKey);
+
+    const curStepsM = next.axesCount >= 2 ? resolveWindowAxisStepsM(next) : [];
+    const curD = next.isRisalitCentered
+      ? next.risalitWidth / 2
+      : D_from_A(curStepsM[0] ?? next.A, next.k_D);
+    const curW = 2 * curD + curStepsM.reduce((sum, s) => sum + s, 0);
+
+    const axesCountChanged =
+      patch.axesCount !== undefined && Math.round(next.axesCount) !== Math.round(prev.axesCount);
+    const aChanged =
+      (patch.A !== undefined && Math.abs(next.A - prev.A) > 1e-6) ||
+      (!axesCountChanged &&
+        (curStepsM.length !== prevStepsM.length ||
+          curStepsM.some((s, idx) => Math.abs(s - (prevStepsM[idx] ?? s)) > 1e-6)));
+    const cornerChanged =
+      (patch.k_D !== undefined && Math.abs(next.k_D - prev.k_D) > 1e-6) ||
+      (patch.risalitWidth !== undefined &&
+        Math.abs(next.risalitWidth - prev.risalitWidth) > 1e-6) ||
+      (patch.isRisalitCentered !== undefined &&
+        next.isRisalitCentered !== prev.isRisalitCentered);
+
+    if (Math.abs(curW - prevW) > 1e-5 || axesCountChanged || aChanged || cornerChanged) {
+      const stepsCount = curStepsM.length;
+      const effU = next.withFraming ? Math.max(0, next.u) : 0;
+      const minStep = Math.max(0.8, next.w + 2 * effU + 0.05);
+      const minCornerD = next.w / 2 + effU + 0.15;
+
+      const restoreHorizontal = () => {
+        next.axesCount = prev.axesCount;
+        next.A = prev.A;
+        next.ordinaryPierAxisSpacings = prev.ordinaryPierAxisSpacings
+          ? [...prev.ordinaryPierAxisSpacings]
+          : undefined;
+        next.k_D = prev.k_D;
+        next.risalitWidth = prev.risalitWidth;
+        next.isRisalitCentered = prev.isRisalitCentered;
+      };
+
+      if (aLocked && cornerLocked) {
+        restoreHorizontal();
+      } else if (aChanged && !cornerChanged && !axesCountChanged) {
+        if (cornerLocked) {
+          next.A = prev.A;
+          next.ordinaryPierAxisSpacings = prev.ordinaryPierAxisSpacings
+            ? [...prev.ordinaryPierAxisSpacings]
+            : undefined;
+        } else if (stepsCount === 0) {
+          const nextD = Math.max(minCornerD, prevW / 2);
+          if (next.isRisalitCentered) {
+            next.risalitWidth = Number((2 * nextD).toFixed(4));
+          } else {
+            next.k_D = Number(Math.max(0.15, nextD / Math.max(0.5, next.A)).toFixed(4));
+          }
+          facadeWidthAdjustedFields = true;
+        } else {
+          const curSpan = curStepsM.reduce((sum, s) => sum + s, 0);
+          const maxSpanAllowed = Math.max(stepsCount * minStep, prevW - 2 * minCornerD);
+          if (curSpan > maxSpanAllowed && curSpan > 1e-6) {
+            const scale = Math.max(0.1, (prevW - 2 * minCornerD) / curSpan);
+            const scaledSteps = curStepsM.map((s) =>
+              Number(Math.max(minStep, s * scale).toFixed(4))
+            );
+            const avgA = Number(
+              (scaledSteps.reduce((sum, s) => sum + s, 0) / stepsCount).toFixed(4)
+            );
+            const isUniform = scaledSteps.every((s) => Math.abs(s - avgA) < 1e-4);
+            next.A = avgA;
+            next.ordinaryPierAxisSpacings =
+              !isUniform && stepsCount >= 2
+                ? Array.from({ length: stepsCount - 1 }, (_, idx) =>
+                    Number(((scaledSteps[idx] + scaledSteps[idx + 1]) / 2).toFixed(4))
+                  )
+                : undefined;
+          }
+          const finalSteps = resolveWindowAxisStepsM(next);
+          const finalSpan = finalSteps.reduce((sum, s) => sum + s, 0);
+          const nextD = Math.max(minCornerD, (prevW - finalSpan) / 2);
+          if (next.isRisalitCentered) {
+            next.risalitWidth = Number((2 * nextD).toFixed(4));
+          } else {
+            next.k_D = Number(
+              Math.max(0.15, nextD / Math.max(0.5, finalSteps[0] ?? next.A)).toFixed(4)
+            );
+          }
+          facadeWidthAdjustedFields = true;
+        }
+      } else if (cornerChanged && !aChanged && !axesCountChanged) {
+        if (aLocked || stepsCount === 0) {
+          next.k_D = prev.k_D;
+          next.risalitWidth = prev.risalitWidth;
+          next.isRisalitCentered = prev.isRisalitCentered;
+        } else {
+          const cornerLockOverride: LockedParamsMap = {
+            ...lockedParams,
+            k_D: true,
+            risalitWidth: true,
+          };
+          if (!next.isRisalitCentered) {
+            const idealA = prevW / Math.max(0.5, stepsCount + 2 * next.k_D);
+            if (idealA < minStep) {
+              next.A = Number(minStep.toFixed(4));
+              next.ordinaryPierAxisSpacings = undefined;
+              const maxD = Math.max(minCornerD, (prevW - stepsCount * next.A) / 2);
+              next.k_D = Number(Math.max(0.15, maxD / next.A).toFixed(4));
+            } else {
+              const widthPatch = resolveParamsPatchForBuildingWidth(
+                next,
+                prevW,
+                cornerLockOverride
+              );
+              if (widthPatch.A !== undefined) next.A = widthPatch.A;
+              if ('ordinaryPierAxisSpacings' in widthPatch) {
+                next.ordinaryPierAxisSpacings = widthPatch.ordinaryPierAxisSpacings;
+              }
+            }
+          } else {
+            const targetSpan = prevW - next.risalitWidth;
+            if (targetSpan < stepsCount * minStep) {
+              next.A = Number(minStep.toFixed(4));
+              next.ordinaryPierAxisSpacings = undefined;
+              next.risalitWidth = Number(
+                Math.max(2 * minCornerD, prevW - stepsCount * next.A).toFixed(4)
+              );
+            } else {
+              const widthPatch = resolveParamsPatchForBuildingWidth(
+                next,
+                prevW,
+                cornerLockOverride
+              );
+              if (widthPatch.A !== undefined) next.A = widthPatch.A;
+              if ('ordinaryPierAxisSpacings' in widthPatch) {
+                next.ordinaryPierAxisSpacings = widthPatch.ordinaryPierAxisSpacings;
+              }
+            }
+          }
+          facadeWidthAdjustedFields = true;
+        }
+      } else {
+        const nextBounds = resolveBuildingWidthBounds(next);
+        if (axesCountChanged && nextBounds.minWidth > prevW + 1e-3) {
+          restoreHorizontal();
+        } else {
+          const widthPatch = resolveParamsPatchForBuildingWidth(next, prevW, lockedParams);
+          if (widthPatch.A !== undefined) next.A = widthPatch.A;
+          if (widthPatch.k_D !== undefined) next.k_D = widthPatch.k_D;
+          if (widthPatch.risalitWidth !== undefined) {
+            next.risalitWidth = widthPatch.risalitWidth;
+          }
+          if ('ordinaryPierAxisSpacings' in widthPatch) {
+            next.ordinaryPierAxisSpacings = widthPatch.ordinaryPierAxisSpacings;
+          }
+          facadeWidthAdjustedFields = true;
+        }
+      }
+    }
+  }
+
   const axisStepsM = next.axesCount >= 2 ? resolveWindowAxisStepsM(next) : [];
   const effectiveAForD = axisStepsM[0] ?? next.A;
   const D = next.isRisalitCentered
@@ -439,12 +618,16 @@ export function computeNextFacadeParams(
     if (patch.buildingType !== undefined && patch.buildingType !== prev.buildingType) {
       baseArch = captureBrickMasonryBaseArch(next);
     } else {
-      if (patch.A !== undefined) baseArch.A = next.A;
+      if (patch.A !== undefined || facadeWidthAdjustedFields) baseArch.A = next.A;
       if (patch.w !== undefined) baseArch.w = next.w;
       if (patch.h !== undefined) baseArch.h = next.h;
-      if (patch.k_D !== undefined) baseArch.k_D = next.k_D;
-      if (patch.isRisalitCentered !== undefined) baseArch.isRisalitCentered = next.isRisalitCentered;
-      if (patch.risalitWidth !== undefined) baseArch.risalitWidth = next.risalitWidth;
+      if (patch.k_D !== undefined || facadeWidthAdjustedFields) baseArch.k_D = next.k_D;
+      if (patch.isRisalitCentered !== undefined || facadeWidthAdjustedFields) {
+        baseArch.isRisalitCentered = next.isRisalitCentered;
+      }
+      if (patch.risalitWidth !== undefined || facadeWidthAdjustedFields) {
+        baseArch.risalitWidth = next.risalitWidth;
+      }
       if (patch.hSocle !== undefined) baseArch.hSocle = next.hSocle;
       if (patch.useFullFloorAsSocle !== undefined) {
         baseArch.useFullFloorAsSocle = next.useFullFloorAsSocle;
@@ -462,6 +645,7 @@ export function computeNextFacadeParams(
       if (patch.entranceHeightM !== undefined) baseArch.entranceHeightM = next.entranceHeightM;
       if (patch.entranceBottomM !== undefined) baseArch.entranceBottomM = next.entranceBottomM;
       if (
+        facadeWidthAdjustedFields ||
         patch.ordinaryPierAxisSpacings !== undefined ||
         ('ordinaryPierAxisSpacings' in rawPatch && rawPatch.ordinaryPierAxisSpacings === undefined)
       ) {
